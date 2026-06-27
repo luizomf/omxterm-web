@@ -1,0 +1,26 @@
+{
+  "name": "@omxterm/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "latest",
+    "@omxterm/core": "file:../../packages/core",
+    "fastify": "latest",
+    "ssh2": "latest",
+    "ws": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/ssh2": "latest",
+    "@types/ws": "latest",
+    "tsx": "latest"
+  }
+}
