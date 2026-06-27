@@ -1,5 +1,5 @@
 export const omxtermColors = {
-  bg: '#0f0f14',
+  background: '#000000',
   fg: '#eae8ff',
   black: '#06060c',
   white: '#f0efff',
@@ -27,7 +27,7 @@ export const omxtermColors = {
 } as const;
 
 export const xtermTheme = {
-  background: '#0f0f14',
+  background: '#000000',
   foreground: '#eae8ff',
   cursor: '#d6d1ff',
   selectionBackground: '#3b4fa6',
