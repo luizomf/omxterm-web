@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
+import { BASE_TERMINAL_FONT_SIZE, nextTerminalFontSize } from './terminal-font-zoom';
 
 export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: TerminalTransportAdapter; title: string; onDisconnect(): void }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -21,7 +22,7 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
       allowProposedApi: false,
       minimumContrastRatio: 4.5,
       fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      fontSize: 14,
+      fontSize: BASE_TERMINAL_FONT_SIZE,
       lineHeight: 1.25,
       theme: xtermTheme,
     });
@@ -34,6 +35,22 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
       fitAddon.fit();
       adapter.resize(terminal.cols, terminal.rows);
     };
+
+    // Cmd-only zoom: Ctrl is left to the terminal so we never shadow readline
+    // shortcuts (e.g. Ctrl+_ undo). preventDefault stops the browser page zoom.
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+      const fontSize = nextTerminalFontSize(terminal.options.fontSize ?? BASE_TERMINAL_FONT_SIZE, {
+        withZoomModifier: event.metaKey,
+        key: event.key,
+      });
+      if (fontSize === null) return true;
+
+      event.preventDefault();
+      terminal.options.fontSize = fontSize;
+      requestAnimationFrame(syncTerminalSize);
+      return false;
+    });
 
     const disposables = [
       adapter.onOutput((data) => terminal.write(data)),
