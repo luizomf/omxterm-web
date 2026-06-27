@@ -5,11 +5,13 @@ set -euxo pipefail
 SCRIPTS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 ROOT_DIR="$(dirname "${SCRIPTS_DIR}")"
 
-set +a; source "${ROOT_DIR}"/.env; set -a;
+if [ -f "${ROOT_DIR}/.env" ]; then
+  set -a
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
 
-OMXTERM_ACCESS_TOKEN="${OMXTERM_ACCESS_TOKEN:-}" \
-  OMXTERM_ALLOWED_ORIGIN="${OMXTERM_ALLOWED_ORIGIN:-}" \
-  npm run dev:server &
+npm run dev:server &
 npm run dev:web &
 
 wait
