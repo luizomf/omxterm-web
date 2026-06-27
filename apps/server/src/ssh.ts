@@ -2,6 +2,7 @@ import type { SshConnectionProfile } from '@omxterm/core/stores';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Client, type ClientChannel } from 'ssh2';
+import { createUtf8StreamDecoder } from './terminal-output-decoder';
 
 export type HostKeyProbeInput = {
   host: string;
@@ -99,11 +100,15 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
               return;
             }
             this.#channel = channel;
+            // One decoder per stream so a multi-byte UTF-8 char split across
+            // chunks is reassembled instead of becoming U+FFFD boxes (#11).
+            const decodeStdout = createUtf8StreamDecoder();
+            const decodeStderr = createUtf8StreamDecoder();
             channel.on('data', (data: Buffer | string) => {
-              this.emit('output', Buffer.isBuffer(data) ? data.toString('utf8') : data);
+              this.emit('output', decodeStdout(data));
             });
             channel.stderr.on('data', (data: Buffer | string) => {
-              this.emit('output', Buffer.isBuffer(data) ? data.toString('utf8') : data);
+              this.emit('output', decodeStderr(data));
             });
             channel.on('close', () => this.emit('close', 'ssh_channel_closed'));
             resolve();
