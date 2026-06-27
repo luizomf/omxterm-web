@@ -29,21 +29,29 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
     terminal.loadAddon(fitAddon);
     terminal.open(container);
 
+    // Keep both xterm's grid and the server PTY aligned with the rendered size.
+    const syncTerminalSize = () => {
+      fitAddon.fit();
+      adapter.resize(terminal.cols, terminal.rows);
+    };
+
     const disposables = [
       adapter.onOutput((data) => terminal.write(data)),
-      adapter.onStatusChange(setStatus),
+      adapter.onStatusChange((next) => {
+        setStatus(next);
+        // The PTY only exists once the server reports "connected", and the
+        // resize sent before the socket opened was dropped by the transport.
+        // Re-sync here so the PTY starts at the real fitted size, not 80x24.
+        if (next === 'connected') syncTerminalSize();
+      }),
       adapter.onError(setError),
     ];
     const inputDisposable = terminal.onData((data) => adapter.sendInput(data));
-    const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      adapter.resize(terminal.cols, terminal.rows);
-    });
+    const resizeObserver = new ResizeObserver(() => syncTerminalSize());
     resizeObserver.observe(container);
 
     requestAnimationFrame(() => {
-      fitAddon.fit();
-      adapter.resize(terminal.cols, terminal.rows);
+      syncTerminalSize();
       void adapter.connect().catch((caught) => setError(caught instanceof Error ? caught.message : 'Connection failed.'));
     });
 
@@ -59,10 +67,7 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
   return (
     <section className="terminal-stage" aria-label="Terminal session">
       <header className="terminal-topbar">
-        <div>
-          <p className="eyebrow">OMXTerm</p>
-          <h1>{title}</h1>
-        </div>
+        <h1>{title}</h1>
         <div className="terminal-actions">
           <span className={`status-pill status-${status}`}>{status}</span>
           <button type="button" className="ghost-button" onClick={onDisconnect}>End session</button>
