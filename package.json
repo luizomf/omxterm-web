@@ -20,5 +20,11 @@
     "@types/node": "latest",
     "typescript": "latest",
     "vitest": "latest"
+  },
+  "allowScripts": {
+    "cpu-features@0.0.10": true,
+    "esbuild@0.28.1": true,
+    "fsevents@2.3.3": true,
+    "ssh2@1.17.0": true
   }
 }
