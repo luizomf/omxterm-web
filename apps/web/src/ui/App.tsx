@@ -56,7 +56,7 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={step === 'terminal' ? 'app-shell app-shell--terminal' : 'app-shell'}>
       {step !== 'terminal' ? <MarketingChrome /> : null}
       {error ? <div className="global-error" role="alert">{error}</div> : null}
       {step === 'loading' ? <p className="loading">Loading…</p> : null}
