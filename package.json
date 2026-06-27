@@ -1,0 +1,24 @@
+{
+  "name": "omxterm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @omxterm/server",
+    "dev:web": "npm run dev --workspace @omxterm/web",
+    "dev:server": "npm run dev --workspace @omxterm/server",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:run": "npm run test:run --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

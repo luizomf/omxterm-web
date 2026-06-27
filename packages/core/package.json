@@ -1,0 +1,21 @@
+{
+  "name": "@omxterm/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./audit": "./src/audit.ts",
+    "./protocol": "./src/protocol.ts",
+    "./stores": "./src/stores.ts",
+    "./terminal": "./src/terminal.ts",
+    "./theme": "./src/theme.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "latest"
+  }
+}
