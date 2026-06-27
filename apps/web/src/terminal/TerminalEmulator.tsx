@@ -1,12 +1,26 @@
 import { xtermTheme } from '@omxterm/core/theme';
-import type { TerminalStatus, TerminalTransportAdapter } from '@omxterm/core/terminal';
+import type {
+  TerminalStatus,
+  TerminalTransportAdapter,
+} from '@omxterm/core/terminal';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
-import { BASE_TERMINAL_FONT_SIZE, nextTerminalFontSize } from './terminal-font-zoom';
+import {
+  BASE_TERMINAL_FONT_SIZE,
+  nextTerminalFontSize,
+} from './terminal-font-zoom';
 
-export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: TerminalTransportAdapter; title: string; onDisconnect(): void }) {
+export function TerminalEmulator({
+  adapter,
+  title,
+  onDisconnect,
+}: {
+  adapter: TerminalTransportAdapter;
+  title: string;
+  onDisconnect(): void;
+}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<TerminalStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -21,9 +35,10 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
       convertEol: false,
       allowProposedApi: false,
       minimumContrastRatio: 4.5,
-      fontFamily: 'JetBrains Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontFamily:
+        'Inconsolata, JetBrains Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       fontSize: BASE_TERMINAL_FONT_SIZE,
-      lineHeight: 1.25,
+      lineHeight: 1.2,
       theme: xtermTheme,
     });
     const fitAddon = new FitAddon();
@@ -38,12 +53,15 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
 
     // Cmd-only zoom: Ctrl is left to the terminal so we never shadow readline
     // shortcuts (e.g. Ctrl+_ undo). preventDefault stops the browser page zoom.
-    terminal.attachCustomKeyEventHandler((event) => {
+    terminal.attachCustomKeyEventHandler(event => {
       if (event.type !== 'keydown') return true;
-      const fontSize = nextTerminalFontSize(terminal.options.fontSize ?? BASE_TERMINAL_FONT_SIZE, {
-        withZoomModifier: event.metaKey,
-        key: event.key,
-      });
+      const fontSize = nextTerminalFontSize(
+        terminal.options.fontSize ?? BASE_TERMINAL_FONT_SIZE,
+        {
+          withZoomModifier: event.metaKey,
+          key: event.key,
+        },
+      );
       if (fontSize === null) return true;
 
       event.preventDefault();
@@ -53,8 +71,8 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
     });
 
     const disposables = [
-      adapter.onOutput((data) => terminal.write(data)),
-      adapter.onStatusChange((next) => {
+      adapter.onOutput(data => terminal.write(data)),
+      adapter.onStatusChange(next => {
         setStatus(next);
         // The PTY only exists once the server reports "connected", and the
         // resize sent before the socket opened was dropped by the transport.
@@ -63,35 +81,47 @@ export function TerminalEmulator({ adapter, title, onDisconnect }: { adapter: Te
       }),
       adapter.onError(setError),
     ];
-    const inputDisposable = terminal.onData((data) => adapter.sendInput(data));
+    const inputDisposable = terminal.onData(data => adapter.sendInput(data));
     const resizeObserver = new ResizeObserver(() => syncTerminalSize());
     resizeObserver.observe(container);
 
     requestAnimationFrame(() => {
       syncTerminalSize();
-      void adapter.connect().catch((caught) => setError(caught instanceof Error ? caught.message : 'Connection failed.'));
+      void adapter
+        .connect()
+        .catch(caught =>
+          setError(
+            caught instanceof Error ? caught.message : 'Connection failed.',
+          ),
+        );
     });
 
     return () => {
       resizeObserver.disconnect();
       inputDisposable.dispose();
-      disposables.forEach((dispose) => dispose());
+      disposables.forEach(dispose => dispose());
       adapter.close();
       terminal.dispose();
     };
   }, [adapter]);
 
   return (
-    <section className="terminal-stage" aria-label="Terminal session">
-      <header className="terminal-topbar">
+    <section className='terminal-stage' aria-label='Terminal session'>
+      <header className='terminal-topbar'>
         <h1>{title}</h1>
-        <div className="terminal-actions">
+        <div className='terminal-actions'>
           <span className={`status-pill status-${status}`}>{status}</span>
-          <button type="button" className="ghost-button" onClick={onDisconnect}>End session</button>
+          <button type='button' className='ghost-button' onClick={onDisconnect}>
+            End session
+          </button>
         </div>
       </header>
-      {error ? <div className="inline-error" role="alert">{error}</div> : null}
-      <div ref={containerRef} className="terminal-surface" />
+      {error ? (
+        <div className='inline-error' role='alert'>
+          {error}
+        </div>
+      ) : null}
+      <div ref={containerRef} className='terminal-surface' />
     </section>
   );
 }
