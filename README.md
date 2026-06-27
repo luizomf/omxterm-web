@@ -28,8 +28,29 @@ Dark, sparse, premium, terminal-first. The palette is defined in:
 
 Think: nerd in a tuxedo, not Matrix-green Bootstrap.
 
+## Local development
+
+```bash
+cp .env.example .env
+npm install
+npm run dev:server
+npm run dev:web
+```
+
+Open `http://localhost:5173`.
+
+Useful checks:
+
+```bash
+npm run typecheck
+npm run test:run
+npm run build
+```
+
 ## Architecture notes
 
+- `docs/architecture.md`
+- `docs/omxterm-mvp-architecture.excalidraw`
 - `docs/adr/0001-typescript-node-fastify-vite.md`
 - `CONTEXT.md`
 
