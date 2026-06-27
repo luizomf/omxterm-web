@@ -1,6 +1,7 @@
 import cookie from '@fastify/cookie';
 import { createJsonTerminalProtocolCodec } from '@omxterm/core/protocol';
 import {
+  InMemoryAccessRateLimiter,
   InMemoryAccessSessionStore,
   InMemoryDeviceTokenStore,
   InMemoryTerminalTicketStore,
@@ -45,6 +46,7 @@ type Stores = {
   sessions: InMemoryAccessSessionStore;
   devices: InMemoryDeviceTokenStore;
   tickets: InMemoryTerminalTicketStore;
+  accessRateLimiter: InMemoryAccessRateLimiter;
 };
 
 type AuthenticatedRequest = {
@@ -111,6 +113,7 @@ export async function createOmxtermServer(
     sessions: new InMemoryAccessSessionStore(),
     devices: new InMemoryDeviceTokenStore(),
     tickets: new InMemoryTerminalTicketStore(),
+    accessRateLimiter: new InMemoryAccessRateLimiter(),
   };
   const audit = new JsonlAuditLogger(config.auditLogPath);
   const codec = createJsonTerminalProtocolCodec();
@@ -120,11 +123,29 @@ export async function createOmxtermServer(
   app.get('/health', async () => ({ ok: true }));
 
   app.post('/api/access', async (request, reply) => {
+    // request.ip is the socket peer; behind a reverse proxy in production,
+    // enable Fastify trustProxy so this keys on the real client, not the proxy.
+    const clientKey = request.ip;
+    const decision = stores.accessRateLimiter.check(clientKey);
+    if (!decision.allowed) {
+      audit.write({
+        event: 'access_rejected',
+        severity: 'warn',
+        origin: requestOrigin(request),
+        reason: 'rate_limited',
+      });
+      return reply
+        .code(429)
+        .header('retry-after', Math.ceil(decision.retryAfterMs / 1000))
+        .send({ ok: false, message: 'Too many attempts. Try again later.' });
+    }
+
     const parsed = accessSchema.safeParse(request.body);
     if (
       !parsed.success ||
       !safeEqualText(parsed.data.accessToken, config.accessToken)
     ) {
+      stores.accessRateLimiter.recordFailure(clientKey);
       audit.write({
         event: 'access_rejected',
         severity: 'warn',
@@ -136,6 +157,7 @@ export async function createOmxtermServer(
         .send({ ok: false, message: 'Invalid access token.' });
     }
 
+    stores.accessRateLimiter.reset(clientKey);
     const { rawSessionToken, session } = stores.sessions.create();
     const device = stores.devices.create(session.id);
     setAuthCookies(
