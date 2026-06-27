@@ -34,9 +34,11 @@ accurate as part of the workflow.
 2. Create a branch for that issue.
 3. Work in small **conventional commits**.
 4. Open a PR with `closes #N`. If no PR template exists, create one.
-5. Merge according to the repository convention. If no convention exists, create
-   one.
-6. Delete the branch after merge (merge, squash and delete).
+5. Merge with **squash merge** (`gh pr merge --squash --delete-branch`). This is
+   the repository convention: every PR collapses into a single commit on `main`.
+   Do not use merge commits or rebase merges.
+6. Delete the branch after merge (squash and delete; `--delete-branch` handles
+   this).
 
 Since Git and GitHub are the main project context, be explicit, precise, and
 concise about every change. Always describe what matters for project

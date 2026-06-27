@@ -176,3 +176,56 @@ export class InMemoryTerminalTicketStore {
     }
   }
 }
+
+export type RateLimitDecision =
+  | { allowed: true }
+  | { allowed: false; retryAfterMs: number };
+
+type FailureWindow = { count: number; windowStartedAt: number };
+
+/**
+ * Fixed-window limiter for failed access-gate attempts, keyed by client.
+ *
+ * The access token is the single gate in front of an SSH proxy, so without a
+ * limiter it can be brute-forced unbounded (timingSafeEqual only blocks timing
+ * side channels, not guessing). Successful logins reset the counter, so only
+ * brute-force traffic — which never succeeds — accumulates toward the lockout.
+ */
+export class InMemoryAccessRateLimiter {
+  readonly #failuresByClient = new Map<string, FailureWindow>();
+
+  constructor(
+    private readonly clock: Clock = systemClock,
+    private readonly maxFailures = 10,
+    private readonly windowMs = 60 * 1000,
+  ) {}
+
+  check(clientKey: string): RateLimitDecision {
+    const record = this.#failuresByClient.get(clientKey);
+    if (!record) return { allowed: true };
+
+    const elapsed = this.clock.now() - record.windowStartedAt;
+    if (elapsed >= this.windowMs) {
+      this.#failuresByClient.delete(clientKey);
+      return { allowed: true };
+    }
+    if (record.count >= this.maxFailures) {
+      return { allowed: false, retryAfterMs: this.windowMs - elapsed };
+    }
+    return { allowed: true };
+  }
+
+  recordFailure(clientKey: string): void {
+    const now = this.clock.now();
+    const record = this.#failuresByClient.get(clientKey);
+    if (!record || now - record.windowStartedAt >= this.windowMs) {
+      this.#failuresByClient.set(clientKey, { count: 1, windowStartedAt: now });
+      return;
+    }
+    record.count += 1;
+  }
+
+  reset(clientKey: string): void {
+    this.#failuresByClient.delete(clientKey);
+  }
+}

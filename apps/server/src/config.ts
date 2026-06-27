@@ -27,9 +27,41 @@ function getRequiredEnv(name: string): string {
   return value;
 }
 
+const MIN_ACCESS_TOKEN_LENGTH = 24;
+
+// Defaults and placeholders that would turn the access gate into an open SSH
+// proxy if shipped as-is. Compared case-insensitively against the trimmed token.
+const WEAK_ACCESS_TOKENS = new Set([
+  'change-me',
+  'changeme',
+  'change_me',
+  'password',
+  'secret',
+  'token',
+  'admin',
+]);
+
+const STRONG_TOKEN_HINT =
+  'Generate a strong random token, e.g. "openssl rand -base64 32".';
+
+export function validateAccessToken(token: string): string {
+  if (WEAK_ACCESS_TOKENS.has(token.trim().toLowerCase())) {
+    throw new Error(
+      `OMXTERM_ACCESS_TOKEN is set to a known weak value. ${STRONG_TOKEN_HINT}`,
+    );
+  }
+  if (token.length < MIN_ACCESS_TOKEN_LENGTH) {
+    throw new Error(
+      `OMXTERM_ACCESS_TOKEN must be at least ${MIN_ACCESS_TOKEN_LENGTH} characters; ` +
+        `got ${token.length}. ${STRONG_TOKEN_HINT}`,
+    );
+  }
+  return token;
+}
+
 export function loadConfig(): ServerConfig {
   return {
-    accessToken: getRequiredEnv('OMXTERM_ACCESS_TOKEN'),
+    accessToken: validateAccessToken(getRequiredEnv('OMXTERM_ACCESS_TOKEN')),
     allowedOrigin:
       process.env.OMXTERM_ALLOWED_ORIGIN ?? 'http://localhost:5173',
     host: process.env.OMXTERM_SERVER_HOST ?? '127.0.0.1',
