@@ -1,3 +1,16 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { config as loadDotenv } from 'dotenv';
+
+for (const dotenvPath of [
+  resolve(process.cwd(), '.env'),
+  resolve(process.cwd(), '..', '..', '.env'),
+]) {
+  if (existsSync(dotenvPath)) {
+    loadDotenv({ path: dotenvPath, override: false });
+  }
+}
+
 export type ServerConfig = {
   accessToken: string;
   allowedOrigin: string;

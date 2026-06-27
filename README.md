@@ -38,6 +38,12 @@ Think: nerd in a tuxedo, not Matrix-green Bootstrap.
 ```bash
 cp .env.example .env
 npm install
+./scripts/run
+```
+
+Or run the processes separately:
+
+```bash
 npm run dev:server
 npm run dev:web
 ```
