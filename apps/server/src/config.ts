@@ -1,10 +1,11 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { config as loadDotenv } from 'dotenv';
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { config as loadDotenv } from "dotenv";
+import { parseAllowedOrigins } from "./allowed-origins";
 
 for (const dotenvPath of [
-  resolve(process.cwd(), '.env'),
-  resolve(process.cwd(), '..', '..', '.env'),
+  resolve(process.cwd(), ".env"),
+  resolve(process.cwd(), "..", "..", ".env"),
 ]) {
   if (existsSync(dotenvPath)) {
     loadDotenv({ path: dotenvPath, override: false });
@@ -13,7 +14,7 @@ for (const dotenvPath of [
 
 export type ServerConfig = {
   accessToken: string;
-  allowedOrigin: string;
+  allowedOrigins: string[];
   host: string;
   port: number;
   secureCookies: boolean;
@@ -32,13 +33,13 @@ const MIN_ACCESS_TOKEN_LENGTH = 24;
 // Defaults and placeholders that would turn the access gate into an open SSH
 // proxy if shipped as-is. Compared case-insensitively against the trimmed token.
 const WEAK_ACCESS_TOKENS = new Set([
-  'change-me',
-  'changeme',
-  'change_me',
-  'password',
-  'secret',
-  'token',
-  'admin',
+  "change-me",
+  "changeme",
+  "change_me",
+  "password",
+  "secret",
+  "token",
+  "admin",
 ]);
 
 const STRONG_TOKEN_HINT =
@@ -61,12 +62,13 @@ export function validateAccessToken(token: string): string {
 
 export function loadConfig(): ServerConfig {
   return {
-    accessToken: validateAccessToken(getRequiredEnv('OMXTERM_ACCESS_TOKEN')),
-    allowedOrigin:
-      process.env.OMXTERM_ALLOWED_ORIGIN ?? 'http://localhost:5173',
-    host: process.env.OMXTERM_SERVER_HOST ?? '127.0.0.1',
-    port: Number.parseInt(process.env.OMXTERM_SERVER_PORT ?? '3000', 10),
-    secureCookies: process.env.OMXTERM_SECURE_COOKIES === 'true',
+    accessToken: validateAccessToken(getRequiredEnv("OMXTERM_ACCESS_TOKEN")),
+    allowedOrigins: parseAllowedOrigins(
+      process.env.OMXTERM_ALLOWED_ORIGIN ?? "http://localhost:5173",
+    ),
+    host: process.env.OMXTERM_SERVER_HOST ?? "127.0.0.1",
+    port: Number.parseInt(process.env.OMXTERM_SERVER_PORT ?? "3000", 10),
+    secureCookies: process.env.OMXTERM_SECURE_COOKIES === "true",
     auditLogPath: process.env.OMXTERM_AUDIT_LOG,
   };
 }
