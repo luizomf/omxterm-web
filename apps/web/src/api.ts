@@ -13,9 +13,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
     credentials: 'same-origin',
     body: JSON.stringify(body),
   });
-  const data = await response.json().catch(() => null) as T | null;
+  const data = (await response.json().catch(() => null)) as T | null;
   if (!response.ok) {
-    const message = data && typeof data === 'object' && 'message' in data ? String(data.message) : 'Request failed.';
+    const message =
+      data && typeof data === 'object' && 'message' in data
+        ? String(data.message)
+        : 'Request failed.';
     throw new Error(message);
   }
   return data as T;
@@ -24,7 +27,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 export async function checkAuth(): Promise<boolean> {
   const response = await fetch('/api/me', { credentials: 'same-origin' });
   if (!response.ok) return false;
-  const data = await response.json() as { authenticated: boolean };
+  const data = (await response.json()) as { authenticated: boolean };
   return data.authenticated;
 }
 
@@ -32,13 +35,24 @@ export async function submitAccessToken(accessToken: string): Promise<void> {
   await postJson('/api/access', { accessToken });
 }
 
-export async function probeHostKey(target: { host: string; port: number }): Promise<string> {
-  const data = await postJson<{ ok: true; fingerprint: string }>('/api/ssh/host-key', target);
+export async function probeHostKey(target: {
+  host: string;
+  port: number;
+}): Promise<string> {
+  const data = await postJson<{ ok: true; fingerprint: string }>(
+    '/api/ssh/host-key',
+    target,
+  );
   return data.fingerprint;
 }
 
-export async function createTerminalTicket(profile: SshConnectionDraft & { acceptedHostFingerprint: string }): Promise<{ ticket: string; wsUrl: string }> {
-  const data = await postJson<{ ok: true; ticket: string; wsUrl: string }>('/api/terminal-ticket', profile);
+export async function createTerminalTicket(
+  profile: SshConnectionDraft & { acceptedHostFingerprint: string },
+): Promise<{ ticket: string; wsUrl: string }> {
+  const data = await postJson<{ ok: true; ticket: string; wsUrl: string }>(
+    '/api/terminal-ticket',
+    profile,
+  );
   return { ticket: data.ticket, wsUrl: data.wsUrl };
 }
 
