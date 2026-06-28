@@ -1,5 +1,5 @@
-import cookie from '@fastify/cookie';
-import { createJsonTerminalProtocolCodec } from '@omxterm/core/protocol';
+import cookie from "@fastify/cookie";
+import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
 import {
   InMemoryAccessRateLimiter,
   InMemoryAccessSessionStore,
@@ -7,13 +7,14 @@ import {
   InMemoryTerminalTicketStore,
   type AccessSession,
   type SshConnectionProfile,
-} from '@omxterm/core/stores';
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
-import type { Duplex } from 'node:stream';
-import { WebSocket, WebSocketServer } from 'ws';
-import { z } from 'zod';
-import type { ServerConfig } from './config';
+} from "@omxterm/core/stores";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import type { Duplex } from "node:stream";
+import { WebSocket, WebSocketServer } from "ws";
+import { z } from "zod";
+import { isOriginAllowed } from "./allowed-origins";
+import type { ServerConfig } from "./config";
 import {
   DEVICE_TOKEN_COOKIE,
   parseCookieHeader,
@@ -21,9 +22,9 @@ import {
   SESSION_ID_COOKIE,
   SESSION_TOKEN_COOKIE,
   setAuthCookies,
-} from './cookies';
-import { JsonlAuditLogger } from './audit-logger';
-import { probeSshHostKey, SshTerminalSession } from './ssh';
+} from "./cookies";
+import { JsonlAuditLogger } from "./audit-logger";
+import { probeSshHostKey, SshTerminalSession } from "./ssh";
 
 const accessSchema = z.object({ accessToken: z.string().min(1).max(4096) });
 const hostKeySchema = z.object({
@@ -63,18 +64,19 @@ function safeEqualText(left: string, right: string): boolean {
 
 function rejectUpgrade(socket: Duplex, statusCode: number): void {
   socket.write(
-    `HTTP/1.1 ${statusCode} ${statusCode === 401 ? 'Unauthorized' : 'Forbidden'}\r\n\r\n`,
+    `HTTP/1.1 ${statusCode} ${statusCode === 401 ? "Unauthorized" : "Forbidden"}\r\n\r\n`,
   );
   socket.destroy();
 }
 
-function requestOrigin(request: FastifyRequest): string | undefined {
-  const origin = request.headers.origin;
+function normalizeOriginHeader(
+  origin: string | string[] | undefined,
+): string | undefined {
   return Array.isArray(origin) ? origin[0] : origin;
 }
 
-function validateOrigin(origin: string | undefined, expected: string): boolean {
-  return origin === expected;
+function requestOrigin(request: FastifyRequest): string | undefined {
+  return normalizeOriginHeader(request.headers.origin);
 }
 
 function authenticateFastifyRequest(
@@ -89,7 +91,7 @@ function authenticateFastifyRequest(
   if (!session) return null;
   const device = stores.devices.validate(session.id, cookies.deviceToken);
   if (!device) return null;
-  return { session, deviceToken: cookies.deviceToken ?? '' };
+  return { session, deviceToken: cookies.deviceToken ?? "" };
 }
 
 function profileFromBody(
@@ -120,24 +122,24 @@ export async function createOmxtermServer(
   const app = Fastify({ logger: false });
   await app.register(cookie);
 
-  app.get('/health', async () => ({ ok: true }));
+  app.get("/health", async () => ({ ok: true }));
 
-  app.post('/api/access', async (request, reply) => {
+  app.post("/api/access", async (request, reply) => {
     // request.ip is the socket peer; behind a reverse proxy in production,
     // enable Fastify trustProxy so this keys on the real client, not the proxy.
     const clientKey = request.ip;
     const decision = stores.accessRateLimiter.check(clientKey);
     if (!decision.allowed) {
       audit.write({
-        event: 'access_rejected',
-        severity: 'warn',
+        event: "access_rejected",
+        severity: "warn",
         origin: requestOrigin(request),
-        reason: 'rate_limited',
+        reason: "rate_limited",
       });
       return reply
         .code(429)
-        .header('retry-after', Math.ceil(decision.retryAfterMs / 1000))
-        .send({ ok: false, message: 'Too many attempts. Try again later.' });
+        .header("retry-after", Math.ceil(decision.retryAfterMs / 1000))
+        .send({ ok: false, message: "Too many attempts. Try again later." });
     }
 
     const parsed = accessSchema.safeParse(request.body);
@@ -147,14 +149,14 @@ export async function createOmxtermServer(
     ) {
       stores.accessRateLimiter.recordFailure(clientKey);
       audit.write({
-        event: 'access_rejected',
-        severity: 'warn',
+        event: "access_rejected",
+        severity: "warn",
         origin: requestOrigin(request),
-        reason: 'invalid_access_token',
+        reason: "invalid_access_token",
       });
       return reply
         .code(401)
-        .send({ ok: false, message: 'Invalid access token.' });
+        .send({ ok: false, message: "Invalid access token." });
     }
 
     stores.accessRateLimiter.reset(clientKey);
@@ -170,39 +172,39 @@ export async function createOmxtermServer(
       { secure: config.secureCookies },
     );
     audit.write({
-      event: 'access_granted',
-      severity: 'info',
+      event: "access_granted",
+      severity: "info",
       sessionId: session.id,
       origin: requestOrigin(request),
     });
     return { ok: true };
   });
 
-  app.get('/api/me', async request => {
+  app.get("/api/me", async (request) => {
     const auth = authenticateFastifyRequest(request, stores);
     return { authenticated: Boolean(auth) };
   });
 
-  app.post('/api/ssh/host-key', async (request, reply) => {
+  app.post("/api/ssh/host-key", async (request, reply) => {
     const origin = requestOrigin(request);
-    if (!validateOrigin(origin, config.allowedOrigin)) {
-      return reply.code(403).send({ ok: false, message: 'Bad Origin.' });
+    if (!isOriginAllowed(origin, config.allowedOrigins)) {
+      return reply.code(403).send({ ok: false, message: "Bad Origin." });
     }
     const auth = authenticateFastifyRequest(request, stores);
     if (!auth)
-      return reply.code(401).send({ ok: false, message: 'Unauthorized.' });
+      return reply.code(401).send({ ok: false, message: "Unauthorized." });
 
     const parsed = hostKeySchema.safeParse(request.body);
     if (!parsed.success)
       return reply
         .code(400)
-        .send({ ok: false, message: 'Invalid SSH target.' });
+        .send({ ok: false, message: "Invalid SSH target." });
 
     try {
       const result = await probeSshHostKey(parsed.data);
       audit.write({
-        event: 'host_key_presented',
-        severity: 'info',
+        event: "host_key_presented",
+        severity: "info",
         sessionId: auth.session.id,
         host: parsed.data.host,
         port: parsed.data.port,
@@ -211,43 +213,43 @@ export async function createOmxtermServer(
     } catch {
       return reply
         .code(502)
-        .send({ ok: false, message: 'Could not read SSH host key.' });
+        .send({ ok: false, message: "Could not read SSH host key." });
     }
   });
 
-  app.post('/api/terminal-ticket', async (request, reply) => {
+  app.post("/api/terminal-ticket", async (request, reply) => {
     const origin = requestOrigin(request);
-    if (!validateOrigin(origin, config.allowedOrigin)) {
-      return reply.code(403).send({ ok: false, message: 'Bad Origin.' });
+    if (!isOriginAllowed(origin, config.allowedOrigins)) {
+      return reply.code(403).send({ ok: false, message: "Bad Origin." });
     }
     const auth = authenticateFastifyRequest(request, stores);
     if (!auth)
-      return reply.code(401).send({ ok: false, message: 'Unauthorized.' });
+      return reply.code(401).send({ ok: false, message: "Unauthorized." });
 
     const parsed = terminalTicketSchema.safeParse(request.body);
     if (!parsed.success)
       return reply
         .code(400)
-        .send({ ok: false, message: 'Invalid SSH connection profile.' });
+        .send({ ok: false, message: "Invalid SSH connection profile." });
 
     const profile = profileFromBody(parsed.data);
     const issued = stores.tickets.issue({
       sessionId: auth.session.id,
       rawDeviceToken: auth.deviceToken,
-      origin: origin ?? '',
+      origin: origin ?? "",
       profile,
     });
     audit.write({
-      event: 'ticket_issued',
-      severity: 'info',
+      event: "ticket_issued",
+      severity: "info",
       sessionId: auth.session.id,
       origin,
       host: profile.host,
       port: profile.port,
     });
     audit.write({
-      event: 'host_key_trusted',
-      severity: 'info',
+      event: "host_key_trusted",
+      severity: "info",
       sessionId: auth.session.id,
       host: profile.host,
       port: profile.port,
@@ -255,7 +257,7 @@ export async function createOmxtermServer(
     return {
       ok: true,
       ticket: issued.rawTicket,
-      wsUrl: '/terminal/ws',
+      wsUrl: "/terminal/ws",
       expiresInSeconds: 60,
     };
   });
@@ -266,22 +268,22 @@ export async function createOmxtermServer(
     maxPayload: 64 * 1024,
   });
 
-  app.server.on('upgrade', (req, socket, head) => {
-    const origin = req.headers.origin;
+  app.server.on("upgrade", (req, socket, head) => {
+    const origin = normalizeOriginHeader(req.headers.origin);
     const upgradeId = randomUUID();
-    if (origin !== config.allowedOrigin) {
+    if (!isOriginAllowed(origin, config.allowedOrigins)) {
       audit.write({
-        event: 'ws_upgrade_rejected',
-        severity: 'warn',
+        event: "ws_upgrade_rejected",
+        severity: "warn",
         origin,
-        reason: 'bad_origin',
+        reason: "bad_origin",
       });
       rejectUpgrade(socket, 403);
       return;
     }
 
-    const url = new URL(req.url ?? '/', config.allowedOrigin);
-    if (url.pathname !== '/terminal/ws') {
+    const url = new URL(req.url ?? "/", origin);
+    if (url.pathname !== "/terminal/ws") {
       rejectUpgrade(socket, 403);
       return;
     }
@@ -293,13 +295,13 @@ export async function createOmxtermServer(
     );
     const deviceToken = cookies[DEVICE_TOKEN_COOKIE];
     const device = stores.devices.validate(session?.id, deviceToken);
-    const rawTicket = url.searchParams.get('ticket');
+    const rawTicket = url.searchParams.get("ticket");
     if (!session || !device || !deviceToken || !rawTicket) {
       audit.write({
-        event: 'ws_upgrade_rejected',
-        severity: 'warn',
+        event: "ws_upgrade_rejected",
+        severity: "warn",
         origin,
-        reason: 'missing_auth_or_ticket',
+        reason: "missing_auth_or_ticket",
       });
       rejectUpgrade(socket, 401);
       return;
@@ -313,8 +315,8 @@ export async function createOmxtermServer(
     });
     if (!grant.ok) {
       audit.write({
-        event: 'ws_upgrade_rejected',
-        severity: 'warn',
+        event: "ws_upgrade_rejected",
+        severity: "warn",
         sessionId: session.id,
         origin,
         reason: grant.reason,
@@ -324,13 +326,13 @@ export async function createOmxtermServer(
     }
 
     audit.write({
-      event: 'ticket_consumed',
-      severity: 'info',
+      event: "ticket_consumed",
+      severity: "info",
       sessionId: session.id,
       origin,
     });
-    wss.handleUpgrade(req, socket, head, ws => {
-      wss.emit('connection', ws, req, {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req, {
         session,
         grant: grant.grant,
         upgradeId,
@@ -339,7 +341,7 @@ export async function createOmxtermServer(
   });
 
   wss.on(
-    'connection',
+    "connection",
     (
       ws: WebSocket,
       _req: unknown,
@@ -364,56 +366,56 @@ export async function createOmxtermServer(
         ws.send(encoded);
       };
 
-      terminal.on('output', data => {
-        send({ type: 'output', data });
+      terminal.on("output", (data) => {
+        send({ type: "output", data });
       });
-      terminal.on('error', () => {
+      terminal.on("error", () => {
         send({
-          type: 'error',
-          code: 'ssh_error',
-          message: 'The SSH session failed.',
+          type: "error",
+          code: "ssh_error",
+          message: "The SSH session failed.",
         });
       });
-      terminal.on('close', reason => {
-        send({ type: 'exit', reason });
+      terminal.on("close", (reason) => {
+        send({ type: "exit", reason });
         ws.close(1000, reason);
       });
 
-      ws.on('message', raw => {
-        const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
+      ws.on("message", (raw) => {
+        const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
         bytesIn += Buffer.byteLength(text);
         const parsed = codec.parseClientMessage(text);
         if (!parsed.ok) {
-          send({ type: 'error', code: parsed.code, message: parsed.message });
+          send({ type: "error", code: parsed.code, message: parsed.message });
           return;
         }
-        if (parsed.message.type === 'input')
+        if (parsed.message.type === "input")
           terminal.write(parsed.message.data);
-        if (parsed.message.type === 'resize') {
+        if (parsed.message.type === "resize") {
           terminal.resize(parsed.message.cols, parsed.message.rows);
           audit.write({
-            event: 'resize',
-            severity: 'info',
+            event: "resize",
+            severity: "info",
             sessionId: context.session.id,
             cols: parsed.message.cols,
             rows: parsed.message.rows,
           });
         }
-        if (parsed.message.type === 'ping')
-          send({ type: 'pong', ts: parsed.message.ts });
+        if (parsed.message.type === "ping")
+          send({ type: "pong", ts: parsed.message.ts });
       });
 
-      ws.on('close', () => {
+      ws.on("close", () => {
         if (closed) return;
         closed = true;
         terminal.close();
         audit.write({
-          event: 'session_ended',
-          severity: 'info',
+          event: "session_ended",
+          severity: "info",
           sessionId: context.session.id,
           bytesIn,
           bytesOut,
-          reason: 'websocket_closed',
+          reason: "websocket_closed",
         });
       });
 
@@ -421,21 +423,21 @@ export async function createOmxtermServer(
         .connect(context.grant.profile, { cols: 120, rows: 34 })
         .then(() => {
           audit.write({
-            event: 'session_started',
-            severity: 'info',
+            event: "session_started",
+            severity: "info",
             sessionId: context.session.id,
             host: context.grant.profile.host,
             port: context.grant.profile.port,
           });
-          send({ type: 'ready', sessionId: terminalSessionId });
+          send({ type: "ready", sessionId: terminalSessionId });
         })
         .catch(() => {
           send({
-            type: 'error',
-            code: 'ssh_connect_failed',
-            message: 'Could not open the SSH session.',
+            type: "error",
+            code: "ssh_connect_failed",
+            message: "Could not open the SSH session.",
           });
-          ws.close(1011, 'ssh_connect_failed');
+          ws.close(1011, "ssh_connect_failed");
         });
     },
   );
