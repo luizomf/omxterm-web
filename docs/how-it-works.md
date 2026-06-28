@@ -7,8 +7,8 @@ SSH proxy.
 
 This document walks the whole path end to end, from "open the page" to "type
 `whoami` in a remote shell". It is meant to be read top to bottom and is detailed
-enough to narrate in a video. Every claim here matches the code; file references
-point at the exact place each rule lives.
+enough to onboard a new contributor. Every claim here matches the code; file
+references point at the exact place each rule lives.
 
 ---
 
@@ -244,7 +244,7 @@ or `invalid_access_token`), `host_key_presented`, `ticket_issued`,
 `resize`, and `session_ended` (with byte counts).
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any keystroke
-or terminal output. You can show this log on camera safely.
+or terminal output — the log is safe to share.
 
 ---
 
