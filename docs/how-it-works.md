@@ -80,8 +80,10 @@ The broker refuses to start with a weak gate. `loadConfig`
 - `OMXTERM_ACCESS_TOKEN` — **required**. `validateAccessToken` rejects known weak
   values (`change-me`, `password`, …) and anything shorter than 24 characters. A
   default placeholder cannot be shipped by accident.
-- `OMXTERM_ALLOWED_ORIGIN` — the single browser origin allowed to talk to the
-  broker. Default `http://localhost:5173`.
+- `OMXTERM_ALLOWED_ORIGIN` — the browser origin(s) allowed to talk to the
+  broker, comma-separated for more than one (e.g. localhost + a LAN IP).
+  `parseAllowedOrigins` matches each entry exactly and rejects wildcards or
+  malformed origins at boot. Default `http://localhost:5173`.
 - `OMXTERM_SERVER_HOST` — bind address. Default `127.0.0.1` (loopback only; the
   broker is not on the LAN unless you opt in).
 - `OMXTERM_SECURE_COOKIES` — `true` sets the `Secure` flag on cookies (for
@@ -128,7 +130,8 @@ validate — the UI uses it to skip the gate on reload.
 
 Before trusting a server, you should look at its fingerprint. The browser sends
 `{ host, port }`; the server first runs the **Origin check**
-(`validateOrigin` — an exact string match against `OMXTERM_ALLOWED_ORIGIN`) and
+(`isOriginAllowed` — an exact match against the `OMXTERM_ALLOWED_ORIGIN`
+allowlist) and
 the cookie auth check, then probes the target.
 
 `probeSshHostKey` ([`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)) opens an
@@ -170,7 +173,7 @@ The browser opens the socket. Crucially, all authorization happens in the
 the raw socket without ever creating a WebSocket
 ([`apps/server/src/server.ts`](../apps/server/src/server.ts)):
 
-1. **Exact Origin** must equal `OMXTERM_ALLOWED_ORIGIN`, else 403.
+1. **Exact Origin** must be in the `OMXTERM_ALLOWED_ORIGIN` allowlist, else 403.
 2. **Path** must be `/terminal/ws`.
 3. **Cookies** (session + device) must validate, and a `ticket` query param must
    be present, else 401.
