@@ -1,5 +1,9 @@
 # OMXTerm MVP architecture
 
+For a didactic, end-to-end walkthrough of the security flow (access gate → device
+token → ticket → host-key → WebSocket → SSH/PTY), see
+[`how-it-works.md`](./how-it-works.md).
+
 Visual diagram:
 
 - [`omxterm-mvp-architecture.excalidraw`](./omxterm-mvp-architecture.excalidraw)
