@@ -30,7 +30,7 @@ textarea {
 
 button {
   border: 0;
-  border-radius: 999px;
+  border-radius: 4px;
   color: #06060c;
   background: linear-gradient(135deg, #77dbff, #88aaf2);
   padding: 0.82rem 1.1rem;
@@ -95,6 +95,7 @@ label {
   max-width: 760px;
   margin-bottom: 2rem;
   text-align: center;
+  padding: 1.5rem 0.5rem 0.5rem 0.5rem;
 }
 .hero-copy h1 {
   margin: 0;
@@ -105,7 +106,7 @@ label {
   margin: 1rem auto 0;
   max-width: 620px;
   color: #9696b8;
-  font-size: 1rem;
+  font-size: 1.3rem;
 }
 
 a {
@@ -123,12 +124,8 @@ a {
 .glass-card {
   width: min(100%, 760px);
   border: 1px solid rgba(214, 209, 255, 0.1);
-  border-radius: 34px;
+  border-radius: 8px;
   background: rgba(20, 20, 30, 0.72);
-  box-shadow:
-    0 24px 100px rgba(0, 0, 0, 0.35),
-    inset 0 1px 0 rgba(240, 240, 255, 0.05);
-  backdrop-filter: blur(26px) saturate(140%);
   padding: clamp(1.35rem, 3vw, 2.2rem);
 }
 
@@ -145,7 +142,7 @@ a {
 .hostkey-card h2,
 .narrow-card h2 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.2rem;
 }
 .field-grid {
   display: grid;
@@ -153,18 +150,18 @@ a {
   gap: 1rem;
 }
 .file-loader input {
-  padding: 0.75rem;
+  padding: 1rem;
 }
 .fine-print {
   color: #8e8eb0;
-  font-size: 1rem;
+  font-size: 1.2rem;
 }
 .global-error,
 .inline-error {
   width: min(100%, 760px);
   margin-bottom: 1rem;
   border: 1px solid rgba(255, 126, 154, 0.28);
-  border-radius: 18px;
+  border-radius: 8px;
   background: rgba(255, 126, 154, 0.09);
   color: #ffa8bb;
   padding: 0.9rem 1rem;
@@ -182,7 +179,7 @@ a {
   margin: 0;
   padding: 1rem;
   border: 1px solid rgba(119, 219, 255, 0.18);
-  border-radius: 20px;
+  border-radius: 8px;
   background: rgba(20, 20, 30, 0.55);
 }
 .fingerprint-box div {
@@ -248,7 +245,7 @@ a {
 }
 .terminal-topbar .ghost-button {
   padding: 0.25rem 0.6rem;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 1rem;
 }
 .status-pill {
