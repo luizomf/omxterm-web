@@ -92,6 +92,16 @@ export class InMemoryAccessSessionStore {
     if (!safeEqualHash(session.tokenHash, hashSecret(rawSessionToken))) return null;
     return session;
   }
+
+  // Active expiry (#29): sessions only hold a token hash (no raw secret), but a
+  // long-lived process would otherwise accumulate expired entries forever, since
+  // validate() never deletes.
+  sweepExpired(): void {
+    const now = this.clock.now();
+    for (const [sessionId, session] of this.#sessions.entries()) {
+      if (session.expiresAt <= now) this.#sessions.delete(sessionId);
+    }
+  }
 }
 
 export class InMemoryDeviceTokenStore {
@@ -117,6 +127,19 @@ export class InMemoryDeviceTokenStore {
     if (!safeEqualHash(device.hash, hashSecret(rawDeviceToken))) return null;
     return device;
   }
+
+  // Active expiry (#29): the stored token keeps its raw value (only handed out at
+  // create() time, never re-read here — validate() compares hashes), so overwrite
+  // it before dropping the expired entry instead of leaving the secret to linger.
+  sweepExpired(): void {
+    const now = this.clock.now();
+    for (const [sessionId, device] of this.#devices.entries()) {
+      if (device.expiresAt <= now) {
+        device.raw = '';
+        this.#devices.delete(sessionId);
+      }
+    }
+  }
 }
 
 export class InMemoryTerminalTicketStore {
@@ -128,7 +151,7 @@ export class InMemoryTerminalTicketStore {
   ) {}
 
   issue(input: { sessionId: string; rawDeviceToken: string; origin: string; profile: SshConnectionProfile }): { rawTicket: string; grant: TerminalTicketGrant } {
-    this.#deleteExpired();
+    this.sweepExpired();
     const rawTicket = createOpaqueSecret();
     const now = this.clock.now();
     const grant: TerminalTicketGrant = {
@@ -146,7 +169,7 @@ export class InMemoryTerminalTicketStore {
   }
 
   consume(input: ConsumeTicketInput): ConsumeTicketResult {
-    this.#deleteExpired();
+    this.sweepExpired();
     const ticketHash = hashSecret(input.rawTicket);
     const grant = this.#tickets.get(ticketHash);
     if (!grant || grant.usedAt || grant.expiresAt <= this.clock.now()) {
@@ -167,10 +190,17 @@ export class InMemoryTerminalTicketStore {
     return { ok: true, grant };
   }
 
-  #deleteExpired(): void {
+  // Active expiry (#29): drop expired/used grants and overwrite the SSH key
+  // material before releasing the reference, so an unconsumed ticket can't keep
+  // a private key in memory past its TTL. The successful-consume path deletes
+  // without scrubbing on purpose — there the grant (and its key) is handed to
+  // the caller to open the SSH session.
+  sweepExpired(): void {
     const now = this.clock.now();
     for (const [ticketHash, grant] of this.#tickets.entries()) {
       if (grant.expiresAt <= now || grant.usedAt) {
+        grant.profile.privateKey = '';
+        if (grant.profile.passphrase) grant.profile.passphrase = '';
         this.#tickets.delete(ticketHash);
       }
     }
