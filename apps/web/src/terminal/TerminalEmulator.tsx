@@ -9,10 +9,18 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
+import { handleOsc52 } from './osc52-clipboard';
 import {
   BASE_TERMINAL_FONT_SIZE,
   nextTerminalFontSize,
 } from './terminal-font-zoom';
+
+// Best-effort host clipboard write for OSC 52. navigator.clipboard is only
+// defined in a secure context (localhost and the https deploy qualify) and can
+// reject without a user gesture; OSC 52 copy is non-critical, so we swallow.
+function writeHostClipboard(text: string): void {
+  void navigator.clipboard?.writeText(text).catch(() => {});
+}
 
 // xterm reads its font from the DOM when open() runs, so the Nerd Font must lead
 // the stack and be loaded before that point — see loadTerminalFont.
@@ -72,6 +80,12 @@ export function TerminalEmulator({
       terminal.loadAddon(new Unicode11Addon());
       terminal.unicode.activeVersion = '11';
 
+      // xterm has no built-in OSC 52, so tmux/nvim yanks reach the host
+      // clipboard only if we register it. Write-only by design — see handleOsc52.
+      const osc52Disposable = terminal.parser.registerOscHandler(52, payload =>
+        handleOsc52(payload, writeHostClipboard),
+      );
+
       terminal.open(container);
 
       // Keep both xterm's grid and the server PTY aligned with the rendered size.
@@ -128,6 +142,7 @@ export function TerminalEmulator({
       return () => {
         resizeObserver.disconnect();
         inputDisposable.dispose();
+        osc52Disposable.dispose();
         disposables.forEach(dispose => dispose());
         adapter.close();
         terminal.dispose();
