@@ -35,15 +35,15 @@ describe('in-memory stores', () => {
     const devices = new InMemoryDeviceTokenStore();
     const tickets = new InMemoryTerminalTicketStore();
     const { session } = sessions.create();
-    const device = devices.create(session.id);
-    const issued = tickets.issue({ sessionId: session.id, rawDeviceToken: device.raw, origin: 'https://app.example', profile });
+    const { rawDeviceToken } = devices.create(session.id);
+    const issued = tickets.issue({ sessionId: session.id, rawDeviceToken, origin: 'https://app.example', profile });
 
     expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: 'bad', origin: 'https://app.example' }).ok).toBe(false);
-    const consumed = tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: device.raw, origin: 'https://app.example' });
+    const consumed = tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: rawDeviceToken, origin: 'https://app.example' });
     expect(consumed.ok).toBe(true);
     // The consume path must NOT scrub: the caller needs the key to open SSH.
     if (consumed.ok) expect(consumed.grant.profile.privateKey).toBe(profile.privateKey);
-    expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: device.raw, origin: 'https://app.example' }).ok).toBe(false);
+    expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: rawDeviceToken, origin: 'https://app.example' }).ok).toBe(false);
   });
 
   test('sweepExpired drops an unconsumed ticket and overwrites its key material', () => {
@@ -67,20 +67,29 @@ describe('in-memory stores', () => {
     expect(result.ok).toBe(false);
   });
 
-  test('sweepExpired removes expired sessions and overwrites the device raw token', () => {
+  test('create hands the raw device token to the caller without retaining it in the store', () => {
+    const devices = new InMemoryDeviceTokenStore();
+    const { rawDeviceToken, device } = devices.create('session-1');
+
+    // The raw secret is returned once; the stored record carries only its hash.
+    expect(rawDeviceToken).not.toBe('');
+    expect(devices.validate('session-1', rawDeviceToken)).not.toBeNull();
+    expect(JSON.stringify(device)).not.toContain(rawDeviceToken);
+  });
+
+  test('sweepExpired removes expired sessions and device tokens', () => {
     const clock = createClock();
     const sessions = new InMemoryAccessSessionStore(clock, 10);
     const devices = new InMemoryDeviceTokenStore(clock, 10);
     const { session, rawSessionToken } = sessions.create();
-    const device = devices.create(session.id);
+    const { rawDeviceToken } = devices.create(session.id);
 
     clock.advance(11);
     sessions.sweepExpired();
     devices.sweepExpired();
 
-    expect(device.raw).toBe('');
     expect(sessions.validate(session.id, rawSessionToken)).toBeNull();
-    expect(devices.validate(session.id, 'device-raw')).toBeNull();
+    expect(devices.validate(session.id, rawDeviceToken)).toBeNull();
   });
 
   test('sweepExpired keeps still-valid tickets and their key intact', () => {
