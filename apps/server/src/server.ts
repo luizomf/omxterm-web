@@ -260,13 +260,13 @@ export async function createOmxtermServer(
 
     stores.accessRateLimiter.reset(clientKey);
     const { rawSessionToken, session } = stores.sessions.create();
-    const device = stores.devices.create(session.id);
+    const { rawDeviceToken } = stores.devices.create(session.id);
     setAuthCookies(
       reply,
       {
         sessionId: session.id,
         sessionToken: rawSessionToken,
-        deviceToken: device.raw,
+        deviceToken: rawDeviceToken,
       },
       { secure: config.secureCookies },
     );

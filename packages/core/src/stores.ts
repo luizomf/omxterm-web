@@ -11,7 +11,6 @@ export type AccessSession = {
 };
 
 export type DeviceToken = {
-  raw: string;
   hash: string;
   createdAt: number;
   expiresAt: number;
@@ -112,12 +111,12 @@ export class InMemoryDeviceTokenStore {
     private readonly deviceTtlMs = 12 * 60 * 60 * 1000,
   ) {}
 
-  create(sessionId: string): DeviceToken {
-    const raw = createOpaqueSecret();
+  create(sessionId: string): { rawDeviceToken: string; device: DeviceToken } {
+    const rawDeviceToken = createOpaqueSecret();
     const now = this.clock.now();
-    const device: DeviceToken = { raw, hash: hashSecret(raw), createdAt: now, expiresAt: now + this.deviceTtlMs };
+    const device: DeviceToken = { hash: hashSecret(rawDeviceToken), createdAt: now, expiresAt: now + this.deviceTtlMs };
     this.#devices.set(sessionId, device);
-    return device;
+    return { rawDeviceToken, device };
   }
 
   validate(sessionId: string | undefined, rawDeviceToken: string | undefined): DeviceToken | null {
@@ -128,16 +127,14 @@ export class InMemoryDeviceTokenStore {
     return device;
   }
 
-  // Active expiry (#29): the stored token keeps its raw value (only handed out at
-  // create() time, never re-read here — validate() compares hashes), so overwrite
-  // it before dropping the expired entry instead of leaving the secret to linger.
+  // Active expiry (#29): device tokens only hold a hash (#34 — the raw is handed
+  // out once at create() and never stored), like access sessions, but a
+  // long-lived process would otherwise accumulate expired entries forever, since
+  // validate() never deletes.
   sweepExpired(): void {
     const now = this.clock.now();
     for (const [sessionId, device] of this.#devices.entries()) {
-      if (device.expiresAt <= now) {
-        device.raw = '';
-        this.#devices.delete(sessionId);
-      }
+      if (device.expiresAt <= now) this.#devices.delete(sessionId);
     }
   }
 }
