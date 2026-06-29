@@ -8,6 +8,7 @@ export type AuditEventName =
   | 'session_ended'
   | 'host_key_presented'
   | 'host_key_trusted'
+  | 'ssh_egress_blocked'
   | 'resize';
 
 export type AuditEvent = {

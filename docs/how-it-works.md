@@ -23,6 +23,7 @@ defends each of those with one specific mechanism:
 | Anyone reaching the URL gets a shell  | **Access gate** token, rate-limited, timing-safe compare                           |
 | A cookie alone authorizes the socket  | **Single-use, 60s terminal ticket** bound to session + device + Origin             |
 | Another site opens the socket for you | **Exact Origin check** on every SSH call and on the WebSocket upgrade              |
+| The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial — blocks SSRF      |
 | You connect to an impostor server     | **Host-key fingerprint** shown first, then re-verified at connect time             |
 | The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript              |
@@ -86,6 +87,14 @@ The broker refuses to start with a weak gate. `loadConfig`
   malformed origins at boot. Default `http://localhost:5173`.
 - `OMXTERM_SERVER_HOST` — bind address. Default `127.0.0.1` (loopback only; the
   broker is not on the LAN unless you opt in).
+- `OMXTERM_SSH_ALLOWED_CIDR` — optional SSH egress allowlist (SSRF guard).
+  Comma-separated IPv4/IPv6 CIDRs (a bare address is a single host) that the
+  broker may connect to. `parseSshEgressAllowlist` validates entries at boot and
+  rejects both the wildcard and an allow-all `/0` range. Unset means unrestricted
+  (single-user/localhost); once
+  set it is default-deny, so loopback, link-local (`169.254.169.254` metadata),
+  and the public internet are blocked unless listed. Set it before using the
+  broker as a jump host on a shared network.
 - `OMXTERM_SECURE_COOKIES` — `true` sets the `Secure` flag on cookies (for
   HTTPS/WSS deployments).
 - `OMXTERM_AUDIT_LOG` — optional path for the JSONL audit log.
@@ -131,8 +140,10 @@ validate — the UI uses it to skip the gate on reload.
 Before trusting a server, you should look at its fingerprint. The browser sends
 `{ host, port }`; the server first runs the **Origin check**
 (`isOriginAllowed` — an exact match against the `OMXTERM_ALLOWED_ORIGIN`
-allowlist) and
-the cookie auth check, then probes the target.
+allowlist) and the cookie auth check. It then runs the **SSH egress check**
+(`checkSshEgress` — resolves the host and rejects with `403` plus an
+`ssh_egress_blocked` audit event when an allowlist is configured and the target
+falls outside it), and only then probes the target.
 
 `probeSshHostKey` ([`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)) opens an
 ssh2 connection with a throwaway username, grabs the host key inside
@@ -150,7 +161,9 @@ Now the browser sends the full connection profile: `host`, `port`, `username`,
 `privateKey`, optional `passphrase`, and the `acceptedHostFingerprint` from step 2.
 This is the **only** request that carries the private key.
 
-After the same Origin + auth checks, `InMemoryTerminalTicketStore.issue` mints a
+After the same Origin + auth checks and the same **SSH egress check** (so a
+ticket is never issued for a target outside the allowlist),
+`InMemoryTerminalTicketStore.issue` mints a
 **terminal ticket** ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)):
 
 - random opaque value, stored as a SHA-256 hash;
@@ -242,9 +255,10 @@ Audit is **metadata only** — security-relevant lifecycle, never terminal conte
 The broker writes JSONL events
 ([`apps/server/src/audit-logger.ts`](../apps/server/src/audit-logger.ts)) such as:
 `access_granted` / `access_rejected` (with a normalized reason like `rate_limited`
-or `invalid_access_token`), `host_key_presented`, `ticket_issued`,
-`ws_upgrade_rejected` (with reason), `ticket_consumed`, `session_started`,
-`resize`, and `session_ended` (with byte counts).
+or `invalid_access_token`), `host_key_presented`, `ssh_egress_blocked` (with the
+blocked host/port and reason), `ticket_issued`, `ws_upgrade_rejected` (with
+reason), `ticket_consumed`, `session_started`, `resize`, and `session_ended`
+(with byte counts).
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any keystroke
 or terminal output — the log is safe to share.

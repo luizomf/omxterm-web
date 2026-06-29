@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { parseAllowedOrigins } from "./allowed-origins";
+import {
+  parseSshEgressAllowlist,
+  type SshEgressPolicy,
+} from "./ssh-egress-policy";
 
 for (const dotenvPath of [
   resolve(process.cwd(), ".env"),
@@ -18,6 +22,7 @@ export type ServerConfig = {
   host: string;
   port: number;
   secureCookies: boolean;
+  sshEgressPolicy: SshEgressPolicy;
   auditLogPath: string | undefined;
 };
 
@@ -69,6 +74,9 @@ export function loadConfig(): ServerConfig {
     host: process.env.OMXTERM_SERVER_HOST ?? "127.0.0.1",
     port: Number.parseInt(process.env.OMXTERM_SERVER_PORT ?? "3000", 10),
     secureCookies: process.env.OMXTERM_SECURE_COOKIES === "true",
+    sshEgressPolicy: parseSshEgressAllowlist(
+      process.env.OMXTERM_SSH_ALLOWED_CIDR,
+    ),
     auditLogPath: process.env.OMXTERM_AUDIT_LOG,
   };
 }
