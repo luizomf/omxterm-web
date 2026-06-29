@@ -25,6 +25,7 @@ import {
 } from "./cookies";
 import { JsonlAuditLogger } from "./audit-logger";
 import { probeSshHostKey, SshTerminalSession } from "./ssh";
+import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
 
 const accessSchema = z.object({ accessToken: z.string().min(1).max(4096) });
 const hostKeySchema = z.object({
@@ -122,6 +123,31 @@ export async function createOmxtermServer(
   const app = Fastify({ logger: false });
   await app.register(cookie);
 
+  // SSRF egress guard (#4): resolve the target and reject before any SSH dial
+  // when an allowlist is configured. Returns true when the target is blocked
+  // (and the rejection was audited), false when it may proceed.
+  async function isSshTargetBlocked(
+    host: string,
+    port: number,
+    sessionId: string,
+  ): Promise<boolean> {
+    const decision = await checkSshEgress(
+      host,
+      config.sshEgressPolicy,
+      resolveHostAddresses,
+    );
+    if (decision.allowed) return false;
+    audit.write({
+      event: "ssh_egress_blocked",
+      severity: "warn",
+      sessionId,
+      host,
+      port,
+      reason: decision.reason,
+    });
+    return true;
+  }
+
   app.get("/health", async () => ({ ok: true }));
 
   app.post("/api/access", async (request, reply) => {
@@ -200,6 +226,17 @@ export async function createOmxtermServer(
         .code(400)
         .send({ ok: false, message: "Invalid SSH target." });
 
+    if (
+      await isSshTargetBlocked(
+        parsed.data.host,
+        parsed.data.port,
+        auth.session.id,
+      )
+    )
+      return reply
+        .code(403)
+        .send({ ok: false, message: "SSH target is not allowed." });
+
     try {
       const result = await probeSshHostKey(parsed.data);
       audit.write({
@@ -231,6 +268,17 @@ export async function createOmxtermServer(
       return reply
         .code(400)
         .send({ ok: false, message: "Invalid SSH connection profile." });
+
+    if (
+      await isSshTargetBlocked(
+        parsed.data.host,
+        parsed.data.port,
+        auth.session.id,
+      )
+    )
+      return reply
+        .code(403)
+        .send({ ok: false, message: "SSH target is not allowed." });
 
     const profile = profileFromBody(parsed.data);
     const issued = stores.tickets.issue({
