@@ -23,7 +23,7 @@ defends each of those with one specific mechanism:
 | Anyone reaching the URL gets a shell  | **Access gate** token, rate-limited, timing-safe compare                           |
 | A cookie alone authorizes the socket  | **Single-use, 60s terminal ticket** bound to session + device + Origin             |
 | Another site opens the socket for you | **Exact Origin check** on every SSH call and on the WebSocket upgrade              |
-| The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial — blocks SSRF      |
+| The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
 | You connect to an impostor server     | **Host-key fingerprint** shown first, then re-verified at connect time             |
 | One session exhausts the broker       | **Post-auth limits** — per-session rate caps on probes/tickets and per-session/global connection caps (429/409) |
 | The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed |
@@ -147,7 +147,12 @@ over the cap returns `429` with `Retry-After` and a `host_key_rejected` audit
 event, so one session can't drive unbounded outbound handshakes. It then runs the
 **SSH egress check** (`checkSshEgress` — resolves the host and rejects with `403`
 plus an `ssh_egress_blocked` audit event when an allowlist is configured and the
-target falls outside it), and only then probes the target.
+target falls outside it), and only then probes the target. When the target is
+allowed, the broker **pins the validated IP** (`sshDialHost`) and dials that
+address rather than the hostname, so `ssh2` never re-resolves and a DNS rebind
+between the check and the dial cannot redirect the connection (#26). The hostname
+is kept for audit only; in unrestricted mode nothing is resolved, so the dial
+falls back to the hostname (localhost demo).
 
 `probeSshHostKey` ([`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)) opens an
 ssh2 connection with a throwaway username, grabs the host key inside
@@ -168,7 +173,8 @@ This is the **only** request that carries the private key.
 After the same Origin + auth checks, the same **per-session rate limit** (30
 tickets/minute — over the cap returns `429` with `Retry-After` and a
 `ticket_rejected` audit event), and the same **SSH egress check** (so a ticket is
-never issued for a target outside the allowlist),
+never issued for a target outside the allowlist — the validated IP is pinned into
+the stored profile so the WebSocket connect dials exactly what was checked, #26),
 `InMemoryTerminalTicketStore.issue` mints a
 **terminal ticket** ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)):
 
@@ -222,7 +228,8 @@ file pipe.
 
 With the grant in hand, `SshTerminalSession.connect`
 ([`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)) finally dials the SSH
-target with the profile's key (and passphrase, if any). Two things matter here:
+target — the **pinned IP** from the egress check, not the hostname (#26) — with
+the profile's key (and passphrase, if any). Two things matter here:
 
 - **The fingerprint is re-verified for real.** `hostVerifier` recomputes the
   fingerprint of the key the server actually presents and compares it to the
