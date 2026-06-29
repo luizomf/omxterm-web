@@ -269,9 +269,13 @@ type RateWindow = { count: number; windowStartedAt: number };
  * this one caps the rate of authenticated operations — outbound host-key probes
  * and ticket issuance (#30) — so a single session can't flood the broker or a
  * target host. tryConsume() checks and increments in one step, so the caller
- * can't forget to record an allowed attempt. Like the access limiter, stale
- * windows are reclaimed lazily on the next touch of the same key (bounded by the
- * set of active sessions, which themselves expire).
+ * can't forget to record an allowed attempt.
+ *
+ * tryConsume() only reopens a stale window when the *same* key is touched again,
+ * but this limiter is keyed by session id — a fresh UUID per login — so a key
+ * never repeats and elapsed windows would otherwise pile up unbounded across a
+ * long-lived process (#39). sweepExpired() lets the active sweeper (#29) reclaim
+ * them on a cadence; it implements ExpiringStore so it joins startExpirySweeper.
  */
 export class InMemoryFixedWindowRateLimiter {
   readonly #windowsByKey = new Map<string, RateWindow>();
@@ -294,6 +298,21 @@ export class InMemoryFixedWindowRateLimiter {
     }
     record.count += 1;
     return { allowed: true };
+  }
+
+  // Drops windows that have fully elapsed (a later request just reopens a fresh
+  // one). Returns how many were reclaimed — the only externally observable effect
+  // of the sweep, since tryConsume() reopens elapsed windows lazily regardless.
+  sweepExpired(): number {
+    const now = this.clock.now();
+    let dropped = 0;
+    for (const [clientKey, record] of this.#windowsByKey) {
+      if (now - record.windowStartedAt >= this.windowMs) {
+        this.#windowsByKey.delete(clientKey);
+        dropped += 1;
+      }
+    }
+    return dropped;
   }
 }
 
