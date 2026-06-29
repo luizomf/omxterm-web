@@ -220,6 +220,21 @@ seenEventIds.add(event.id);
   constraints are not obvious.
 - Public APIs should include intent and at least one usage example when useful.
 
+### Documentation
+
+- Keep docs in sync with behavior, in the same PR. Update docs when a change
+  alters: the security model or request flow, a public endpoint/API, config or
+  env knobs, or how to run/deploy.
+- Do not document internal refactors that change no observable behavior.
+- Write in the right place; do not create new doc dumping grounds:
+  - `docs/how-it-works.md` — security model and request/data flows.
+  - `README.md` — setup, run, deploy, env vars.
+  - `docs/architecture.md` — high-level structure.
+  - `docs/adr/` — one file per significant decision.
+  - `CONTEXT.md` — domain language.
+- Docs are contributor-facing and in English (the project is open-source), not a
+  personal video script.
+
 ### Tests
 
 - New behavior needs tests.
@@ -386,6 +401,7 @@ Verify at least:
 - The code type-checks, when applicable.
 - Relevant tests pass, when available.
 - New behavior has tests, when practical.
+- Docs updated when behavior/security-model/API/config/deploy changed (or N/A).
 - Errors include useful context.
 - No unrelated files were changed.
 - No secrets or sensitive data were added.
