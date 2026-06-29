@@ -45,10 +45,15 @@ export function App() {
   async function handleTrustHostKey() {
     if (!pendingHostKey) return;
     setError(null);
+    const { profile, fingerprint } = pendingHostKey;
     try {
-      const ticket = await createTerminalTicket({ ...pendingHostKey.profile, acceptedHostFingerprint: pendingHostKey.fingerprint });
-      setTerminalTitle(`${pendingHostKey.profile.username}@${pendingHostKey.profile.host}`);
+      const ticket = await createTerminalTicket({ ...profile, acceptedHostFingerprint: fingerprint });
+      setTerminalTitle(`${profile.username}@${profile.host}`);
       setTransport(new WebSocketTerminalTransport(buildWebSocketUrl(ticket.wsUrl, ticket.ticket)));
+      // Drop the private key/passphrase from React state once the ticket exists;
+      // the browser no longer needs them for the WS session, so they shouldn't
+      // stay mounted for the whole terminal session (#30, finding 9).
+      setPendingHostKey(null);
       setStep('terminal');
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Could not create terminal ticket.');

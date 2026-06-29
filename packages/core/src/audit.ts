@@ -1,7 +1,9 @@
 export type AuditEventName =
   | 'access_granted'
   | 'access_rejected'
+  | 'host_key_rejected'
   | 'ticket_issued'
+  | 'ticket_rejected'
   | 'ticket_consumed'
   | 'ws_upgrade_rejected'
   | 'session_started'
