@@ -9,6 +9,7 @@ import {
   type AccessSession,
   type SshConnectionProfile,
 } from "@omxterm/core/stores";
+import { startExpirySweeper } from "@omxterm/core/sweeper";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { Duplex } from "node:stream";
@@ -51,6 +52,12 @@ type Stores = {
   tickets: InMemoryTerminalTicketStore;
   accessRateLimiter: InMemoryAccessRateLimiter;
 };
+
+// How often the active expiry sweeper runs (#29). The cadence is driven by the
+// most sensitive store: terminal tickets carry the SSH private key on a 60s TTL,
+// so sweeping every 10s caps how long an unconsumed key can linger past expiry.
+// Sessions/devices (12h TTL) ride the same sweep cheaply.
+const EXPIRY_SWEEP_INTERVAL_MS = 10 * 1000;
 
 type AuthenticatedRequest = {
   session: AccessSession;
@@ -119,6 +126,12 @@ export async function createOmxtermServer(
     tickets: new InMemoryTerminalTicketStore(),
     accessRateLimiter: new InMemoryAccessRateLimiter(),
   };
+  // Reclaim expired entries (and the SSH key an unconsumed ticket holds) even
+  // while the server is idle, instead of only on the next store read (#29).
+  const stopExpirySweeper = startExpirySweeper(
+    [stores.tickets, stores.sessions, stores.devices],
+    EXPIRY_SWEEP_INTERVAL_MS,
+  );
   const audit = new JsonlAuditLogger(config.auditLogPath);
   const codec = createJsonTerminalProtocolCodec();
   // trustProxy lets Fastify read X-Forwarded-* behind a reverse proxy (Traefik),
@@ -128,6 +141,9 @@ export async function createOmxtermServer(
   const app = Fastify({ logger: false, trustProxy: config.trustProxy });
   await app.register(helmet);
   await app.register(cookie);
+  app.addHook("onClose", async () => {
+    stopExpirySweeper();
+  });
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
   // when an allowlist is configured. Returns true when the target is blocked
