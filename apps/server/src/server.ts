@@ -31,6 +31,7 @@ import {
 import { JsonlAuditLogger } from "./audit-logger";
 import { probeSshHostKey, SshTerminalSession } from "./ssh";
 import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
+import { createOutputBackpressure } from "./terminal-backpressure";
 
 const accessSchema = z.object({ accessToken: z.string().min(1).max(4096) });
 const hostKeySchema = z.object({
@@ -81,6 +82,14 @@ const MAX_ACTIVE_WS_CONNECTIONS = 50;
 // id keys "per session/device" concurrency. All live WebSocket connections share
 // one global counter under this constant key.
 const GLOBAL_WS_KEY = "global";
+
+// Backpressure marks for the PTY->WS output stream (#19). Without them a flood
+// like `yes` or `cat huge_file` outruns the socket: ws.bufferedAmount grows
+// unbounded, ballooning server memory and freezing the browser tab. Pause the
+// SSH channel once buffered output reaches the high mark and resume once the
+// socket drains to the low mark. Conservative MVP byte budgets.
+const WS_OUTPUT_HIGH_WATER_MARK = 1024 * 1024;
+const WS_OUTPUT_LOW_WATER_MARK = 256 * 1024;
 
 type AuthenticatedRequest = {
   session: AccessSession;
@@ -572,13 +581,25 @@ export async function createOmxtermServer(
       let bytesOut = 0;
       let closed = false;
 
+      // Pause the SSH channel when the socket's send buffer backs up, resume when
+      // it drains, so a flood can't outrun the client and freeze the tab (#19).
+      const backpressure = createOutputBackpressure({
+        highWaterMark: WS_OUTPUT_HIGH_WATER_MARK,
+        lowWaterMark: WS_OUTPUT_LOW_WATER_MARK,
+        pause: () => terminal.pause(),
+        resume: () => terminal.resume(),
+      });
+
       const send = (
         message: Parameters<typeof codec.encodeServerMessage>[0],
       ) => {
         if (ws.readyState !== WebSocket.OPEN) return;
         const encoded = codec.encodeServerMessage(message);
         bytesOut += Buffer.byteLength(encoded);
-        ws.send(encoded);
+        // Resume once this frame finishes flushing; pause synchronously if
+        // enqueuing it pushed the socket past the high-water mark (#19).
+        ws.send(encoded, () => backpressure.observe(ws.bufferedAmount));
+        backpressure.observe(ws.bufferedAmount);
       };
 
       terminal.on("output", (data) => {

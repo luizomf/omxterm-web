@@ -149,6 +149,20 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
     this.#channel?.write(data);
   }
 
+  // Pause/resume only the readable side of the channel for backpressure (#19).
+  // The writable side stays open, so input (e.g. Ctrl-C) keeps flowing while the
+  // consumer drains. ssh2's channel windowing turns this into end-to-end
+  // backpressure that blocks the remote writer.
+  pause(): void {
+    this.#channel?.pause();
+    this.#channel?.stderr.pause();
+  }
+
+  resume(): void {
+    this.#channel?.resume();
+    this.#channel?.stderr.resume();
+  }
+
   resize(cols: number, rows: number): void {
     this.#channel?.setWindow(rows, cols, 0, 0);
   }
