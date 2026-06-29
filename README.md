@@ -58,6 +58,11 @@ npm run test:run
 npm run build
 ```
 
+## Usage
+
+Once it is running, see `docs/usage.md` for the operator walkthrough — access
+token, SSH form, host-key confirmation, and what the terminal can do.
+
 ## Deploy
 
 The defaults target `localhost`. Any deploy reachable over an untrusted network
