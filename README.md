@@ -58,6 +58,35 @@ npm run test:run
 npm run build
 ```
 
+## Deploy
+
+The defaults target `localhost`. Any deploy reachable over an untrusted network
+must run behind HTTPS/WSS, because the auth cookies (`omxterm_session_*`,
+`omxterm_device_*`) **are** the authentication and would otherwise travel in
+cleartext. OMXTerm does not terminate TLS itself; put it behind a reverse proxy
+(e.g. Traefik, Caddy, nginx) that does.
+
+Required for a non-loopback deploy:
+
+- `OMXTERM_SECURE_COOKIES=true` — marks the auth cookies `Secure` so they are
+  only sent over HTTPS. The server **refuses to boot** when this is `false` while
+  `OMXTERM_SERVER_HOST` is non-loopback, to prevent shipping cookies in the
+  clear by accident.
+- `OMXTERM_TRUST_PROXY` — set to the proxy's IP/CIDR (preferred) or `true` so the
+  rate limiter keys on the real client and HTTPS is detected from
+  `X-Forwarded-Proto`. Leave it unset on a directly exposed server, where
+  `X-Forwarded-*` headers are spoofable.
+- `OMXTERM_ALLOWED_ORIGIN` — add the public `https://` origin (comma-separated to
+  keep others).
+- `OMXTERM_SERVER_HOST` — `0.0.0.0` (or the proxy-facing interface) so the proxy
+  can reach it.
+- `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist for the hosts the broker may
+  SSH into (see issue #4).
+
+Security headers (CSP and friends) are applied via `@fastify/helmet`. See
+`.env.example` for every variable and `docs/how-it-works.md` for the security
+model.
+
 ## Architecture notes
 
 - `docs/architecture.md`
