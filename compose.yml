@@ -1,0 +1,17 @@
+# Deploy descriptor for the VPS. The broker runs as a single container behind a
+# shared, pre-existing Traefik (file provider) on the external `read_inprod_web`
+# network. Routing/TLS/basicAuth live in that Traefik's dynamic.yml — see
+# docs/deploy.md. Secrets come from a local .env (not committed).
+services:
+  omxterm:
+    build: .
+    container_name: omxterm
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - web
+
+networks:
+  web:
+    name: read_inprod_web
+    external: true
