@@ -4,6 +4,8 @@ import type {
   TerminalTransportAdapter,
 } from '@omxterm/core/terminal';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
@@ -33,7 +35,8 @@ export function TerminalEmulator({
       cursorBlink: true,
       scrollback: 2000,
       convertEol: false,
-      allowProposedApi: false,
+      // Unicode11Addon activates xterm's proposed unicode API, so it must be on.
+      allowProposedApi: true,
       minimumContrastRatio: 4.5,
       fontFamily:
         'Inconsolata, JetBrains Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
@@ -43,6 +46,13 @@ export function TerminalEmulator({
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
+
+    // web-links makes URLs clickable; unicode11 fixes emoji/CJK cell width so
+    // wide glyphs no longer break grid alignment.
+    terminal.loadAddon(new WebLinksAddon());
+    terminal.loadAddon(new Unicode11Addon());
+    terminal.unicode.activeVersion = '11';
+
     terminal.open(container);
 
     // Keep both xterm's grid and the server PTY aligned with the rendered size.
