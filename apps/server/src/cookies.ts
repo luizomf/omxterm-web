@@ -35,10 +35,25 @@ export function parseCookieHeader(cookieHeader: string | undefined): Record<stri
       .split(';')
       .map((part) => part.trim())
       .filter(Boolean)
-      .map((part) => {
+      .flatMap((part): [string, string][] => {
         const index = part.indexOf('=');
-        if (index === -1) return [part, ''];
-        return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
+        if (index === -1) return [[part, '']];
+        // A malformed percent-encoding (e.g. "%E0%A4%A") makes decodeURIComponent
+        // throw URIError. This parser runs in the raw "upgrade" listener, which has
+        // no try/catch, so propagating would crash the process (DoS, #28). Skip the
+        // malformed pair instead and let auth validation reject the upgrade.
+        const name = safeDecodeCookieComponent(part.slice(0, index));
+        const value = safeDecodeCookieComponent(part.slice(index + 1));
+        if (name === null || value === null) return [];
+        return [[name, value]];
       }),
   );
+}
+
+function safeDecodeCookieComponent(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
 }
