@@ -259,3 +259,73 @@ export class InMemoryAccessRateLimiter {
     this.#failuresByClient.delete(clientKey);
   }
 }
+
+type RateWindow = { count: number; windowStartedAt: number };
+
+/**
+ * Fixed-window limiter that counts *every* attempt against a cap, keyed by client.
+ *
+ * The access limiter above only records failed logins (and resets on success);
+ * this one caps the rate of authenticated operations — outbound host-key probes
+ * and ticket issuance (#30) — so a single session can't flood the broker or a
+ * target host. tryConsume() checks and increments in one step, so the caller
+ * can't forget to record an allowed attempt. Like the access limiter, stale
+ * windows are reclaimed lazily on the next touch of the same key (bounded by the
+ * set of active sessions, which themselves expire).
+ */
+export class InMemoryFixedWindowRateLimiter {
+  readonly #windowsByKey = new Map<string, RateWindow>();
+
+  constructor(
+    private readonly clock: Clock = systemClock,
+    private readonly maxPerWindow = 30,
+    private readonly windowMs = 60 * 1000,
+  ) {}
+
+  tryConsume(clientKey: string): RateLimitDecision {
+    const now = this.clock.now();
+    const record = this.#windowsByKey.get(clientKey);
+    if (!record || now - record.windowStartedAt >= this.windowMs) {
+      this.#windowsByKey.set(clientKey, { count: 1, windowStartedAt: now });
+      return { allowed: true };
+    }
+    if (record.count >= this.maxPerWindow) {
+      return { allowed: false, retryAfterMs: this.windowMs - (now - record.windowStartedAt) };
+    }
+    record.count += 1;
+    return { allowed: true };
+  }
+}
+
+/**
+ * Caps the number of concurrent holders per key.
+ *
+ * Used for active SSH terminal sessions per access session and for total live
+ * WebSocket connections (a single constant key) (#30), so one session — or all
+ * sessions together — can't exhaust the broker's sockets/FDs. Acquire when a
+ * connection is admitted, release when it closes. release() never drives a count
+ * below zero, but the caller must release at most once per successful acquire
+ * (double-release would free another holder's slot), so wire it behind a
+ * once-only guard on the connection.
+ */
+export class InMemoryConcurrencyLimiter {
+  readonly #activeByKey = new Map<string, number>();
+
+  constructor(private readonly maxConcurrent = 5) {}
+
+  tryAcquire(key: string): boolean {
+    const active = this.#activeByKey.get(key) ?? 0;
+    if (active >= this.maxConcurrent) return false;
+    this.#activeByKey.set(key, active + 1);
+    return true;
+  }
+
+  release(key: string): void {
+    const active = this.#activeByKey.get(key) ?? 0;
+    if (active <= 1) {
+      this.#activeByKey.delete(key);
+      return;
+    }
+    this.#activeByKey.set(key, active - 1);
+  }
+}
