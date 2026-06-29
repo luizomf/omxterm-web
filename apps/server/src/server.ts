@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import helmet from "@fastify/helmet";
 import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
 import {
   InMemoryAccessRateLimiter,
@@ -120,7 +121,12 @@ export async function createOmxtermServer(
   };
   const audit = new JsonlAuditLogger(config.auditLogPath);
   const codec = createJsonTerminalProtocolCodec();
-  const app = Fastify({ logger: false });
+  // trustProxy lets Fastify read X-Forwarded-* behind a reverse proxy (Traefik),
+  // so request.ip is the real client (the access rate limiter keys on it) and
+  // proto/secure detection works. It defaults to false to avoid honoring
+  // spoofable headers on a directly exposed server (#5).
+  const app = Fastify({ logger: false, trustProxy: config.trustProxy });
+  await app.register(helmet);
   await app.register(cookie);
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
@@ -151,8 +157,9 @@ export async function createOmxtermServer(
   app.get("/health", async () => ({ ok: true }));
 
   app.post("/api/access", async (request, reply) => {
-    // request.ip is the socket peer; behind a reverse proxy in production,
-    // enable Fastify trustProxy so this keys on the real client, not the proxy.
+    // request.ip is the real client when OMXTERM_TRUST_PROXY is set behind a
+    // reverse proxy; otherwise it is the socket peer. Without trustProxy in a
+    // proxied deploy all clients would share the proxy's IP bucket (#5).
     const clientKey = request.ip;
     const decision = stores.accessRateLimiter.check(clientKey);
     if (!decision.allowed) {

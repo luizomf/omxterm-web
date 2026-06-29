@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@fastify/cookie": "latest",
+    "@fastify/helmet": "latest",
     "@omxterm/core": "file:../../packages/core",
     "dotenv": "^17.4.2",
     "fastify": "latest",
