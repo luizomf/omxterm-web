@@ -23,6 +23,11 @@ export type SshConnectionProfile = {
   privateKey: string;
   passphrase?: string;
   acceptedHostFingerprint: string;
+  // IP the egress allowlist validated at request time. The dial targets this
+  // pinned address instead of re-resolving `host`, closing the DNS-rebinding
+  // window between the egress check and the SSH dial (#26). Absent in
+  // unrestricted mode, where nothing is resolved and the dial uses `host`.
+  pinnedAddress?: string;
 };
 
 export type TerminalTicketGrant = {

@@ -7,11 +7,22 @@ import { createUtf8StreamDecoder } from './terminal-output-decoder';
 export type HostKeyProbeInput = {
   host: string;
   port: number;
+  pinnedAddress?: string;
 };
 
 export type HostKeyProbeResult = {
   fingerprint: string;
 };
+
+// The egress allowlist (#4) validated a specific resolved IP at request time;
+// dialing that pinned address instead of re-resolving the hostname closes the
+// DNS-rebinding window between check and dial (#26). ssh2 has no SNI/virtual
+// hosting, so dialing by IP is equivalent for the host-key check, which compares
+// fingerprints regardless of the string dialed. Unrestricted mode pins nothing,
+// so the dial falls back to the hostname (localhost demo).
+export function sshDialHost(target: { host: string; pinnedAddress?: string }): string {
+  return target.pinnedAddress ?? target.host;
+}
 
 function fingerprintHostKey(key: Buffer): string {
   const digest = createHash('sha256').update(key).digest('base64').replace(/=+$/u, '');
@@ -41,7 +52,7 @@ export function probeSshHostKey(input: HostKeyProbeInput, timeoutMs = 10_000): P
     });
 
     client.connect({
-      host: input.host,
+      host: sshDialHost(input),
       port: input.port,
       username: 'omxterm-host-key-probe',
       readyTimeout: timeoutMs,
@@ -117,7 +128,7 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
       });
 
       const connectConfig = {
-        host: profile.host,
+        host: sshDialHost(profile),
         port: profile.port,
         username: profile.username,
         privateKey: profile.privateKey,

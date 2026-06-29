@@ -155,4 +155,19 @@ describe("checkSshEgress", () => {
     const decision = await checkSshEgress("broken", vpnPolicy, failingResolver);
     expect(decision).toEqual({ allowed: false, reason: "resolution_failed" });
   });
+
+  test("surfaces the IP validated at check time so a later DNS rebind cannot move the pinned dial (#26)", async () => {
+    // DNS TOCTOU: the host resolves to an allowlisted IP when checked, then
+    // rebinds to a blocked metadata address. The decision must reflect the
+    // check-time resolution — that captured IP is what the caller pins into the
+    // dial, so a rebind between check and connect changes nothing.
+    let calls = 0;
+    const rebinding: HostResolver = async () => {
+      calls += 1;
+      const address = calls === 1 ? "10.100.0.4" : "169.254.169.254";
+      return [{ address, family: 4 }];
+    };
+    const decision = await checkSshEgress("rebind.evil", vpnPolicy, rebinding);
+    expect(decision).toEqual({ allowed: true, addresses: ["10.100.0.4"] });
+  });
 });
