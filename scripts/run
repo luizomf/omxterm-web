@@ -30,10 +30,10 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-npm run dev:server &
+npm run dev:server "${@}" &
 pids+=("$!")
 
-npm run dev:web &
+npm run dev:web "${@}" &
 pids+=("$!")
 
 while true; do
