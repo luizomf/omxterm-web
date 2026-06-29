@@ -11,14 +11,14 @@
 // control; it does NOT replace per-target SSH auth (the user still supplies
 // credentials and confirms the host-key fingerprint).
 //
-// Validation resolves the host here, at the boundary, but does NOT pin the
-// resolved IP into the connection: ssh2 re-resolves at connect time, so a
-// hostname could in theory rebind in the window between this check and the dial.
-// The terminal path is still partly protected because its host-key fingerprint
-// is pinned (a rebound host presents a different key and is rejected by ssh.ts),
-// and IP-literal targets have no window at all. The probe path is unpinned and
-// has no fingerprint to compare, so pinning the resolved IP into both dials is
-// tracked as a follow-up (#26). See ssh.ts hostVerifier and docs/how-it-works.md.
+// Validation resolves the host here, at the boundary, and the caller pins the
+// validated IP into the dial: the probe and SshTerminalSession.connect dial the
+// resolved address (the first of decision.addresses), not the hostname, so ssh2
+// never re-resolves and a hostname cannot rebind in the window between this check
+// and the dial (#26). The hostname is kept only for audit/readability. IP-literal
+// targets resolve to themselves, and unrestricted mode resolves nothing — there
+// the dial keeps using the hostname for the localhost demo. See ssh.ts
+// (sshDialHost / hostVerifier) and docs/how-it-works.md.
 
 import { BlockList, isIP, isIPv6 } from "node:net";
 import { lookup } from "node:dns/promises";

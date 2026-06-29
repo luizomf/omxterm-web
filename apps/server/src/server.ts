@@ -133,6 +133,7 @@ function authenticateFastifyRequest(
 
 function profileFromBody(
   body: z.infer<typeof terminalTicketSchema>,
+  pinnedAddress: string | undefined,
 ): SshConnectionProfile {
   const profile: SshConnectionProfile = {
     host: body.host,
@@ -142,6 +143,7 @@ function profileFromBody(
     acceptedHostFingerprint: body.acceptedHostFingerprint,
   };
   if (body.passphrase) profile.passphrase = body.passphrase;
+  if (pinnedAddress) profile.pinnedAddress = pinnedAddress;
   return profile;
 }
 
@@ -196,28 +198,42 @@ export async function createOmxtermServer(
   });
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
-  // when an allowlist is configured. Returns true when the target is blocked
-  // (and the rejection was audited), false when it may proceed.
-  async function isSshTargetBlocked(
+  // when an allowlist is configured. On block it audits and returns
+  // `{ blocked: true }`; on allow it returns the validated IP to pin into the
+  // dial — dialing that exact address instead of letting ssh2 re-resolve closes
+  // the DNS-rebinding window between this check and the dial (#26). Unrestricted
+  // mode resolves nothing, so there is no pin and the dial keeps using the
+  // hostname (localhost demo).
+  async function guardSshTarget(
     host: string,
     port: number,
     sessionId: string,
-  ): Promise<boolean> {
+  ): Promise<{ blocked: true } | { blocked: false; pinnedAddress?: string }> {
     const decision = await checkSshEgress(
       host,
       config.sshEgressPolicy,
       resolveHostAddresses,
     );
-    if (decision.allowed) return false;
-    audit.write({
-      event: "ssh_egress_blocked",
-      severity: "warn",
-      sessionId,
-      host,
-      port,
-      reason: decision.reason,
-    });
-    return true;
+    if (!decision.allowed) {
+      audit.write({
+        event: "ssh_egress_blocked",
+        severity: "warn",
+        sessionId,
+        host,
+        port,
+        reason: decision.reason,
+      });
+      return { blocked: true };
+    }
+    // Pin the first validated address; the egress check already proved every
+    // resolved address is in the allowlist. Probe and connect resolve
+    // independently, so a multi-A-record host with distinct keys can pin
+    // different IPs — the host-key fingerprint then mismatches and the connect
+    // fails safe. Empty in unrestricted mode, where the dial keeps the hostname.
+    const pinnedAddress = decision.addresses[0];
+    return pinnedAddress
+      ? { blocked: false, pinnedAddress }
+      : { blocked: false };
   }
 
   app.get("/health", async () => ({ ok: true }));
@@ -316,19 +332,22 @@ export async function createOmxtermServer(
         .code(400)
         .send({ ok: false, message: "Invalid SSH target." });
 
-    if (
-      await isSshTargetBlocked(
-        parsed.data.host,
-        parsed.data.port,
-        auth.session.id,
-      )
-    )
+    const egress = await guardSshTarget(
+      parsed.data.host,
+      parsed.data.port,
+      auth.session.id,
+    );
+    if (egress.blocked)
       return reply
         .code(403)
         .send({ ok: false, message: "SSH target is not allowed." });
 
     try {
-      const result = await probeSshHostKey(parsed.data);
+      const result = await probeSshHostKey(
+        egress.pinnedAddress
+          ? { ...parsed.data, pinnedAddress: egress.pinnedAddress }
+          : parsed.data,
+      );
       audit.write({
         event: "host_key_presented",
         severity: "info",
@@ -376,18 +395,17 @@ export async function createOmxtermServer(
         .code(400)
         .send({ ok: false, message: "Invalid SSH connection profile." });
 
-    if (
-      await isSshTargetBlocked(
-        parsed.data.host,
-        parsed.data.port,
-        auth.session.id,
-      )
-    )
+    const egress = await guardSshTarget(
+      parsed.data.host,
+      parsed.data.port,
+      auth.session.id,
+    );
+    if (egress.blocked)
       return reply
         .code(403)
         .send({ ok: false, message: "SSH target is not allowed." });
 
-    const profile = profileFromBody(parsed.data);
+    const profile = profileFromBody(parsed.data, egress.pinnedAddress);
     const issued = stores.tickets.issue({
       sessionId: auth.session.id,
       rawDeviceToken: auth.deviceToken,
