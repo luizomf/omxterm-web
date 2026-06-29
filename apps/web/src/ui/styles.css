@@ -2,6 +2,25 @@
   box-sizing: border-box;
 }
 
+/* Self-hosted (no CDN, respects the broker's egress posture). Mono variant keeps
+   Nerd Font icons in a single cell so the terminal grid stays aligned. OFL — see
+   public/fonts/OFL.txt. */
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMonoNerdFontMono-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrainsMono Nerd Font Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
+}
+
 :root {
   --font-mono:
     Inconsolata, ui-monospace, SFMono-Regular, 'SF Mono', Consolas, Menlo,
