@@ -181,6 +181,30 @@ describe('fixed-window rate limiter', () => {
     expect(limiter.tryConsume('session-1').allowed).toBe(false);
     expect(limiter.tryConsume('session-2').allowed).toBe(true);
   });
+
+  test('sweepExpired reclaims windows whose fixed window has fully elapsed', () => {
+    const clock = createClock();
+    const limiter = new InMemoryFixedWindowRateLimiter(clock, 1, 1_000);
+    limiter.tryConsume('session-1');
+    limiter.tryConsume('session-2');
+
+    // Past the window with no further consume on either key: the lazy reopen on
+    // tryConsume never runs, so only the active sweep can reclaim these windows
+    // (the #39 leak — keys are per-login UUIDs, so they never repeat).
+    clock.advance(1_000);
+    expect(limiter.sweepExpired()).toBe(2);
+  });
+
+  test('sweepExpired keeps a window that is still open', () => {
+    const clock = createClock();
+    const limiter = new InMemoryFixedWindowRateLimiter(clock, 1, 1_000);
+    limiter.tryConsume('session-1');
+
+    clock.advance(400);
+    expect(limiter.sweepExpired()).toBe(0);
+    // The preserved window still counts, so a repeat inside it stays blocked.
+    expect(limiter.tryConsume('session-1').allowed).toBe(false);
+  });
 });
 
 describe('concurrency limiter', () => {
