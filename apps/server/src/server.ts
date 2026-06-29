@@ -169,9 +169,17 @@ export async function createOmxtermServer(
     wsConcurrency: new InMemoryConcurrencyLimiter(MAX_ACTIVE_WS_CONNECTIONS),
   };
   // Reclaim expired entries (and the SSH key an unconsumed ticket holds) even
-  // while the server is idle, instead of only on the next store read (#29).
+  // while the server is idle, instead of only on the next store read (#29). The
+  // rate limiters are keyed by per-login session ids, so their elapsed windows
+  // never get touched again and only the sweep reclaims them (#39).
   const stopExpirySweeper = startExpirySweeper(
-    [stores.tickets, stores.sessions, stores.devices],
+    [
+      stores.tickets,
+      stores.sessions,
+      stores.devices,
+      stores.hostKeyRateLimiter,
+      stores.ticketRateLimiter,
+    ],
     EXPIRY_SWEEP_INTERVAL_MS,
   );
   const audit = new JsonlAuditLogger(config.auditLogPath);
