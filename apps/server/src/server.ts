@@ -4,8 +4,11 @@ import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
 import {
   InMemoryAccessRateLimiter,
   InMemoryAccessSessionStore,
+  InMemoryConcurrencyLimiter,
   InMemoryDeviceTokenStore,
+  InMemoryFixedWindowRateLimiter,
   InMemoryTerminalTicketStore,
+  systemClock,
   type AccessSession,
   type SshConnectionProfile,
 } from "@omxterm/core/stores";
@@ -51,6 +54,10 @@ type Stores = {
   devices: InMemoryDeviceTokenStore;
   tickets: InMemoryTerminalTicketStore;
   accessRateLimiter: InMemoryAccessRateLimiter;
+  hostKeyRateLimiter: InMemoryFixedWindowRateLimiter;
+  ticketRateLimiter: InMemoryFixedWindowRateLimiter;
+  sessionConcurrency: InMemoryConcurrencyLimiter;
+  wsConcurrency: InMemoryConcurrencyLimiter;
 };
 
 // How often the active expiry sweeper runs (#29). The cadence is driven by the
@@ -58,6 +65,22 @@ type Stores = {
 // so sweeping every 10s caps how long an unconsumed key can linger past expiry.
 // Sessions/devices (12h TTL) ride the same sweep cheaply.
 const EXPIRY_SWEEP_INTERVAL_MS = 10 * 1000;
+
+// Per-session and global caps for authenticated traffic (#30). The access rate
+// limiter only guards the login gate; without these a single authenticated
+// session could flood outbound SSH probes/tickets or open unbounded
+// sockets/sessions, exhausting the broker's FDs, CPU, or memory. Conservative
+// MVP defaults — the threat needs an already-authenticated, misbehaving session.
+const POST_AUTH_RATE_WINDOW_MS = 60 * 1000;
+const MAX_HOST_KEY_PROBES_PER_WINDOW = 30;
+const MAX_TICKETS_PER_WINDOW = 30;
+const MAX_ACTIVE_SESSIONS_PER_CLIENT = 5;
+const MAX_ACTIVE_WS_CONNECTIONS = 50;
+
+// A device token is created 1:1 with its access session, so the access session
+// id keys "per session/device" concurrency. All live WebSocket connections share
+// one global counter under this constant key.
+const GLOBAL_WS_KEY = "global";
 
 type AuthenticatedRequest = {
   session: AccessSession;
@@ -71,10 +94,15 @@ function safeEqualText(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+const UPGRADE_STATUS_TEXT: Record<number, string> = {
+  401: "Unauthorized",
+  403: "Forbidden",
+  409: "Conflict",
+};
+
 function rejectUpgrade(socket: Duplex, statusCode: number): void {
-  socket.write(
-    `HTTP/1.1 ${statusCode} ${statusCode === 401 ? "Unauthorized" : "Forbidden"}\r\n\r\n`,
-  );
+  const statusText = UPGRADE_STATUS_TEXT[statusCode] ?? "Forbidden";
+  socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\n\r\n`);
   socket.destroy();
 }
 
@@ -125,6 +153,20 @@ export async function createOmxtermServer(
     devices: new InMemoryDeviceTokenStore(),
     tickets: new InMemoryTerminalTicketStore(),
     accessRateLimiter: new InMemoryAccessRateLimiter(),
+    hostKeyRateLimiter: new InMemoryFixedWindowRateLimiter(
+      systemClock,
+      MAX_HOST_KEY_PROBES_PER_WINDOW,
+      POST_AUTH_RATE_WINDOW_MS,
+    ),
+    ticketRateLimiter: new InMemoryFixedWindowRateLimiter(
+      systemClock,
+      MAX_TICKETS_PER_WINDOW,
+      POST_AUTH_RATE_WINDOW_MS,
+    ),
+    sessionConcurrency: new InMemoryConcurrencyLimiter(
+      MAX_ACTIVE_SESSIONS_PER_CLIENT,
+    ),
+    wsConcurrency: new InMemoryConcurrencyLimiter(MAX_ACTIVE_WS_CONNECTIONS),
   };
   // Reclaim expired entries (and the SSH key an unconsumed ticket holds) even
   // while the server is idle, instead of only on the next store read (#29).
@@ -243,6 +285,23 @@ export async function createOmxtermServer(
     if (!auth)
       return reply.code(401).send({ ok: false, message: "Unauthorized." });
 
+    const rate = stores.hostKeyRateLimiter.tryConsume(auth.session.id);
+    if (!rate.allowed) {
+      audit.write({
+        event: "host_key_rejected",
+        severity: "warn",
+        sessionId: auth.session.id,
+        reason: "rate_limited",
+      });
+      return reply
+        .code(429)
+        .header("retry-after", Math.ceil(rate.retryAfterMs / 1000))
+        .send({
+          ok: false,
+          message: "Too many host-key probes. Try again later.",
+        });
+    }
+
     const parsed = hostKeySchema.safeParse(request.body);
     if (!parsed.success)
       return reply
@@ -285,6 +344,23 @@ export async function createOmxtermServer(
     const auth = authenticateFastifyRequest(request, stores);
     if (!auth)
       return reply.code(401).send({ ok: false, message: "Unauthorized." });
+
+    const rate = stores.ticketRateLimiter.tryConsume(auth.session.id);
+    if (!rate.allowed) {
+      audit.write({
+        event: "ticket_rejected",
+        severity: "warn",
+        sessionId: auth.session.id,
+        reason: "rate_limited",
+      });
+      return reply
+        .code(429)
+        .header("retry-after", Math.ceil(rate.retryAfterMs / 1000))
+        .send({
+          ok: false,
+          message: "Too many ticket requests. Try again later.",
+        });
+    }
 
     const parsed = terminalTicketSchema.safeParse(request.body);
     if (!parsed.success)
@@ -378,6 +454,47 @@ export async function createOmxtermServer(
       return;
     }
 
+    // Cap concurrent connections before consuming the single-use ticket (#30), so
+    // a capacity rejection doesn't burn the ticket the user just minted. Acquire
+    // the global slot first, then the per-session one, releasing the global if the
+    // per-session cap is hit.
+    if (!stores.wsConcurrency.tryAcquire(GLOBAL_WS_KEY)) {
+      audit.write({
+        event: "ws_upgrade_rejected",
+        severity: "warn",
+        sessionId: session.id,
+        origin,
+        reason: "too_many_ws_connections",
+      });
+      rejectUpgrade(socket, 409);
+      return;
+    }
+    if (!stores.sessionConcurrency.tryAcquire(session.id)) {
+      stores.wsConcurrency.release(GLOBAL_WS_KEY);
+      audit.write({
+        event: "ws_upgrade_rejected",
+        severity: "warn",
+        sessionId: session.id,
+        origin,
+        reason: "too_many_active_sessions",
+      });
+      rejectUpgrade(socket, 409);
+      return;
+    }
+
+    // Free both slots exactly once when the connection ends. Bound to the raw
+    // socket's "close" so it also covers an upgrade that never reaches the
+    // "connection" event (e.g. the client aborts mid-handshake), not just a
+    // normal WebSocket close.
+    let slotsReleased = false;
+    const releaseConnectionSlots = () => {
+      if (slotsReleased) return;
+      slotsReleased = true;
+      stores.sessionConcurrency.release(session.id);
+      stores.wsConcurrency.release(GLOBAL_WS_KEY);
+    };
+    socket.on("close", releaseConnectionSlots);
+
     const grant = stores.tickets.consume({
       rawTicket,
       sessionId: session.id,
@@ -385,6 +502,7 @@ export async function createOmxtermServer(
       origin,
     });
     if (!grant.ok) {
+      releaseConnectionSlots();
       audit.write({
         event: "ws_upgrade_rejected",
         severity: "warn",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { InMemoryAccessRateLimiter, InMemoryAccessSessionStore, InMemoryDeviceTokenStore, InMemoryTerminalTicketStore, type Clock } from './stores';
+import { InMemoryAccessRateLimiter, InMemoryAccessSessionStore, InMemoryConcurrencyLimiter, InMemoryDeviceTokenStore, InMemoryFixedWindowRateLimiter, InMemoryTerminalTicketStore, type Clock } from './stores';
 
 function createClock(start = 1_000): Clock & { advance(ms: number): void } {
   let now = start;
@@ -137,5 +137,80 @@ describe('access rate limiter', () => {
     limiter.recordFailure('1.2.3.4');
     expect(limiter.check('1.2.3.4').allowed).toBe(false);
     expect(limiter.check('5.6.7.8').allowed).toBe(true);
+  });
+});
+
+describe('fixed-window rate limiter', () => {
+  test('allows attempts up to the cap then blocks with retry-after', () => {
+    const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 2, 1_000);
+    expect(limiter.tryConsume('session-1').allowed).toBe(true);
+    expect(limiter.tryConsume('session-1').allowed).toBe(true);
+    const decision = limiter.tryConsume('session-1');
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  test('counts every attempt, not just failures', () => {
+    const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 1, 1_000);
+    expect(limiter.tryConsume('session-1').allowed).toBe(true);
+    expect(limiter.tryConsume('session-1').allowed).toBe(false);
+  });
+
+  test('opens a fresh window once the previous one elapses', () => {
+    const clock = createClock();
+    const limiter = new InMemoryFixedWindowRateLimiter(clock, 1, 1_000);
+    expect(limiter.tryConsume('session-1').allowed).toBe(true);
+    expect(limiter.tryConsume('session-1').allowed).toBe(false);
+    clock.advance(1_000);
+    expect(limiter.tryConsume('session-1').allowed).toBe(true);
+  });
+
+  test('reports a shrinking retry-after as the window drains', () => {
+    const clock = createClock();
+    const limiter = new InMemoryFixedWindowRateLimiter(clock, 1, 1_000);
+    limiter.tryConsume('session-1');
+    clock.advance(400);
+    const decision = limiter.tryConsume('session-1');
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.retryAfterMs).toBe(600);
+  });
+
+  test('tracks keys independently', () => {
+    const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 1, 1_000);
+    expect(limiter.tryConsume('session-1').allowed).toBe(true);
+    expect(limiter.tryConsume('session-1').allowed).toBe(false);
+    expect(limiter.tryConsume('session-2').allowed).toBe(true);
+  });
+});
+
+describe('concurrency limiter', () => {
+  test('admits holders up to the cap then refuses', () => {
+    const limiter = new InMemoryConcurrencyLimiter(2);
+    expect(limiter.tryAcquire('session-1')).toBe(true);
+    expect(limiter.tryAcquire('session-1')).toBe(true);
+    expect(limiter.tryAcquire('session-1')).toBe(false);
+  });
+
+  test('releasing a slot lets a new holder in', () => {
+    const limiter = new InMemoryConcurrencyLimiter(1);
+    expect(limiter.tryAcquire('session-1')).toBe(true);
+    expect(limiter.tryAcquire('session-1')).toBe(false);
+    limiter.release('session-1');
+    expect(limiter.tryAcquire('session-1')).toBe(true);
+  });
+
+  test('tracks keys independently', () => {
+    const limiter = new InMemoryConcurrencyLimiter(1);
+    expect(limiter.tryAcquire('session-1')).toBe(true);
+    expect(limiter.tryAcquire('session-2')).toBe(true);
+    expect(limiter.tryAcquire('session-1')).toBe(false);
+  });
+
+  test('releasing an idle key never frees capacity below zero', () => {
+    const limiter = new InMemoryConcurrencyLimiter(1);
+    limiter.release('session-1');
+    limiter.release('session-1');
+    expect(limiter.tryAcquire('session-1')).toBe(true);
+    expect(limiter.tryAcquire('session-1')).toBe(false);
   });
 });
