@@ -88,9 +88,16 @@ Required for a non-loopback deploy:
 - `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist for the hosts the broker may
   SSH into (see issue #4).
 
+In production the broker can also serve the built web SPA itself (one origin) by
+setting `OMXTERM_WEB_ROOT` to the web build output; the Docker image does this
+for you. Locally, leave it unset and Vite serves the web.
+
 Security headers (CSP and friends) are applied via `@fastify/helmet`. See
 `.env.example` for every variable and `docs/how-it-works.md` for the security
 model.
+
+For a step-by-step container rollout behind a reverse proxy (Docker, compose,
+Traefik, basic auth), see `docs/deploy.md`.
 
 ## Architecture notes
 

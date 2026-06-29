@@ -1,5 +1,6 @@
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
+import fastifyStatic from "@fastify/static";
 import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
 import {
   InMemoryAccessRateLimiter,
@@ -202,6 +203,13 @@ export async function createOmxtermServer(
   const app = Fastify({ logger: false, trustProxy: config.trustProxy });
   await app.register(helmet);
   await app.register(cookie);
+  // Serve the built SPA from the broker in production so it shares the API's
+  // origin (#52). The /api routes and the /terminal/ws upgrade are matched
+  // first, so this only answers the SPA shell and its assets. Unset in dev,
+  // where Vite serves the web and proxies the API.
+  if (config.webRoot) {
+    await app.register(fastifyStatic, { root: config.webRoot });
+  }
   app.addHook("onClose", async () => {
     stopExpirySweeper();
   });

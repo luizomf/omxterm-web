@@ -26,6 +26,7 @@ export type ServerConfig = {
   trustProxy: boolean | number | string;
   sshEgressPolicy: SshEgressPolicy;
   auditLogPath: string | undefined;
+  webRoot: string | undefined;
 };
 
 function getRequiredEnv(name: string): string {
@@ -51,6 +52,22 @@ const WEAK_ACCESS_TOKENS = new Set([
 
 const STRONG_TOKEN_HINT =
   'Generate a strong random token, e.g. "openssl rand -base64 32".';
+
+// In production the broker serves the built SPA itself (single origin, so the
+// browser's relative /api and same-origin wss just work). Opt-in: unset in dev,
+// where Vite owns the web. Fail fast on a bad path so a misconfigured deploy
+// surfaces at boot instead of 404-ing every asset.
+export function resolveWebRoot(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const resolved = resolve(value);
+  if (!existsSync(resolved)) {
+    throw new Error(
+      `OMXTERM_WEB_ROOT points at "${resolved}", which does not exist. Set it to ` +
+        "the built web assets (apps/web/dist) or leave it unset to skip serving the SPA.",
+    );
+  }
+  return resolved;
+}
 
 export function validateAccessToken(token: string): string {
   if (WEAK_ACCESS_TOKENS.has(token.trim().toLowerCase())) {
@@ -81,6 +98,7 @@ export function loadConfig(): ServerConfig {
       process.env.OMXTERM_SSH_ALLOWED_CIDR,
     ),
     auditLogPath: process.env.OMXTERM_AUDIT_LOG,
+    webRoot: resolveWebRoot(process.env.OMXTERM_WEB_ROOT),
   };
   assertSafeCookieDeployment(config);
   return config;
