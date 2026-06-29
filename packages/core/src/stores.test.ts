@@ -39,8 +39,61 @@ describe('in-memory stores', () => {
     const issued = tickets.issue({ sessionId: session.id, rawDeviceToken: device.raw, origin: 'https://app.example', profile });
 
     expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: 'bad', origin: 'https://app.example' }).ok).toBe(false);
-    expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: device.raw, origin: 'https://app.example' }).ok).toBe(true);
+    const consumed = tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: device.raw, origin: 'https://app.example' });
+    expect(consumed.ok).toBe(true);
+    // The consume path must NOT scrub: the caller needs the key to open SSH.
+    if (consumed.ok) expect(consumed.grant.profile.privateKey).toBe(profile.privateKey);
     expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: device.raw, origin: 'https://app.example' }).ok).toBe(false);
+  });
+
+  test('sweepExpired drops an unconsumed ticket and overwrites its key material', () => {
+    const clock = createClock();
+    const tickets = new InMemoryTerminalTicketStore(clock, 60_000);
+    const issued = tickets.issue({
+      sessionId: 'session-1',
+      rawDeviceToken: 'device-raw',
+      origin: 'https://app.example',
+      profile: { ...profile, passphrase: 'top-secret' },
+    });
+
+    // Past the TTL with no further issue/consume: the lazy read-path cleanup
+    // never runs, so only the active sweep can reclaim the key.
+    clock.advance(60_001);
+    tickets.sweepExpired();
+
+    expect(issued.grant.profile.privateKey).toBe('');
+    expect(issued.grant.profile.passphrase).toBe('');
+    const result = tickets.consume({ rawTicket: issued.rawTicket, sessionId: 'session-1', deviceToken: 'device-raw', origin: 'https://app.example' });
+    expect(result.ok).toBe(false);
+  });
+
+  test('sweepExpired removes expired sessions and overwrites the device raw token', () => {
+    const clock = createClock();
+    const sessions = new InMemoryAccessSessionStore(clock, 10);
+    const devices = new InMemoryDeviceTokenStore(clock, 10);
+    const { session, rawSessionToken } = sessions.create();
+    const device = devices.create(session.id);
+
+    clock.advance(11);
+    sessions.sweepExpired();
+    devices.sweepExpired();
+
+    expect(device.raw).toBe('');
+    expect(sessions.validate(session.id, rawSessionToken)).toBeNull();
+    expect(devices.validate(session.id, 'device-raw')).toBeNull();
+  });
+
+  test('sweepExpired keeps still-valid tickets and their key intact', () => {
+    const clock = createClock();
+    const tickets = new InMemoryTerminalTicketStore(clock, 60_000);
+    const issued = tickets.issue({ sessionId: 'session-1', rawDeviceToken: 'device-raw', origin: 'https://app.example', profile });
+
+    clock.advance(30_000);
+    tickets.sweepExpired();
+
+    expect(issued.grant.profile.privateKey).toBe(profile.privateKey);
+    const result = tickets.consume({ rawTicket: issued.rawTicket, sessionId: 'session-1', deviceToken: 'device-raw', origin: 'https://app.example' });
+    expect(result.ok).toBe(true);
   });
 });
 
