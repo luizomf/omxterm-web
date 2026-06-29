@@ -90,6 +90,5 @@ model.
 ## Architecture notes
 
 - `docs/architecture.md`
-- `docs/omxterm-mvp-architecture.excalidraw`
 - `docs/adr/0001-typescript-node-fastify-vite.md`
 - `CONTEXT.md`

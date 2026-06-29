@@ -1,28 +1,34 @@
 # OMXTerm MVP architecture
 
+OMXTerm is a browser SSH terminal, not a local sandbox terminal. Three components
+talk to each other, and only the broker ever speaks SSH.
+
 For a didactic, end-to-end walkthrough of the security flow (access gate → device
 token → ticket → host-key → WebSocket → SSH/PTY), see
-[`how-it-works.md`](./how-it-works.md).
+[`how-it-works.md`](./how-it-works.md), which also carries a step-by-step sequence
+diagram of the request/response flow.
 
-Visual diagram:
-
-- [`omxterm-mvp-architecture.excalidraw`](./omxterm-mvp-architecture.excalidraw)
-
-Open it by dragging the `.excalidraw` file into <https://excalidraw.com>.
-
-## What the diagram shows
-
-OMXTerm is a browser SSH terminal, not a local sandbox terminal.
+## Component map
 
 ```text
-Browser + xterm.js
-  -> WebSocket with single-use ticket
-  -> OMXTerm backend broker
-  -> ssh2 client
-  -> user-selected SSH server
+        BROWSER                        OMXTERM BROKER                      SSH TARGET
+   Vite / React / xterm.js          Node · Fastify · ws                      sshd
+ ┌─────────────────────┐        ┌────────────────────────────┐        ┌──────────────┐
+ │  access gate        │        │  POST /api/access          │        │              │
+ │  SSH form           │ ─HTTP─►│  POST /api/ssh/host-key    │ ─SSH──►│  host key    │
+ │  host-key screen    │        │  POST /api/terminal-ticket │        │              │
+ │  terminal UI        │ ◄─WSS─►│  GET  /terminal/ws         │ ◄─────►│  PTY shell   │
+ │                     │        │  ssh2 client (pinned IP)   │        │              │
+ │  cookies: session,  │        │                            │        │  privileges  │
+ │  device (HttpOnly)  │        │  in-memory: sessions,      │        │  decided     │
+ │                     │        │  tickets, limits, audit    │        │  here        │
+ └─────────────────────┘        └────────────────────────────┘        └──────────────┘
+
+   1 token login → 2 probe host-key (SHA256 fp) → 3 issue ticket (60s, single-use)
+   → 4 WSS upgrade + ticket → 5 ssh2 PTY ↔ shell.   Disconnect destroys the SSH session.
 ```
 
-Important boundaries:
+## Important boundaries
 
 - The browser never speaks raw SSH directly.
 - The backend validates access/session/device/origin/ticket before opening the terminal WebSocket.
