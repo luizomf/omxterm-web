@@ -106,7 +106,11 @@ label {
 /* Terminal view is a plain full-bleed surface, not a centered card stack. */
 .app-shell--terminal {
   place-items: stretch;
-  padding: 0.6rem;
+  /* Pin to the viewport (no scroll) and drop the bottom padding so the terminal
+   * surface reaches the screen edge in fullscreen (#50). */
+  height: 100dvh;
+  overflow: hidden;
+  padding: 0.6rem 0.6rem 0;
   background: #000000;
 }
 
@@ -231,8 +235,11 @@ a {
 
 .terminal-stage {
   width: 100%;
-  /* Fill the viewport minus the app-shell edge padding (0.75rem top + bottom). */
-  height: calc(100dvh - 1.5rem);
+  /* Fill the app-shell instead of a hardcoded `calc(100dvh - padding)`: the calc
+   * drifted from the actual padding and, being shorter than the shell, got
+   * centered — leaving a gap below the terminal in fullscreen (#50). */
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -285,11 +292,16 @@ a {
   min-height: 0;
   overflow: hidden;
   background: #0f0f14;
+  display: flex;
+  flex-direction: column;
 }
 .terminal-surface .xterm {
-  height: 100%;
-  padding: 0.6rem;
-  padding-top: 0;
+  /* Fill the surface via flex (not height:100%) so the grid sits right under the
+   * topbar. FitAddon floors the row count, so up to one cell stays unused; it
+   * lands at the bottom in the terminal background colour, where it's effectively
+   * invisible. No vertical padding — it would just reopen the gap (#50). */
+  flex: 1;
+  padding: 0 0.6rem;
 }
 
 @media (max-width: 700px) {
