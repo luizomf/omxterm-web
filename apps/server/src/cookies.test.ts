@@ -19,6 +19,13 @@ describe("parseCookieHeader", () => {
     });
   });
 
+  test("keeps the first value when a cookie name is duplicated", () => {
+    expect(parseCookieHeader("session=first; theme=dark; session=second")).toEqual({
+      session: "first",
+      theme: "dark",
+    });
+  });
+
   test("reads the auth cookies set by the broker", () => {
     const header = `${SESSION_ID_COOKIE}=sid; ${SESSION_TOKEN_COOKIE}=stok; ${DEVICE_TOKEN_COOKIE}=dtok`;
     expect(parseCookieHeader(header)).toMatchObject({
