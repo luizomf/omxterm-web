@@ -37,6 +37,8 @@ Think: nerd in a tuxedo, not Matrix-green Bootstrap.
 
 ```bash
 cp .env.example .env
+# Set OMXTERM_ACCESS_TOKEN in .env to a strong value before the first run; the
+# placeholder is rejected at boot. Generate one with: openssl rand -base64 32
 npm install
 ./scripts/run
 ```
