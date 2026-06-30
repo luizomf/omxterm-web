@@ -114,17 +114,21 @@ This is the only front door. The browser posts `{ accessToken }`.
 The server, in order
 ([`apps/server/src/server.ts`](../apps/server/src/server.ts)):
 
-1. **Rate-limits by client IP first.** `InMemoryAccessRateLimiter` allows 10
+1. **Checks Origin first.** The same exact `OMXTERM_ALLOWED_ORIGIN` allowlist
+   used by the SSH calls and WebSocket upgrade is enforced here too. Bad or
+   missing Origin → HTTP 403 and no cookies, so a cross-site request cannot mint
+   an authenticated browser session.
+2. **Rate-limits by client IP.** `InMemoryAccessRateLimiter` allows 10
    failed attempts per 60-second window
    ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)). The token
    is the single gate in front of an SSH proxy, so it has to resist brute force
    — a timing-safe compare blocks timing leaks, not guessing. Over the limit →
    HTTP 429 with `Retry-After`.
-2. **Compares the token in constant time.** `safeEqualText` uses
+3. **Compares the token in constant time.** `safeEqualText` uses
    `timingSafeEqual`, so a wrong token takes the same time whether the first
    byte or the last byte is wrong. Wrong token → records a failure and
    returns 401.
-3. **On success**, resets the limiter and mints two secrets:
+4. **On success**, resets the limiter and mints two secrets:
    - an **access session** (`InMemoryAccessSessionStore`) — random opaque token,
      stored server-side as a SHA-256 hash, 12-hour TTL;
    - a **device token** (`InMemoryDeviceTokenStore`) — a second random
