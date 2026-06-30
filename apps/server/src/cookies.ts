@@ -30,24 +30,30 @@ export function readAuthCookies(request: FastifyRequest): { sessionId: string | 
 
 export function parseCookieHeader(cookieHeader: string | undefined): Record<string, string> {
   if (!cookieHeader) return {};
-  return Object.fromEntries(
-    cookieHeader
-      .split(';')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .flatMap((part): [string, string][] => {
-        const index = part.indexOf('=');
-        if (index === -1) return [[part, '']];
-        // A malformed percent-encoding (e.g. "%E0%A4%A") makes decodeURIComponent
-        // throw URIError. This parser runs in the raw "upgrade" listener, which has
-        // no try/catch, so propagating would crash the process (DoS, #28). Skip the
-        // malformed pair instead and let auth validation reject the upgrade.
-        const name = safeDecodeCookieComponent(part.slice(0, index));
-        const value = safeDecodeCookieComponent(part.slice(index + 1));
-        if (name === null || value === null) return [];
-        return [[name, value]];
-      }),
-  );
+
+  const cookies = new Map<string, string>();
+  for (const rawPart of cookieHeader.split(';')) {
+    const part = rawPart.trim();
+    if (!part) continue;
+
+    const index = part.indexOf('=');
+    if (index === -1) {
+      if (!cookies.has(part)) cookies.set(part, '');
+      continue;
+    }
+
+    // A malformed percent-encoding (e.g. "%E0%A4%A") makes decodeURIComponent
+    // throw URIError. This parser runs in the raw "upgrade" listener, which has
+    // no try/catch, so propagating would crash the process (DoS, #28). Skip the
+    // malformed pair instead and let auth validation reject the upgrade.
+    const name = safeDecodeCookieComponent(part.slice(0, index));
+    const value = safeDecodeCookieComponent(part.slice(index + 1));
+    if (name === null || value === null) continue;
+
+    if (!cookies.has(name)) cookies.set(name, value);
+  }
+
+  return Object.fromEntries(cookies);
 }
 
 function safeDecodeCookieComponent(raw: string): string | null {
