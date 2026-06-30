@@ -1,6 +1,8 @@
 # Design Tokens
 
-OMXTerm uses a hand-made terminal palette as the product palette. The visual direction is dark, premium, sparse, and terminal-native: "nerd in a tuxedo", not green Matrix cosplay.
+OMXTerm uses a hand-made terminal palette as the product palette. The visual
+direction is dark, premium, sparse, and terminal-native: "nerd in a tuxedo", not
+green Matrix cosplay.
 
 ## Core colors
 
@@ -88,7 +90,8 @@ export const omxtermColors = {
 - Premium glow: `purple`/`blueDeep` at low opacity only
 - Danger: `redVivid`
 - Warning: `yellow`
-- Success: `green`, but only for semantic success states and ANSI terminal output, never as the product identity.
+- Success: `green`, but only for semantic success states and ANSI terminal
+  output, never as the product identity.
 
 ## xterm.js ANSI palette
 
@@ -122,4 +125,5 @@ Map ANSI colors to:
 - Keep backgrounds nearly black with blue-purple-tinted grays.
 - Use wide negative space and restrained chrome.
 - Do not invent fake metrics or decorative dashboards.
-- The terminal is the product object; surrounding UI should feel quiet and expensive.
+- The terminal is the product object; surrounding UI should feel quiet and
+  expensive.

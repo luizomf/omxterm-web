@@ -1,12 +1,12 @@
 # OMXTerm MVP architecture
 
-OMXTerm is a browser SSH terminal, not a local sandbox terminal. Three components
-talk to each other, and only the broker ever speaks SSH.
+OMXTerm is a browser SSH terminal, not a local sandbox terminal. Three
+components talk to each other, and only the broker ever speaks SSH.
 
-For a didactic, end-to-end walkthrough of the security flow (access gate → device
-token → ticket → host-key → WebSocket → SSH/PTY), see
-[`how-it-works.md`](./how-it-works.md), which also carries a step-by-step sequence
-diagram of the request/response flow.
+For a didactic, end-to-end walkthrough of the security flow (access gate →
+device token → ticket → host-key → WebSocket → SSH/PTY), see
+[`how-it-works.md`](./how-it-works.md), which also carries a step-by-step
+sequence diagram of the request/response flow.
 
 ## Component map
 
@@ -31,7 +31,9 @@ diagram of the request/response flow.
 ## Important boundaries
 
 - The browser never speaks raw SSH directly.
-- The backend validates access/session/device/origin/ticket before opening the terminal WebSocket.
+- The backend validates access/session/device/origin/ticket before opening the
+  terminal WebSocket.
 - The private key/passphrase are not persisted by the MVP.
-- SSH host key trust is explicit per session; persistent `known_hosts` is out of MVP scope.
+- SSH host key trust is explicit per session; persistent `known_hosts` is out of
+  MVP scope.
 - Remote privileges are controlled by the SSH target, not by OMXTerm.
