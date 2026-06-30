@@ -106,3 +106,5 @@ Traefik, basic auth), see `docs/deploy.md`.
 - `docs/architecture.md`
 - `docs/adr/0001-typescript-node-fastify-vite.md`
 - `CONTEXT.md`
+
+---
