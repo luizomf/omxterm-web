@@ -8,10 +8,10 @@ green Matrix cosplay.
 
 ```ts
 export const omxtermColors = {
-  bg: '#0f0f14',
-  fg: '#eae8ff',
-  black: '#06060c',
-  white: '#f0efff',
+  bg: '#000000',
+  fg: '#f0f0ff',
+  black: '#000000',
+  white: '#ffffff',
 
   gray00: '#08080f',
   gray01: '#0a0a14',
@@ -97,14 +97,14 @@ export const omxtermColors = {
 
 Map ANSI colors to:
 
-- black: `#0f0f14`
+- black: `#000000`
 - red: `#ff7e9a`
 - green: `#37feb7`
 - yellow: `#ffda76`
 - blue: `#88aaf2`
 - magenta: `#ff87bc`
 - cyan: `#6bccff`
-- white: `#d6d1ff`
+- white: `#f0f0ff`
 - brightBlack: `#505068`
 - brightRed: `#ffa8bb`
 - brightGreen: `#72ffcd`
@@ -112,7 +112,7 @@ Map ANSI colors to:
 - brightBlue: `#b2cbff`
 - brightMagenta: `#ff88ef`
 - brightCyan: `#77c6ff`
-- brightWhite: `#f0efff`
+- brightWhite: `#ffffff`
 - foreground: `#eae8ff`
 - background: `#0f0f14`
 - cursor: `#d6d1ff`

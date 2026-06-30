@@ -2,7 +2,7 @@
 // `fontSize`, so zooming means changing the option and re-fitting. This module
 // keeps that decision pure so it can be tested without a live terminal.
 
-export const BASE_TERMINAL_FONT_SIZE = 22;
+export const BASE_TERMINAL_FONT_SIZE = 16;
 export const MIN_TERMINAL_FONT_SIZE = 8;
 export const MAX_TERMINAL_FONT_SIZE = 40;
 
