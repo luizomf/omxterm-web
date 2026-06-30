@@ -36,7 +36,7 @@ A replaceable backend port that creates a terminal session against a target. The
 
 ### OMXTerm theme
 
-The project's visual language uses the user's existing terminal palette as the product palette. It is dark, premium, and terminal-native, but it avoids the overused green-on-black Matrix aesthetic. The default background is `#0f0f14`, foreground is `#eae8ff`, cursor is `#d6d1ff`, selection is `#3b4fa6`, and the preferred accent family is cyan/teal first, then blue/purple. Green is reserved for ANSI terminal output or semantic success states, not brand identity.
+The project's visual language uses a hand-made terminal palette as the product palette. It is dark, premium, and terminal-native, but it avoids the overused green-on-black Matrix aesthetic. The default background is `#0f0f14`, foreground is `#eae8ff`, cursor is `#d6d1ff`, selection is `#3b4fa6`, and the preferred accent family is cyan/teal first, then blue/purple. Green is reserved for ANSI terminal output or semantic success states, not brand identity.
 
 ### Connection grace period
 

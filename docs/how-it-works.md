@@ -98,7 +98,14 @@ The broker refuses to start with a weak gate. `loadConfig`
   broker as a jump host on a shared network.
 - `OMXTERM_SECURE_COOKIES` — `true` sets the `Secure` flag on cookies (for
   HTTPS/WSS deployments).
+- `OMXTERM_TRUST_PROXY` — trust a reverse proxy in front of the broker so
+  `request.ip` is the real client (rate limiting) and HTTPS is detected from
+  `X-Forwarded-Proto`. Accepts `true`/`false`, a hop count, or a trusted proxy
+  IP/CIDR allowlist; leave it unset on a directly exposed server, where
+  `X-Forwarded-*` headers are spoofable.
 - `OMXTERM_AUDIT_LOG` — optional path for the JSONL audit log.
+- `OMXTERM_WEB_ROOT` — optional path to the built web SPA. When set, the broker
+  serves the SPA itself (single origin); unset in dev, where Vite serves it.
 
 ### 1. Access gate — `POST /api/access`
 

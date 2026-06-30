@@ -4,7 +4,7 @@
 
 Developers sometimes need a browser-accessible terminal for a VPS or SSH target, especially for demos, remote work, dashboards, and agent-control surfaces. A naive browser terminal is easy to make dangerous: it can become an unauthenticated SSH proxy, leak private keys, silently skip SSH host verification, or log terminal secrets.
 
-The MVP needs to prove a real terminal session in the browser for a Hostinger/Hermes-style video without pretending to be a production SaaS. It must be small enough to implement quickly, visually polished enough for video, and structured so future product directions can replace pieces without rewriting the terminal emulator.
+The MVP needs to prove a real terminal session in the browser without pretending to be a production SaaS. It must be small enough to implement quickly, visually polished, and structured so future product directions can replace pieces without rewriting the terminal emulator.
 
 ## Solution
 
@@ -14,11 +14,11 @@ The user passes an access gate, enters SSH connection inputs, confirms the SSH h
 
 The MVP deliberately does not save SSH credentials, known_hosts entries, connection profiles, terminal transcripts, or user accounts. It uses process-local in-memory stores behind interfaces so Redis, SQLite, Postgres, OAuth, saved profiles, or persistent host-key pinning can be added later.
 
-The UI should feel like a premium developer tool: dark, sparse, terminal-first, with the user's ciano/teal terminal palette. No Matrix-green branding, no fake dashboards, no gratuitous metrics.
+The UI should feel like a premium developer tool: dark, sparse, terminal-first, with the project's cyan/teal terminal palette. No Matrix-green branding, no fake dashboards, no gratuitous metrics.
 
 ## User Stories
 
-1. As a viewer, I want to see a real terminal running in the browser, so that I believe the demo is not a fake textarea.
+1. As a user, I want to see a real terminal running in the browser, so that it is clearly a real shell and not a fake textarea.
 2. As a developer, I want to connect to an SSH target from the browser, so that I can use a terminal without opening a desktop terminal app.
 3. As a developer, I want to provide host, port, username, private key, and optional passphrase, so that I can connect to my own server.
 4. As a developer, I want to paste a private key or load it from a local file, so that entering credentials is not unnecessarily painful.
@@ -40,8 +40,8 @@ The UI should feel like a premium developer tool: dark, sparse, terminal-first, 
 20. As a developer, I want the terminal emulator component decoupled from SSH/product flow, so that the same UI can later drive Hermes CLI, local PTY, container exec, or another backend.
 21. As a future maintainer, I want access/session/ticket stores behind interfaces, so that in-memory MVP storage can be replaced without changing app behavior.
 22. As a future maintainer, I want the terminal protocol codec behind an interface, so that JSON can later evolve into binary framing without rewriting broker logic.
-23. As a video creator, I want a minimal premium UI, so that the screen looks credible on camera without wasting time on fake SaaS chrome.
-24. As a video creator, I want safe demo commands, so that the video proves a real SSH terminal without showing secrets or relying on root access.
+23. As a product owner, I want a minimal premium UI, so that the product looks credible without wasting time on fake SaaS chrome.
+24. As a user, I want safe example commands, so that I can prove a real SSH terminal without showing secrets or relying on root access.
 25. As a developer, I want regression tests for the main security/lifecycle rules, so that later changes do not quietly break tickets, device binding, cleanup, protocol validation, or terminal component boundaries.
 
 ## Implementation Decisions
@@ -79,16 +79,16 @@ The UI should feel like a premium developer tool: dark, sparse, terminal-first, 
 - Do not implement reconnect/resume in the MVP. A short grace period may be a future feature, but it needs explicit session identity, authorization recheck, and output replay/buffer decisions.
 - Do not persist private keys, passphrases, SSH connection profiles, terminal transcripts, or known_hosts entries in the MVP.
 - Show SSH host key fingerprint and require explicit user confirmation before continuing the SSH session.
-- Host key trust is session-only in the MVP. Persistent known_hosts/TOFU is out of scope but should be called out honestly in the video/demo.
+- Host key trust is session-only in the MVP. Persistent known_hosts/TOFU is out of scope but should be called out honestly in the docs.
 - Audit metadata only: access gate result, ticket issued, WebSocket upgrade rejected/accepted, host key fingerprint presented/accepted, session started, resize, session ended, byte counts where practical, and normalized failure reasons.
 - Do not log raw terminal input/output by default.
 - Redact or avoid logging values named or shaped like token, ticket, key, password, passphrase, cookie, authorization, private key, or secret.
 - Product responsibility ends at safe brokering and credential handling. Permissions on the SSH target are defined by that target's SSH server, user, sudo policy, and operating system.
 - The MVP does not promise to prevent a user from connecting as root; it must explain that remote privileges are the user's responsibility.
-- UI direction: dark premium terminal-first product, using the OMXTerm palette with ciano/teal primary accent, blue/purple support, and green reserved for ANSI or semantic success only.
+- UI direction: dark premium terminal-first product, using the OMXTerm palette with cyan/teal primary accent, blue/purple support, and green reserved for ANSI or semantic success only.
 - Initial UI flow: access gate, connection gate, host-key confirmation, focused terminal view.
 - After connection, the terminal should occupy most of the UI with a minimal top/status bar.
-- Demo commands: `whoami`, `hostname`, `pwd`, `uname -a`, `date`, `ls`, `echo "$SSH_CONNECTION"`, and an ANSI color printf to prove terminal rendering.
+- Example commands: `whoami`, `hostname`, `pwd`, `uname -a`, `date`, `ls`, `echo "$SSH_CONNECTION"`, and an ANSI color printf to prove terminal rendering.
 
 ## Testing Decisions
 
@@ -185,7 +185,7 @@ Verification before declaring the MVP done:
 
 ## Further Notes
 
-The video should be explicit about the MVP security boundary:
+The documentation should be explicit about the MVP security boundary:
 
 - The app brokers a terminal to a user-provided SSH target.
 - The app does not decide whether the remote user is root; SSH target configuration decides that.
@@ -193,7 +193,3 @@ The video should be explicit about the MVP security boundary:
 - The MVP does not keep persistent known_hosts yet; it shows a fingerprint and asks for session-only trust.
 - The MVP uses in-memory sessions/tickets and is single-process.
 - A production version would add persistent host-key pinning, stronger account/auth model, durable/shared store, and more mature lifecycle/backpressure handling.
-
-Suggested video line:
-
-> Terminal no navegador é fácil de fazer errado. O MVP aqui não tenta fingir que resolveu tudo: ele usa WSS, Origin check, device token, ticket curto de uso único, confirmação de fingerprint SSH e não salva chave privada. Ainda falta known_hosts persistente e várias coisas de produto — mas não é uma shell pública fantasiada de SaaS.
