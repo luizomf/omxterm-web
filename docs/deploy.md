@@ -30,11 +30,12 @@ to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web
 
 ### Reference environment
 
-- Host: Ubuntu jump host reachable over a WireGuard VPN (`wg0`, `10.100.0.0/24`).
-- A shared **Traefik v3** runs as the edge for several sites. It is configured by
-  the **file provider** (a `dynamic.yml`), **not** Docker labels, and issues TLS
-  via Let's Encrypt (resolver `le`, HTTP challenge). Sites attach to the external
-  Docker network `read_inprod_web`.
+- Host: Ubuntu jump host reachable over a WireGuard VPN (`wg0`,
+  `10.100.0.0/24`).
+- A shared **Traefik v3** runs as the edge for several sites. It is configured
+  by the **file provider** (a `dynamic.yml`), **not** Docker labels, and issues
+  TLS via Let's Encrypt (resolver `le`, HTTP challenge). Sites attach to the
+  external Docker network `read_inprod_web`.
 - Convention: app code in `/projects/code/<domain>/`, mutable state in
   `/projects/state/<domain>/`.
 
@@ -87,8 +88,8 @@ ENV
 
 - `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist. `10.100.0.0/24` limits the
   broker to VPN hosts (default-deny SSRF guard).
-- `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked into
-  the image; don't set them here unless you need to override.
+- `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked
+  into the image; don't set them here unless you need to override.
 
 > The broker **refuses to boot** if `OMXTERM_SECURE_COOKIES` is false while the
 > bind is non-loopback — that's the guard against shipping auth cookies in the
@@ -102,14 +103,15 @@ docker compose up -d --build
 docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
-The container joins `read_inprod_web`; Traefik reaches it as `http://omxterm:3000`.
+The container joins `read_inprod_web`; Traefik reaches it as
+`http://omxterm:3000`.
 
 ## 4. Add the basic-auth credentials
 
 Basic auth is an extra barrier in front of OMXTerm's own access gate, useful
 while the deploy is still a private preview. The shared Traefik already mounts
-`/projects/state/read.inprod.cloud/auth` at `/auth`, so drop a dedicated
-users file there (bcrypt):
+`/projects/state/read.inprod.cloud/auth` at `/auth`, so drop a dedicated users
+file there (bcrypt):
 
 ```bash
 htpasswd -nbB <user> '<password>' \
@@ -136,7 +138,7 @@ keys):
 http:
   routers:
     omxterm:
-      rule: "Host(`omxterm.inprod.cloud`)"
+      rule: 'Host(`omxterm.inprod.cloud`)'
       entryPoints:
         - websecure
       tls:
@@ -149,7 +151,7 @@ http:
     omxterm:
       loadBalancer:
         servers:
-          - url: "http://omxterm:3000"
+          - url: 'http://omxterm:3000'
 
   middlewares:
     omxterm-auth:
@@ -165,8 +167,8 @@ restart. Watch the logs for parse errors:
 docker logs -f readinprodcloud-traefik-1
 ```
 
-> Do **not** reuse the other sites' security-headers middleware. OMXTerm sets its
-> own CSP and headers via `@fastify/helmet`; that middleware's strict
+> Do **not** reuse the other sites' security-headers middleware. OMXTerm sets
+> its own CSP and headers via `@fastify/helmet`; that middleware's strict
 > `default-src 'none'` CSP would break the app.
 
 ## 6. Verify
@@ -177,9 +179,9 @@ curl -sI https://omxterm.inprod.cloud | head -n 1          # 401 (basic auth)
 curl -sI -u <user>:'<password>' https://omxterm.inprod.cloud | head -n 1  # 200
 ```
 
-Then in a browser: clear the basic-auth prompt → the OMXTerm access gate →
-enter the access token → fill the SSH form for a VPN host (`10.100.0.x`) →
-confirm the host-key fingerprint → use the terminal. The full walkthrough is in
+Then in a browser: clear the basic-auth prompt → the OMXTerm access gate → enter
+the access token → fill the SSH form for a VPN host (`10.100.0.x`) → confirm the
+host-key fingerprint → use the terminal. The full walkthrough is in
 [`usage.md`](./usage.md).
 
 If the SSH step fails to reach a `10.100.0.x` host, confirm the container can
@@ -199,8 +201,8 @@ git pull
 docker compose up -d --build
 ```
 
-The stores are in-memory, so a rebuild drops active sessions and pending
-tickets — expected (the MVP keeps no persistence).
+The stores are in-memory, so a rebuild drops active sessions and pending tickets
+— expected (the MVP keeps no persistence).
 
 ## Rollback
 
