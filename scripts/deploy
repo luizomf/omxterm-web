@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJECTS_DIR="/projects"
+CODE_DIR="${PROJECTS_DIR}/code"
+OMXTERM_DIR="${CODE_DIR}/omxterm"
+TRAEFIK_DIR="${CODE_DIR}/read.inprod.cloud"
+
+cd "${OMXTERM_DIR}" || exit 1
+git add . || exit 1
+git reset --hard || exit 1
+git pull --all --prune || exit 1
+
+docker compose --project-directory "${TRAEFIK_DIR}" down
+docker compose --project-directory "${OMXTERM_DIR}" down
+
+docker compose --project-directory "${OMXTERM_DIR}" \
+  up -d --build --force-recreate --renew-anon-volumes \
+  --remove-orphans
+
+docker compose --project-directory "${TRAEFIK_DIR}" \
+  up -d --build --force-recreate --renew-anon-volumes \
+  --remove-orphans
