@@ -323,7 +323,11 @@ export async function createOmxtermServer(
     return { ok: true };
   });
 
-  app.get("/api/me", async (request) => {
+  app.get("/api/me", async (request, reply) => {
+    const origin = requestOrigin(request);
+    if (!isOriginAllowed(origin, config.allowedOrigins)) {
+      return reply.code(403).send({ ok: false, message: "Bad Origin." });
+    }
     const auth = authenticateFastifyRequest(request, stores);
     return { authenticated: Boolean(auth) };
   });

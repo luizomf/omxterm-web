@@ -51,3 +51,21 @@ describe("POST /api/access", () => {
     }
   });
 });
+
+describe("GET /api/me", () => {
+  test("rejects requests from an Origin outside the allowlist", async () => {
+    const app = await createOmxtermServer(baseConfig);
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/me",
+        headers: { origin: "https://evil.example" },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ ok: false, message: "Bad Origin." });
+    } finally {
+      await app.close();
+    }
+  });
+});
