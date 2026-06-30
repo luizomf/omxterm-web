@@ -256,6 +256,17 @@ export async function createOmxtermServer(
   app.get("/health", async () => ({ ok: true }));
 
   app.post("/api/access", async (request, reply) => {
+    const origin = requestOrigin(request);
+    if (!isOriginAllowed(origin, config.allowedOrigins)) {
+      audit.write({
+        event: "access_rejected",
+        severity: "warn",
+        origin,
+        reason: "bad_origin",
+      });
+      return reply.code(403).send({ ok: false, message: "Bad Origin." });
+    }
+
     // request.ip is the real client when OMXTERM_TRUST_PROXY is set behind a
     // reverse proxy; otherwise it is the socket peer. Without trustProxy in a
     // proxied deploy all clients would share the proxy's IP bucket (#5).
@@ -265,7 +276,7 @@ export async function createOmxtermServer(
       audit.write({
         event: "access_rejected",
         severity: "warn",
-        origin: requestOrigin(request),
+        origin,
         reason: "rate_limited",
       });
       return reply
@@ -283,7 +294,7 @@ export async function createOmxtermServer(
       audit.write({
         event: "access_rejected",
         severity: "warn",
-        origin: requestOrigin(request),
+        origin,
         reason: "invalid_access_token",
       });
       return reply
@@ -307,7 +318,7 @@ export async function createOmxtermServer(
       event: "access_granted",
       severity: "info",
       sessionId: session.id,
-      origin: requestOrigin(request),
+      origin,
     });
     return { ok: true };
   });

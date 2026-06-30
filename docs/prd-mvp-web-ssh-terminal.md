@@ -140,7 +140,7 @@ dashboards, no gratuitous metrics.
   in-memory storage later.
 - Reject WebSocket upgrades before `handleUpgrade` when
   Origin/session/device/ticket validation fails.
-- Validate exact Origin on WebSocket upgrade.
+- Validate exact Origin on access, SSH API calls, and WebSocket upgrade.
 - Disable WebSocket `permessage-deflate` explicitly.
 - Set small incoming payload limits appropriate for terminal control/input, not
   the large `ws` default.
