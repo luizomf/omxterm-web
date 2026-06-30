@@ -157,6 +157,11 @@ function profileFromBody(
   return profile;
 }
 
+export function scrubSshConnectionSecrets(profile: SshConnectionProfile): void {
+  profile.privateKey = "";
+  if (profile.passphrase !== undefined) profile.passphrase = "";
+}
+
 export async function createOmxtermServer(
   config: ServerConfig,
 ): Promise<FastifyInstance> {
@@ -677,6 +682,7 @@ export async function createOmxtermServer(
       void terminal
         .connect(context.grant.profile, { cols: 120, rows: 34 })
         .then(() => {
+          scrubSshConnectionSecrets(context.grant.profile);
           audit.write({
             event: "session_started",
             severity: "info",

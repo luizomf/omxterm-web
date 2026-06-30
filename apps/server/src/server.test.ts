@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { createOmxtermServer } from "./server";
+import { createOmxtermServer, scrubSshConnectionSecrets } from "./server";
 import type { ServerConfig } from "./config";
 
 const baseConfig: ServerConfig = {
@@ -13,6 +13,28 @@ const baseConfig: ServerConfig = {
   auditLogPath: undefined,
   webRoot: undefined,
 };
+
+describe("scrubSshConnectionSecrets", () => {
+  test("clears private key and passphrase without dropping connection metadata", () => {
+    const profile = {
+      host: "ssh.example",
+      port: 22,
+      username: "deploy",
+      privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----secret",
+      passphrase: "top-secret",
+      acceptedHostFingerprint: "SHA256:test",
+    };
+
+    scrubSshConnectionSecrets(profile);
+
+    expect(profile.privateKey).toBe("");
+    expect(profile.passphrase).toBe("");
+    expect(profile.host).toBe("ssh.example");
+    expect(profile.port).toBe(22);
+    expect(profile.username).toBe("deploy");
+    expect(profile.acceptedHostFingerprint).toBe("SHA256:test");
+  });
+});
 
 describe("POST /api/access", () => {
   test("rejects login attempts from an Origin outside the allowlist", async () => {

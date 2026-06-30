@@ -251,6 +251,13 @@ the profile's key (and passphrase, if any). Two things matter here:
 - **A remote PTY is allocated** via `shell` (`xterm-256color`, initial 120×34),
   so full-screen tools like `vim`, `htop`, and `tmux` behave.
 
+After `SshTerminalSession.connect` resolves, the bridge no longer needs the raw
+secret in the WebSocket grant. The server immediately clears
+`profile.privateKey` and the optional `profile.passphrase` from that grant, so a
+successful terminal session does not keep those string references alive until the
+socket closes. Like any JavaScript string scrub, this removes references and
+shortens the GC window; it does not overwrite already-allocated V8 heap bytes.
+
 From here the broker bridges the small JSON terminal protocol
 ([`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts)):
 
@@ -272,15 +279,15 @@ running. There is no reconnect/resume in the MVP.
 
 ## The four secrets, and where they live
 
-| Secret               | Created at    | Stored as                         | Lives until           | Travels in                  |
-| -------------------- | ------------- | --------------------------------- | --------------------- | --------------------------- |
-| Access session token | step 1        | SHA-256 hash, server memory       | 12h TTL               | `HttpOnly` cookie           |
-| Device token         | step 1        | SHA-256 hash, server memory       | 12h TTL               | `HttpOnly` cookie           |
-| Terminal ticket      | step 3        | SHA-256 hash, server memory       | 60s / single use      | URL query param, once       |
-| Private key          | typed by user | in memory inside the ticket grant | until ticket consumed | request body, once (step 3) |
+| Secret               | Created at    | Stored as                         | Lives until                 | Travels in                  |
+| -------------------- | ------------- | --------------------------------- | --------------------------- | --------------------------- |
+| Access session token | step 1        | SHA-256 hash, server memory       | 12h TTL                     | `HttpOnly` cookie           |
+| Device token         | step 1        | SHA-256 hash, server memory       | 12h TTL                     | `HttpOnly` cookie           |
+| Terminal ticket      | step 3        | SHA-256 hash, server memory       | 60s / single use            | URL query param, once       |
+| Private key          | typed by user | in memory inside the ticket grant | until SSH connect succeeds  | request body, once (step 3) |
 
-The private key is never written to disk, never logged, and is gone once the
-ticket is consumed and the SSH session ends.
+The private key and optional passphrase are never written to disk, never logged,
+and are cleared from the consumed grant once the SSH bridge is ready.
 
 ---
 
