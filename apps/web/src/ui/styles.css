@@ -1,5 +1,53 @@
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+}
+
+:root {
+  --font-mono:
+    Inconsolata, ui-monospace, SFMono-Regular, 'SF Mono', Consolas, Menlo,
+    'Liberation Mono', 'Cascadia Mono', 'Cascadia Code', 'Segoe UI Mono',
+    'Roboto Mono', 'Source Code Pro', Monaco, monospace, 'Courier New';
+  --font-regular: var(--font-mono);
+
+  --font-size-xxsmall: 1.3rem;
+  --font-size-xsmall: 1.4rem;
+  --font-size-small: 1.6rem;
+  --font-size-medium: 1.8rem;
+  --font-size-large: 2rem;
+  --font-size-xlarge: 2.4rem;
+  --font-size-xxlarge: 3.2rem;
+
+  --clr-bg: #000000;
+  --clr-fg: #f0f0ff;
+  --clr-black: #06060c;
+  --clr-white: f0f0ff;
+  --clr-gray00: #08080f;
+  --clr-gray01: #0f0f18;
+  --clr-gray02: #14141e;
+  --clr-gray03: #1c1c2a;
+  --clr-gray04: #242436;
+  --clr-gray05: #2c2c40;
+  --clr-gray06: #36364c;
+  --clr-gray08: #4c4c66;
+  --clr-gray11: #6a6a8a;
+  --clr-gray16: #9696b8;
+  --clr-redVivid: #ff7e9a;
+  --clr-yellow: #ffda76;
+  --clr-green: #37feb7;
+  --clr-cyan: #6bccff;
+  --clr-teal: #77dbff;
+  --clr-tealBright: #8ce0fe;
+  --clr-blue: #88aaf2;
+  --clr-blueLight: #b2cbff;
+  --clr-blueDeep: #4838a0;
+  --clr-purple: #b080ff;
+  --clr-magenta: #ff87bc;
+
+  --radius-small: 0.4rem;
+  --radius-medium: 0.8rem;
+  --radius-large: 1.6rem;
 }
 
 /* Self-hosted (no CDN, respects the broker's egress posture). Mono variant keeps
@@ -21,23 +69,19 @@
   src: url('/fonts/JetBrainsMonoNerdFontMono-Bold.woff2') format('woff2');
 }
 
-:root {
-  --font-mono:
-    Inconsolata, ui-monospace, SFMono-Regular, 'SF Mono', Consolas, Menlo,
-    'Liberation Mono', 'Cascadia Mono', 'Cascadia Code', 'Segoe UI Mono',
-    'Roboto Mono', 'Source Code Pro', Monaco, monospace, 'Courier New';
-  --font-regular: var(--font-mono);
-
-  color: #eae8ff;
-  background: #000000;
-  font-family: var(--font-regular);
-  font-synthesis: none;
-  text-rendering: geometricPrecision;
+html {
+  font-size: 62.5%;
 }
 
 body {
+  color: var(--clr-fg);
+  background: var(--clr-bg);
+  font-family: var(--font-regular);
+  font-size: var(--font-size-medium);
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
   margin: 0;
-  min-width: 320px;
+  min-width: 32rem;
   min-height: 100dvh;
 }
 
@@ -45,52 +89,57 @@ button,
 input,
 textarea {
   font: inherit;
+  font-size: var(--font-size-medium);
 }
 
 button {
   border: 0;
-  border-radius: 4px;
-  color: #06060c;
-  background: linear-gradient(135deg, #77dbff, #88aaf2);
+  border-radius: var(--radius-small);
+  color: var(--clr-black);
+  background: var(--clr-cyan);
   padding: 0.82rem 1.1rem;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 0 36px rgba(107, 204, 255, 0.18);
 }
 
 button:hover {
   filter: brightness(1.08);
 }
+
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid #77dbff;
-  outline-offset: 3px;
+  outline: 0.2rem solid var(--clr-cyan);
+  outline-offset: 0.3rem;
 }
 
 input,
 textarea {
   width: 100%;
-  border: 1px solid rgba(180, 180, 255, 0.11);
-  border-radius: 8px;
-  color: #eae8ff;
-  background: rgba(20, 20, 30, 0.82);
+  border: 0.1rem solid var(--clr-gray05);
+  border-radius: var(--radius-small);
+  color: var(--clr-fg);
+  background: var(--clr-gray02);
   padding: 0.85rem 0.95rem;
-  font-size: 1.375rem;
+  font-size: var(--font-size-medium);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--clr-gray11);
+  opacity: 1; /* Ensures full color rendering in Firefox */
 }
 
 textarea {
   resize: vertical;
-  font-family:
-    'JetBrains Mono', SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 1rem;
+  font-size: var(--font-size-medium);
 }
 
 label {
   display: grid;
-  gap: 0.45rem;
+  gap: 1rem;
   color: #b8b8d4;
-  font-size: 1rem;
+  font-size: var(--font-size-medium);
 }
 
 .app-shell {
@@ -99,8 +148,8 @@ label {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 1rem;
-  gap: 1rem;
+  padding: 1.6rem;
+  gap: 1.6rem;
 }
 
 /* Terminal view is a plain full-bleed surface, not a centered card stack. */
@@ -110,127 +159,137 @@ label {
    * surface reaches the screen edge in fullscreen (#50). */
   height: 100dvh;
   overflow: hidden;
-  padding: 0.6rem 0.6rem 0;
-  background: #000000;
+  padding: 1rem 1rem 0;
+  background: var(--clr-bg);
 }
 
 .hero-copy {
-  max-width: 760px;
-  margin-bottom: 2rem;
+  max-width: 76rem;
+  margin-bottom: 3.6rem;
   text-align: center;
-  padding: 1.5rem 0.5rem 0.5rem 0.5rem;
+  padding: 0 0.5rem;
 }
 .hero-copy h1 {
   margin: 0;
-  font-size: 3rem;
+  font-size: var(--font-size-xxlarge);
   line-height: 1;
 }
 .hero-copy p:last-child {
-  margin: 1rem auto 0;
-  max-width: 620px;
-  color: #9696b8;
-  font-size: 1.3rem;
+  margin: 1.6rem auto 0;
+  max-width: 62rem;
+  color: var(--clr-gray16);
+  font-size: var(--font-size-medium);
 }
 
 a {
-  color: #77dbff;
+  color: var(--clr-cyan);
 }
 .eyebrow {
-  margin: 0 0 0.55rem;
-  color: #77dbff;
-  font-size: 0.85rem;
-  letter-spacing: 0.25rem;
+  margin: 0 0 1rem;
+  color: var(--clr-cyan);
+  font-size: var(--font-size-xsmall);
+  letter-spacing: 0.5rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .glass-card {
-  width: min(100%, 760px);
-  border: 1px solid rgba(214, 209, 255, 0.1);
-  border-radius: 8px;
-  background: rgba(20, 20, 30, 0.72);
-  padding: clamp(1.35rem, 3vw, 2.2rem);
+  width: min(100%, 76rem);
+  border: 0.1rem solid var(--clr-gray04);
+  border-radius: var(--radius-medium);
+  background: var(--clr-gray01);
+  padding: 2.4rem;
 }
 
 .narrow-card {
-  max-width: 430px;
+  max-width: 43rem;
   display: grid;
-  gap: 1.1rem;
+  gap: 1.6rem;
 }
 .connection-card {
   display: grid;
-  gap: 1rem;
+  gap: 1.6rem;
 }
 .card-heading h2,
 .hostkey-card h2,
 .narrow-card h2 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: var(--font-size-large);
 }
 .field-grid {
   display: grid;
-  grid-template-columns: 1fr 120px;
-  gap: 1rem;
+  grid-template-columns: 1fr 12rem;
+  gap: 1.6rem;
 }
 .file-loader input {
   padding: 1rem;
 }
 .fine-print {
-  color: #8e8eb0;
-  font-size: 1.2rem;
+  color: var(--clr-gray11);
+  font-size: var(--font-size-medium);
 }
 .global-error,
 .inline-error {
-  width: min(100%, 760px);
-  margin-bottom: 1rem;
-  border: 1px solid rgba(255, 126, 154, 0.28);
-  border-radius: 8px;
-  background: rgba(255, 126, 154, 0.09);
-  color: #ffa8bb;
-  padding: 0.9rem 1rem;
+  width: min(100%, 76rem);
+  margin-bottom: 1.6rem;
+  border: 0.1rem solid hsla(from var(--clr-redVivid) h s 70% / 1);
+  border-radius: var(--radius-medium);
+  background: hsla(from var(--clr-redVivid) h s l / 20%);
+  color: hsla(from var(--clr-redVivid) h s 80% / 1);
+  padding: 1.2rem 1.6rem;
+  font-size: var(--font-size-medium);
 }
 .loading {
-  color: #9696b8;
+  color: var(--clr-gray11);
 }
+
 .hostkey-card {
   display: grid;
-  gap: 1.2rem;
+  gap: 1.8rem;
 }
+
 .fingerprint-box {
   display: grid;
-  gap: 0.8rem;
+  gap: 1.6rem;
   margin: 0;
-  padding: 1rem;
-  border: 1px solid rgba(119, 219, 255, 0.18);
-  border-radius: 8px;
-  background: rgba(20, 20, 30, 0.55);
+  padding: 1.6rem;
+  border: 0.1rem solid var(--clr-gray06);
+  border-radius: var(--radius-medium);
+  background: var(--clr-gray02);
 }
 .fingerprint-box div {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.5rem;
 }
 .fingerprint-box dt {
-  color: #9696b8;
-  font-size: 1rem;
+  color: var(--clr-cyan);
+  font-size: var(--font-size-medium);
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.25em;
 }
 .fingerprint-box dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-family:
-    'JetBrains Mono', SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 .button-row {
   display: flex;
   justify-content: flex-end;
-  gap: 0.75rem;
+  gap: 1rem;
   flex-wrap: wrap;
 }
 .ghost-button {
-  color: #eae8ff;
-  background: rgba(214, 209, 255, 0.07);
+  color: hsla(from var(--clr-gray06) h s 80% / 1);
+  background: hsla(from var(--clr-gray06) h s 40% / 0.25);
+  border: 0.1rem solid hsla(from var(--clr-gray06) h s 40% / 1);
   box-shadow: none;
+  font-weight: 400;
+}
+
+.terminal-topbar .ghost-button {
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-small);
+  font-size: var(--font-size-xxsmall);
 }
 
 .terminal-stage {
@@ -250,7 +309,9 @@ a {
   gap: 1rem;
   padding: 0.5rem;
   padding-top: 0;
+  font-weight: 400;
 }
+
 .terminal-topbar h1 {
   flex: 1;
   min-width: 0;
@@ -258,40 +319,42 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 1rem;
+  font-size: var(--font-size-xsmall);
   line-height: 1;
   font-family: var(--font-mono);
-  font-weight: 600;
-  color: #c8c8e2;
+  color: var(--clr-gray16);
+  font-weight: 400;
 }
 .terminal-actions {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-}
-.terminal-topbar .ghost-button {
-  padding: 0.25rem 0.6rem;
-  border-radius: 8px;
-  font-size: 1rem;
+  gap: 1rem;
 }
 .status-pill {
-  padding: 0.2rem 0.4rem;
-  color: #9696b8;
-  font-size: 1rem;
+  padding: 0.4rem 0.8rem;
+  font-size: var(--font-size-xsmall);
+  border-radius: var(--radius-small);
+  color: var(--clr-gray16);
+  border: 0.1rem solid hsla(from var(--clr-gray16) h s l / 1);
+  background: hsla(from var(--clr-gray16) h s l / 0.1);
   line-height: 1;
-  font-weight: 700;
+  font-weight: 400;
 }
 .status-connected {
-  color: #77dbff;
+  border: 0.1rem solid hsla(from var(--clr-cyan) h s l / 1);
+  background: hsla(from var(--clr-cyan) h s l / 0.1);
+  color: hsla(from var(--clr-cyan) h s l / 1);
 }
 .status-error {
-  color: #ffa8bb;
+  border: 0.1rem solid hsla(from var(--clr-redVivid) h s l / 1);
+  background: hsla(from var(--clr-redVivid) h s l / 0.1);
+  color: hsla(from var(--clr-redVivid) h s l / 1);
 }
 .terminal-surface {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #0f0f14;
+  background: var(--clr-bg);
   display: flex;
   flex-direction: column;
 }
@@ -301,7 +364,7 @@ a {
    * lands at the bottom in the terminal background colour, where it's effectively
    * invisible. No vertical padding — it would just reopen the gap (#50). */
   flex: 1;
-  padding: 0 0.6rem;
+  padding: 0 1rem;
 }
 
 @media (max-width: 700px) {
