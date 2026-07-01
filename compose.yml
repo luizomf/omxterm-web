@@ -9,7 +9,11 @@ services:
     restart: unless-stopped
     env_file: .env
     networks:
-      - web
+      # Pinned so the host firewall can allow-list this container's own
+      # address for SSH (self-target demo); a floating IP would silently
+      # drift on the next recreate and the allow rule would stop matching.
+      web:
+        ipv4_address: 172.16.1.2
 
 networks:
   web:
