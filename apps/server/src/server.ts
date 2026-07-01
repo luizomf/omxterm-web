@@ -395,7 +395,18 @@ export async function createOmxtermServer(
         port: parsed.data.port,
       });
       return { ok: true, fingerprint: result.fingerprint };
-    } catch {
+    } catch (error) {
+      // Network/handshake failures (unreachable host, refused/timed-out
+      // connect, hairpin routing gaps) were previously discarded here, so a
+      // failing probe left no trace in the audit log at all.
+      audit.write({
+        event: "host_key_probe_failed",
+        severity: "warn",
+        sessionId: auth.session.id,
+        host: parsed.data.host,
+        port: parsed.data.port,
+        reason: error instanceof Error ? error.message : "unknown_error",
+      });
       return reply
         .code(502)
         .send({ ok: false, message: "Could not read SSH host key." });

@@ -10,6 +10,7 @@ export type AuditEventName =
   | 'session_ended'
   | 'host_key_presented'
   | 'host_key_trusted'
+  | 'host_key_probe_failed'
   | 'ssh_egress_blocked'
   | 'resize';
 
