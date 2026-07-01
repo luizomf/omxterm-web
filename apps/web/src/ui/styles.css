@@ -302,6 +302,16 @@ a {
   font-size: var(--font-size-xxsmall);
 }
 
+.show-topbar {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-small);
+  font-size: var(--font-size-xxsmall);
+  z-index: 1001;
+}
+
 .terminal-stage {
   width: 100%;
   /* Fill the app-shell instead of a hardcoded `calc(100dvh - padding)`: the calc
