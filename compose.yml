@@ -6,7 +6,7 @@ services:
   omxterm:
     build: .
     container_name: omxterm
-    restart: unless-stopped
+    restart: always
     env_file: .env
     networks:
       # Pinned so the host firewall can allow-list this container's own
