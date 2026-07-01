@@ -180,7 +180,11 @@ export function TerminalEmulator({
             >
               Hide bar
             </button>
-            <button type='button' className='ghost-button' onClick={onDisconnect}>
+            <button
+              type='button'
+              className='ghost-button'
+              onClick={onDisconnect}
+            >
               End session
             </button>
           </div>
@@ -188,11 +192,11 @@ export function TerminalEmulator({
       ) : (
         <button
           type='button'
-          className='ghost-button topbar-toggle'
+          className='ghost-button show-topbar'
           onClick={() => setTopbarVisible(true)}
           aria-label='Show toolbar'
         >
-          Show bar
+          +
         </button>
       )}
       {error ? (
