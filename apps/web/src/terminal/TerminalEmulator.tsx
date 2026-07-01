@@ -194,7 +194,7 @@ export function TerminalEmulator({
           type='button'
           className='ghost-button show-topbar'
           onClick={() => setTopbarVisible(true)}
-          aria-label='Show toolbar'
+          aria-label='Show toolbar (+)'
         >
           +
         </button>
