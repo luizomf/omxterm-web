@@ -54,6 +54,7 @@ export function TerminalEmulator({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<TerminalStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [topbarVisible, setTopbarVisible] = useState(true);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -167,15 +168,33 @@ export function TerminalEmulator({
 
   return (
     <section className='terminal-stage' aria-label='Terminal session'>
-      <header className='terminal-topbar'>
-        <h1>{title}</h1>
-        <div className='terminal-actions'>
-          <span className={`status-pill status-${status}`}>{status}</span>
-          <button type='button' className='ghost-button' onClick={onDisconnect}>
-            End session
-          </button>
-        </div>
-      </header>
+      {topbarVisible ? (
+        <header className='terminal-topbar'>
+          <h1>{title}</h1>
+          <div className='terminal-actions'>
+            <span className={`status-pill status-${status}`}>{status}</span>
+            <button
+              type='button'
+              className='ghost-button'
+              onClick={() => setTopbarVisible(false)}
+            >
+              Hide bar
+            </button>
+            <button type='button' className='ghost-button' onClick={onDisconnect}>
+              End session
+            </button>
+          </div>
+        </header>
+      ) : (
+        <button
+          type='button'
+          className='ghost-button topbar-toggle'
+          onClick={() => setTopbarVisible(true)}
+          aria-label='Show toolbar'
+        >
+          Show bar
+        </button>
+      )}
       {error ? (
         <div className='inline-error' role='alert'>
           {error}
