@@ -81,8 +81,8 @@ function MarketingChrome() {
   return (
     <section className="hero-copy" aria-label="OMXTerm intro">
       <p className="eyebrow">Browser SSH terminal</p>
-      <h1>Nerd in a tuxedo.</h1>
-      <p>SSH in the browser, without pretending a weekend MVP is a vault, a SaaS, or a religion.</p>
+      <h1>OMXTerm</h1>
+      <p>A weekend build that still checks your host key before letting you in.</p>
     </section>
   );
 }
