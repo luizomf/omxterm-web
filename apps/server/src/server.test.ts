@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -76,6 +76,198 @@ describe("POST /api/access", () => {
       await app.close();
     }
   });
+});
+
+async function listenOnLoopback(
+  app: Awaited<ReturnType<typeof createOmxtermServer>>,
+): Promise<number> {
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Could not read the test server port.");
+  }
+  return address.port;
+}
+
+async function sendRawHttpRequest(
+  port: number,
+  request: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(request));
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+    socket.on("end", () => resolve(response));
+    socket.on("close", () => resolve(response));
+    socket.on("error", reject);
+  });
+}
+
+async function openRawWebSocket(
+  port: number,
+  path: string,
+  cookie: string,
+): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    let response = "";
+    socket.on("connect", () => {
+      socket.write(
+        [
+          `GET ${path} HTTP/1.1`,
+          "Host: 127.0.0.1",
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          `Origin: ${baseConfig.allowedOrigins[0]}`,
+          `Cookie: ${cookie}`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
+    socket.on("data", function readHandshake(chunk) {
+      response += chunk;
+      if (!response.includes("\r\n\r\n")) return;
+      socket.off("data", readHandshake);
+      if (!response.startsWith("HTTP/1.1 101 ")) {
+        reject(new Error(`WebSocket handshake failed: ${response}`));
+        socket.destroy();
+        return;
+      }
+      resolve(socket);
+    });
+    socket.on("error", reject);
+  });
+}
+
+async function terminalTicket(
+  app: Awaited<ReturnType<typeof createOmxtermServer>>,
+  config: ServerConfig,
+  cookie: string,
+): Promise<string> {
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/terminal-ticket",
+    headers: { origin: config.allowedOrigins[0], cookie },
+    payload: {
+      host: "127.0.0.1",
+      port: 22,
+      username: "test-user",
+      privateKey: "test-private-key",
+      passphrase: "test-passphrase",
+      acceptedHostFingerprint: "SHA256:test",
+    },
+  });
+  expect(response.statusCode).toBe(200);
+  return response.json<{ ticket: string }>().ticket;
+}
+
+function maskedInvalidUtf8Frame(): Buffer {
+  const mask = Buffer.from([1, 2, 3, 4]);
+  const invalidUtf8 = Buffer.from([0xc3, 0x28]);
+  const maskedPayload = Buffer.from(
+    invalidUtf8.map(
+      (byte, index) => byte ^ mask.readUInt8(index % mask.length),
+    ),
+  );
+  return Buffer.concat([Buffer.from([0x81, 0x82]), mask, maskedPayload]);
+}
+
+function maskedOversizedFrame(): Buffer {
+  const payloadLength = Buffer.alloc(8);
+  payloadLength.writeBigUInt64BE(65_537n);
+  return Buffer.concat([
+    Buffer.from([0x81, 0xff]),
+    payloadLength,
+    Buffer.from([1, 2, 3, 4]),
+  ]);
+}
+
+describe("WebSocket upgrade boundary", () => {
+  test("rejects a malformed request target without taking down the broker", async () => {
+    const auditDir = mkdtempSync(join(tmpdir(), "omxterm-audit-"));
+    const auditLogPath = join(auditDir, "audit.jsonl");
+    const config: ServerConfig = { ...baseConfig, auditLogPath };
+    const app = await createOmxtermServer(config);
+    try {
+      const port = await listenOnLoopback(app);
+      const response = await sendRawHttpRequest(
+        port,
+        [
+          "GET //example.com:99999/?ticket=secret-ticket HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          `Origin: ${baseConfig.allowedOrigins[0]}`,
+          "Cookie: session=secret-cookie",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+
+      expect(response).toMatch(/^HTTP\/1\.1 400 /);
+      const health = await app.inject({ method: "GET", url: "/health" });
+      expect(health.statusCode).toBe(200);
+
+      const auditLog = readFileSync(auditLogPath, "utf8");
+      expect(auditLog).toContain('"reason":"upgrade_error"');
+      expect(auditLog).not.toContain("secret-ticket");
+      expect(auditLog).not.toContain("secret-cookie");
+    } finally {
+      await app.close();
+      rmSync(auditDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { frameName: "invalid UTF-8", frame: maskedInvalidUtf8Frame },
+    { frameName: "oversized", frame: maskedOversizedFrame },
+  ])(
+    "contains an $frameName frame to its WebSocket connection",
+    async ({ frame }) => {
+      const auditDir = mkdtempSync(join(tmpdir(), "omxterm-audit-"));
+      const auditLogPath = join(auditDir, "audit.jsonl");
+      const config: ServerConfig = { ...baseConfig, auditLogPath };
+      const app = await createOmxtermServer(config);
+      let socket: Socket | undefined;
+      try {
+        const cookie = await loginCookieHeader(app, config);
+        const ticket = await terminalTicket(app, config, cookie);
+        const port = await listenOnLoopback(app);
+        socket = await openRawWebSocket(
+          port,
+          `/terminal/ws?ticket=${encodeURIComponent(ticket)}`,
+          cookie,
+        );
+
+        socket.write(frame());
+
+        await new Promise<void>((resolve) =>
+          socket?.once("close", () => resolve()),
+        );
+        const health = await app.inject({ method: "GET", url: "/health" });
+        expect(health.statusCode).toBe(200);
+
+        const auditLog = readFileSync(auditLogPath, "utf8");
+        expect(auditLog).toContain('"reason":"websocket_error"');
+        expect(auditLog).not.toContain(ticket);
+        expect(auditLog).not.toContain("test-private-key");
+        expect(auditLog).not.toContain("test-passphrase");
+      } finally {
+        socket?.destroy();
+        await app.close();
+        rmSync(auditDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 function cookieHeaderFromSetCookie(

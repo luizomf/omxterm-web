@@ -105,6 +105,7 @@ function safeEqualText(left: string, right: string): boolean {
 }
 
 const UPGRADE_STATUS_TEXT: Record<number, string> = {
+  400: "Bad Request",
   401: "Unauthorized",
   403: "Forbidden",
   409: "Conflict",
@@ -492,117 +493,140 @@ export async function createOmxtermServer(
   });
 
   app.server.on("upgrade", (req, socket, head) => {
-    const origin = normalizeOriginHeader(req.headers.origin);
-    const upgradeId = randomUUID();
-    if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      audit.write({
-        event: "ws_upgrade_rejected",
-        severity: "warn",
-        origin,
-        reason: "bad_origin",
-      });
-      rejectUpgrade(socket, 403);
-      return;
-    }
-
-    const url = new URL(req.url ?? "/", origin);
-    if (url.pathname !== "/terminal/ws") {
-      rejectUpgrade(socket, 403);
-      return;
-    }
-
-    const cookies = parseCookieHeader(req.headers.cookie);
-    const session = stores.sessions.validate(
-      cookies[SESSION_ID_COOKIE],
-      cookies[SESSION_TOKEN_COOKIE],
-    );
-    const deviceToken = cookies[DEVICE_TOKEN_COOKIE];
-    const device = stores.devices.validate(session?.id, deviceToken);
-    const rawTicket = url.searchParams.get("ticket");
-    if (!session || !device || !deviceToken || !rawTicket) {
-      audit.write({
-        event: "ws_upgrade_rejected",
-        severity: "warn",
-        origin,
-        reason: "missing_auth_or_ticket",
-      });
-      rejectUpgrade(socket, 401);
-      return;
-    }
-
-    // Cap concurrent connections before consuming the single-use ticket (#30), so
-    // a capacity rejection doesn't burn the ticket the user just minted. Acquire
-    // the global slot first, then the per-session one, releasing the global if the
-    // per-session cap is hit.
-    if (!stores.wsConcurrency.tryAcquire(GLOBAL_WS_KEY)) {
-      audit.write({
-        event: "ws_upgrade_rejected",
-        severity: "warn",
-        sessionId: session.id,
-        origin,
-        reason: "too_many_ws_connections",
-      });
-      rejectUpgrade(socket, 409);
-      return;
-    }
-    if (!stores.sessionConcurrency.tryAcquire(session.id)) {
-      stores.wsConcurrency.release(GLOBAL_WS_KEY);
-      audit.write({
-        event: "ws_upgrade_rejected",
-        severity: "warn",
-        sessionId: session.id,
-        origin,
-        reason: "too_many_active_sessions",
-      });
-      rejectUpgrade(socket, 409);
-      return;
-    }
-
-    // Free both slots exactly once when the connection ends. Bound to the raw
-    // socket's "close" so it also covers an upgrade that never reaches the
-    // "connection" event (e.g. the client aborts mid-handshake), not just a
-    // normal WebSocket close.
+    let origin: string | undefined;
+    let sessionId: string | undefined;
+    let globalSlotAcquired = false;
+    let sessionSlotAcquired = false;
     let slotsReleased = false;
     const releaseConnectionSlots = () => {
       if (slotsReleased) return;
       slotsReleased = true;
-      stores.sessionConcurrency.release(session.id);
-      stores.wsConcurrency.release(GLOBAL_WS_KEY);
+      if (sessionSlotAcquired && sessionId) {
+        stores.sessionConcurrency.release(sessionId);
+      }
+      if (globalSlotAcquired) stores.wsConcurrency.release(GLOBAL_WS_KEY);
     };
-    socket.on("close", releaseConnectionSlots);
 
-    const grant = stores.tickets.consume({
-      rawTicket,
-      sessionId: session.id,
-      deviceToken,
-      origin,
-    });
-    if (!grant.ok) {
+    try {
+      origin = normalizeOriginHeader(req.headers.origin);
+      const upgradeId = randomUUID();
+      if (!isOriginAllowed(origin, config.allowedOrigins)) {
+        audit.write({
+          event: "ws_upgrade_rejected",
+          severity: "warn",
+          origin,
+          reason: "bad_origin",
+        });
+        rejectUpgrade(socket, 403);
+        return;
+      }
+
+      const url = new URL(req.url ?? "/", origin);
+      if (url.pathname !== "/terminal/ws") {
+        rejectUpgrade(socket, 403);
+        return;
+      }
+
+      const cookies = parseCookieHeader(req.headers.cookie);
+      const session = stores.sessions.validate(
+        cookies[SESSION_ID_COOKIE],
+        cookies[SESSION_TOKEN_COOKIE],
+      );
+      const deviceToken = cookies[DEVICE_TOKEN_COOKIE];
+      const device = stores.devices.validate(session?.id, deviceToken);
+      const rawTicket = url.searchParams.get("ticket");
+      if (!session || !device || !deviceToken || !rawTicket) {
+        audit.write({
+          event: "ws_upgrade_rejected",
+          severity: "warn",
+          origin,
+          reason: "missing_auth_or_ticket",
+        });
+        rejectUpgrade(socket, 401);
+        return;
+      }
+      const activeSessionId = session.id;
+      sessionId = activeSessionId;
+
+      // Cap concurrent connections before consuming the single-use ticket (#30), so
+      // a capacity rejection doesn't burn the ticket the user just minted. Acquire
+      // the global slot first, then the per-session one, releasing the global if the
+      // per-session cap is hit.
+      if (!stores.wsConcurrency.tryAcquire(GLOBAL_WS_KEY)) {
+        audit.write({
+          event: "ws_upgrade_rejected",
+          severity: "warn",
+          sessionId,
+          origin,
+          reason: "too_many_ws_connections",
+        });
+        rejectUpgrade(socket, 409);
+        return;
+      }
+      globalSlotAcquired = true;
+      if (!stores.sessionConcurrency.tryAcquire(activeSessionId)) {
+        releaseConnectionSlots();
+        audit.write({
+          event: "ws_upgrade_rejected",
+          severity: "warn",
+          sessionId,
+          origin,
+          reason: "too_many_active_sessions",
+        });
+        rejectUpgrade(socket, 409);
+        return;
+      }
+      sessionSlotAcquired = true;
+
+      // Free both slots exactly once when the connection ends. Bound to the raw
+      // socket's "close" so it also covers an upgrade that never reaches the
+      // "connection" event (e.g. the client aborts mid-handshake), not just a
+      // normal WebSocket close.
+      socket.on("close", releaseConnectionSlots);
+
+      const grant = stores.tickets.consume({
+        rawTicket,
+        sessionId: activeSessionId,
+        deviceToken,
+        origin,
+      });
+      if (!grant.ok) {
+        releaseConnectionSlots();
+        audit.write({
+          event: "ws_upgrade_rejected",
+          severity: "warn",
+          sessionId,
+          origin,
+          reason: grant.reason,
+        });
+        rejectUpgrade(socket, 403);
+        return;
+      }
+
+      audit.write({
+        event: "ticket_consumed",
+        severity: "info",
+        sessionId,
+        origin,
+      });
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        wss.emit("connection", ws, req, {
+          session,
+          grant: grant.grant,
+          upgradeId,
+        });
+      });
+    } catch {
       releaseConnectionSlots();
       audit.write({
         event: "ws_upgrade_rejected",
         severity: "warn",
-        sessionId: session.id,
+        sessionId,
         origin,
-        reason: grant.reason,
+        reason: "upgrade_error",
       });
-      rejectUpgrade(socket, 403);
-      return;
+      rejectUpgrade(socket, 400);
     }
-
-    audit.write({
-      event: "ticket_consumed",
-      severity: "info",
-      sessionId: session.id,
-      origin,
-    });
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req, {
-        session,
-        grant: grant.grant,
-        upgradeId,
-      });
-    });
   });
 
   wss.on(
@@ -643,6 +667,23 @@ export async function createOmxtermServer(
         backpressure.observe(ws.bufferedAmount);
       };
 
+      const closeTerminalSession = (
+        reason: "websocket_closed" | "websocket_error",
+        severity: "info" | "warn",
+      ) => {
+        if (closed) return;
+        closed = true;
+        terminal.close();
+        audit.write({
+          event: "session_ended",
+          severity,
+          sessionId: context.session.id,
+          bytesIn,
+          bytesOut,
+          reason,
+        });
+      };
+
       terminal.on("output", (data) => {
         send({ type: "output", data });
       });
@@ -654,6 +695,7 @@ export async function createOmxtermServer(
         });
       });
       terminal.on("close", (reason) => {
+        if (closed) return;
         send({ type: "exit", reason });
         ws.close(1000, reason);
       });
@@ -682,19 +724,14 @@ export async function createOmxtermServer(
           send({ type: "pong", ts: parsed.message.ts });
       });
 
-      ws.on("close", () => {
-        if (closed) return;
-        closed = true;
-        terminal.close();
-        audit.write({
-          event: "session_ended",
-          severity: "info",
-          sessionId: context.session.id,
-          bytesIn,
-          bytesOut,
-          reason: "websocket_closed",
-        });
+      ws.on("error", () => {
+        closeTerminalSession("websocket_error", "warn");
+        ws.terminate();
       });
+
+      ws.on("close", () =>
+        closeTerminalSession("websocket_closed", "info"),
+      );
 
       void terminal
         .connect(context.grant.profile, { cols: 120, rows: 34 })
