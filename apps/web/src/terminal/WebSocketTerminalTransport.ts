@@ -3,28 +3,71 @@ import type { TerminalStatus, TerminalTransportAdapter, Unsubscribe } from '@omx
 
 type Handler<T> = (value: T) => void;
 
+// The slice of the browser WebSocket this transport drives. Injecting a factory
+// for it is the smallest seam that lets tests settle connect() deterministically
+// across open/close/error orderings without a real socket (#76).
+export type TerminalSocket = {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(type: 'open', listener: () => void): void;
+  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
+  addEventListener(type: 'close', listener: () => void): void;
+  addEventListener(type: 'error', listener: () => void): void;
+};
+
+export type WebSocketTerminalTransportDeps = {
+  createSocket?: (url: string) => TerminalSocket;
+};
+
+// Standard WebSocket.OPEN readyState. Named locally so the transport does not
+// depend on the global WebSocket being defined when it only guards a send.
+const SOCKET_OPEN = 1;
+
 export class WebSocketTerminalTransport implements TerminalTransportAdapter {
-  #socket: WebSocket | null = null;
+  #socket: TerminalSocket | null = null;
   readonly #outputHandlers = new Set<Handler<string>>();
   readonly #statusHandlers = new Set<Handler<TerminalStatus>>();
   readonly #errorHandlers = new Set<Handler<string>>();
+  readonly #createSocket: (url: string) => TerminalSocket;
 
-  constructor(private readonly url: string) {}
+  constructor(
+    private readonly url: string,
+    deps: WebSocketTerminalTransportDeps = {},
+  ) {
+    this.#createSocket = deps.createSocket ?? ((url) => new WebSocket(url));
+  }
 
   connect(): Promise<void> {
     this.#setStatus('connecting');
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(this.url);
+      const socket = this.#createSocket(this.url);
       this.#socket = socket;
+      let settled = false;
 
-      socket.addEventListener('open', () => resolve());
+      socket.addEventListener('open', () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      });
       socket.addEventListener('message', (event) => this.#handleMessage(event.data));
-      socket.addEventListener('close', () => this.#setStatus('closed'));
+      socket.addEventListener('close', () => {
+        this.#setStatus('closed');
+        if (settled) return;
+        settled = true;
+        // A close before open means the upgrade was rejected or the dial
+        // dropped; reject so the caller never awaits a socket that will never
+        // open (#76). No reconnect/resume — the session is over.
+        this.#emitError('WebSocket closed before it opened.');
+        reject(new Error('WebSocket closed before it opened.'));
+      });
       socket.addEventListener('error', () => {
         this.#setStatus('error');
+        if (settled) return;
+        settled = true;
         this.#emitError('WebSocket connection failed.');
         reject(new Error('WebSocket connection failed.'));
-      }, { once: true });
+      });
     });
   }
 
@@ -57,7 +100,7 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
   }
 
   #send(payload: unknown): void {
-    if (this.#socket?.readyState !== WebSocket.OPEN) return;
+    if (this.#socket?.readyState !== SOCKET_OPEN) return;
     this.#socket.send(JSON.stringify(payload));
   }
 
