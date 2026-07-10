@@ -55,11 +55,20 @@ basic auth.
 
 ## 1. Get the code
 
+The [`scripts/deploy`](../scripts/deploy) helper syncs the code safely: it
+refuses to run on a dirty checkout, fetches, and **fast-forwards** `main` — it
+never `reset --hard`s or merges, so it can't discard local work. To sync by
+hand, keep it non-destructive:
+
 ```bash
 cd /projects/code/omxterm
+git status --short            # must be empty; commit or stash your own work first
 git fetch origin
-git reset --hard origin/main   # discard any local drift, then take main
+git merge --ff-only origin/main   # fast-forward only; fails instead of rewriting
 ```
+
+Never use `git reset --hard` or `git add . && git reset` here: on a server
+checkout that silently throws away uncommitted and untracked files.
 
 ## 2. Write the production `.env`
 
@@ -114,12 +123,15 @@ while the deploy is still a private preview. The shared Traefik already mounts
 file there (bcrypt):
 
 ```bash
-htpasswd -nbB <user> '<password>' \
+# -n prints to stdout; omitting -b makes htpasswd PROMPT for the password, so it
+# never lands in argv or shell history.
+htpasswd -nB <user> \
   | sudo tee -a /projects/state/read.inprod.cloud/auth/omxterm-usersfile
 ```
 
 (`htpasswd` is in `apache2-utils`. Keep OMXTerm's users file separate from the
-other sites' so credentials don't bleed across.)
+other sites' so credentials don't bleed across. Do not pass the password with
+`-b '<password>'`: that exposes it to shell history and process listings.)
 
 ## 5. Route it in Traefik (shared `dynamic.yml`)
 
@@ -175,8 +187,22 @@ docker logs -f readinprodcloud-traefik-1
 
 ```bash
 # TLS + basic auth challenge
-curl -sI https://omxterm.inprod.cloud | head -n 1          # 401 (basic auth)
-curl -sI -u <user>:'<password>' https://omxterm.inprod.cloud | head -n 1  # 200
+curl -sI https://omxterm.inprod.cloud | head -n 1   # 401 (basic auth)
+
+# Pass only the username; curl PROMPTS for the password, keeping it out of argv
+# and shell history.
+curl -sI -u <user> https://omxterm.inprod.cloud | head -n 1   # 200
+```
+
+Confirm the OMXTerm rollout did **not** disturb the shared edge — the Traefik
+container and the other sites' routes should be unchanged:
+
+```bash
+# Traefik was never restarted by the deploy (uptime predates this rollout).
+docker inspect -f '{{.State.StartedAt}}' readinprodcloud-traefik-1
+
+# An unrelated site still answers through the same edge.
+curl -sI https://<another-site-on-this-edge> | head -n 1   # still 200/expected
 ```
 
 Then in a browser: clear the basic-auth prompt → the OMXTerm access gate → enter
@@ -195,10 +221,21 @@ docker compose exec omxterm sh -lc 'getent hosts 10.100.0.2 || true'
 
 ## Updating
 
+Run the deploy helper. It fast-forwards `main` and rebuilds **only** the
+OMXTerm service, leaving the shared Traefik edge and its other routes running:
+
+```bash
+/projects/code/omxterm/scripts/deploy
+```
+
+It stops before any Docker action when the checkout is dirty or `main` has
+diverged from its upstream, so it never discards local work or rewrites history.
+To roll out by hand instead:
+
 ```bash
 cd /projects/code/omxterm
-git pull
-docker compose up -d --build
+git fetch origin && git merge --ff-only origin/main
+docker compose up -d --build omxterm   # app service only; don't touch Traefik
 ```
 
 The stores are in-memory, so a rebuild drops active sessions and pending tickets
@@ -206,11 +243,13 @@ The stores are in-memory, so a rebuild drops active sessions and pending tickets
 
 ## Rollback
 
+Roll back the app service only; the shared edge stays up throughout.
+
 ```bash
 cd /projects/code/omxterm
-git checkout <previous-good-sha>
-docker compose up -d --build
-# If a dynamic.yml edit caused it:
+git checkout <previous-good-sha>       # detached HEAD, non-destructive
+docker compose up -d --build omxterm
+# If a dynamic.yml edit caused it, restore the backup from step 5:
 sudo mv /projects/code/read.inprod.cloud/traefik/dynamic.yml.bak \
         /projects/code/read.inprod.cloud/traefik/dynamic.yml
 ```
