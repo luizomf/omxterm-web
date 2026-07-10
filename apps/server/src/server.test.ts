@@ -152,6 +152,7 @@ async function terminalTicket(
   app: Awaited<ReturnType<typeof createOmxtermServer>>,
   config: ServerConfig,
   cookie: string,
+  port = 22,
 ): Promise<string> {
   const response = await app.inject({
     method: "POST",
@@ -159,7 +160,7 @@ async function terminalTicket(
     headers: { origin: config.allowedOrigins[0], cookie },
     payload: {
       host: "127.0.0.1",
-      port: 22,
+      port,
       username: "test-user",
       privateKey: "test-private-key",
       passphrase: "test-passphrase",
@@ -378,6 +379,70 @@ async function loginCookieHeader(
   expect(login.statusCode).toBe(200);
   return cookieHeaderFromSetCookie(login.headers["set-cookie"]);
 }
+
+async function waitForAuditEvent(
+  auditLogPath: string,
+  event: string,
+  timeoutMs = 8000,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  let lastContents = "";
+  while (Date.now() < deadline) {
+    try {
+      lastContents = readFileSync(auditLogPath, "utf8");
+      const found = lastContents
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((entry) => entry.event === event);
+      if (found) return found;
+    } catch {
+      // The log file may not exist yet on the first poll.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `Audit event "${event}" not found within ${timeoutMs}ms. Log:\n${lastContents}`,
+  );
+}
+
+describe("terminal session SSH dial failure", () => {
+  test("audits a normalized connect-failure reason without leaking credentials", async () => {
+    const auditDir = mkdtempSync(join(tmpdir(), "omxterm-audit-"));
+    const auditLogPath = join(auditDir, "audit.jsonl");
+    const config: ServerConfig = { ...baseConfig, auditLogPath };
+    const app = await createOmxtermServer(config);
+    let socket: Socket | undefined;
+    try {
+      const cookie = await loginCookieHeader(app, config);
+      const refusedPort = await unusedTcpPort();
+      const ticket = await terminalTicket(app, config, cookie, refusedPort);
+      const port = await listenOnLoopback(app);
+      const path = `/terminal/ws?ticket=${encodeURIComponent(ticket)}`;
+      socket = await openRawWebSocket(port, path, cookie);
+
+      // The broker dials a refused port, so connect() rejects promptly and the
+      // server audits the normalized reason. Poll the log until it lands.
+      const failure = await waitForAuditEvent(
+        auditLogPath,
+        "session_connect_failed",
+      );
+      expect(failure).toMatchObject({ severity: "warn", host: "127.0.0.1" });
+      expect(failure.reason).toEqual(expect.any(String));
+      expect(failure.reason).not.toBe("");
+
+      const auditLog = readFileSync(auditLogPath, "utf8");
+      expect(auditLog).not.toContain("test-private-key");
+      expect(auditLog).not.toContain("test-passphrase");
+      expect(auditLog).not.toContain(ticket);
+    } finally {
+      socket?.destroy();
+      await app.close();
+      rmSync(auditDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("POST /api/ssh/host-key", () => {
   test("audits the real failure reason instead of discarding it when the probe fails", async () => {

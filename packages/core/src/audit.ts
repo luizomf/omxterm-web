@@ -7,6 +7,7 @@ export type AuditEventName =
   | 'ticket_consumed'
   | 'ws_upgrade_rejected'
   | 'session_started'
+  | 'session_connect_failed'
   | 'session_ended'
   | 'host_key_presented'
   | 'host_key_trusted'
