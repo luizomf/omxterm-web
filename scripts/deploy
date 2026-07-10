@@ -1,24 +1,65 @@
 #!/usr/bin/env bash
 
+# OMXTerm rollout. Non-destructive and app-scoped by design (issue #75):
+#
+# - never stages or resets operator work: a dirty checkout stops the deploy
+#   before any Docker action, so tracked and untracked files are left as-is;
+# - syncs source with fetch + fast-forward-only after verifying the branch and
+#   its upstream, and refuses to run on a diverged branch (no merge, no rewrite);
+# - recreates ONLY the OMXTerm service, leaving the shared Traefik edge and its
+#   unrelated routes running.
+#
+# Paths are overridable via env so this can be exercised in a sandbox.
+
 set -euo pipefail
 
-PROJECTS_DIR="/projects"
-CODE_DIR="${PROJECTS_DIR}/code"
-OMXTERM_DIR="${CODE_DIR}/omxterm"
-TRAEFIK_DIR="${CODE_DIR}/read.inprod.cloud"
+PROJECTS_DIR="${PROJECTS_DIR:-/projects}"
+CODE_DIR="${CODE_DIR:-${PROJECTS_DIR}/code}"
+OMXTERM_DIR="${OMXTERM_DIR:-${CODE_DIR}/omxterm}"
+DEPLOY_BRANCH="${OMXTERM_DEPLOY_BRANCH:-main}"
+OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm}"
 
-cd "${OMXTERM_DIR}" || exit 1
-git add . || exit 1
-git reset --hard || exit 1
-git pull --all --prune || exit 1
+cd "${OMXTERM_DIR}"
 
-docker compose --project-directory "${TRAEFIK_DIR}" down
-docker compose --project-directory "${OMXTERM_DIR}" down
+# Refuse to run against a dirty checkout. Tracked or untracked changes stop the
+# deploy here, before Docker, preserving every file byte-for-byte.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "deploy: refusing to run — ${OMXTERM_DIR} has uncommitted or untracked changes." >&2
+  echo "deploy: commit, stash, or remove them and re-run. Nothing was changed." >&2
+  exit 1
+fi
 
+# Confirm we are on the deploy branch with a configured upstream before syncing.
+current_branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "${current_branch}" != "${DEPLOY_BRANCH}" ]; then
+  echo "deploy: refusing to run — on branch '${current_branch}', expected '${DEPLOY_BRANCH}'." >&2
+  exit 1
+fi
+
+git fetch --prune origin
+
+upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+if [ -z "${upstream}" ]; then
+  echo "deploy: refusing to run — '${DEPLOY_BRANCH}' has no upstream to fast-forward from." >&2
+  exit 1
+fi
+
+local_sha="$(git rev-parse HEAD)"
+remote_sha="$(git rev-parse '@{upstream}')"
+base_sha="$(git merge-base HEAD '@{upstream}')"
+
+# Fast-forward only. If HEAD is not an ancestor of the upstream, the branch has
+# diverged (or is ahead) and cannot be fast-forwarded — fail instead of merging
+# or rewriting history.
+if [ "${local_sha}" != "${remote_sha}" ]; then
+  if [ "${base_sha}" != "${local_sha}" ]; then
+    echo "deploy: refusing to run — '${DEPLOY_BRANCH}' has diverged from ${upstream}; not merging or rewriting." >&2
+    exit 1
+  fi
+  git merge --ff-only '@{upstream}'
+fi
+
+# Rebuild and recreate only the OMXTerm service. The shared Traefik edge is left
+# untouched so unrelated routes stay up.
 docker compose --project-directory "${OMXTERM_DIR}" \
-  up -d --build --force-recreate --renew-anon-volumes \
-  --remove-orphans
-
-docker compose --project-directory "${TRAEFIK_DIR}" \
-  up -d --build --force-recreate --renew-anon-volumes \
-  --remove-orphans
+  up -d --build --force-recreate --remove-orphans "${OMXTERM_SERVICE}"
