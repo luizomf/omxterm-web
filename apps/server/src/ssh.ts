@@ -199,7 +199,10 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
           finishError(new SshConnectError('ssh_connection_closed', 'The SSH connection closed before the session was ready.'));
           return;
         }
-        if (!this.#closed) this.emit('close', 'ssh_connection_closed');
+        // destroy() after a failed/cancelled attempt also emits close. Only a
+        // connection that reached an attached shell represents a live session
+        // whose close belongs on the runtime event path.
+        if (!this.#closed && this.#channel) this.emit('close', 'ssh_connection_closed');
       });
 
       this.#client.on('ready', () => {

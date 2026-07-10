@@ -140,15 +140,21 @@ describe('SshTerminalSession lifecycle', () => {
 
   test('settles connect only once when an error arrives before a late ready', async () => {
     const { session, client } = createSession();
+    const closes: string[] = [];
+    session.on('close', reason => closes.push(reason));
     const connecting = session.connect(profile, { cols: 80, rows: 24 });
 
     client.emit('error', new Error('handshake failed'));
+    // ssh2 emits close after destroy(); a failed dial must not masquerade as a
+    // runtime close from an established terminal session.
+    client.emit('close');
     // A late ready after the failure must not open a shell or re-settle.
     client.emit('ready');
 
     await expect(connecting).rejects.toMatchObject({ reason: 'ssh_connection_error' });
     expect(client.shellCount).toBe(0);
     expect(client.destroyCount).toBe(1);
+    expect(closes).toEqual([]);
   });
 
   test('resolves once, then routes a later connection close as a close event', async () => {
