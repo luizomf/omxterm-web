@@ -57,8 +57,8 @@ basic auth.
 
 The [`scripts/deploy`](../scripts/deploy) helper syncs the code safely: it
 refuses to run on a dirty checkout, fetches, and **fast-forwards** `main` — it
-never `reset --hard`s or merges, so it can't discard local work. To sync by
-hand, keep it non-destructive:
+never `reset --hard`s or creates merge commits, so it can't discard local work.
+To sync by hand, keep it non-destructive:
 
 ```bash
 cd /projects/code/omxterm

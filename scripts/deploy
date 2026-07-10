@@ -36,13 +36,19 @@ if [ "${current_branch}" != "${DEPLOY_BRANCH}" ]; then
   exit 1
 fi
 
-git fetch --prune origin
-
 upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
 if [ -z "${upstream}" ]; then
   echo "deploy: refusing to run — '${DEPLOY_BRANCH}' has no upstream to fast-forward from." >&2
   exit 1
 fi
+
+expected_upstream="origin/${DEPLOY_BRANCH}"
+if [ "${upstream}" != "${expected_upstream}" ]; then
+  echo "deploy: refusing to run — '${DEPLOY_BRANCH}' tracks '${upstream}', expected '${expected_upstream}'." >&2
+  exit 1
+fi
+
+git fetch --prune origin
 
 local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse '@{upstream}')"

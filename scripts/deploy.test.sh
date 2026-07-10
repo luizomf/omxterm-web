@@ -191,12 +191,27 @@ test_wrong_branch_fails() {
   pass_test "refused off-branch deploy"
 }
 
+test_unexpected_upstream_fails() {
+  echo "the deploy branch tracking an unexpected upstream fails safely"
+  setup_sandbox
+  git -C "${APP}" branch unintended
+  git -C "${APP}" push -q origin unintended
+  git -C "${APP}" branch --set-upstream-to=origin/unintended main >/dev/null
+
+  if run_deploy; then
+    fail_test "expected non-zero exit when main does not track origin/main"
+  fi
+  docker_ran && fail_test "must not deploy from an unexpected upstream"
+  pass_test "refused unexpected upstream"
+}
+
 test_clean_uptodate_deploys_app_only
 test_behind_remote_fast_forwards
 test_diverged_branch_fails_without_touching_anything
 test_dirty_tracked_file_stops_before_docker
 test_untracked_file_stops_before_docker
 test_wrong_branch_fails
+test_unexpected_upstream_fails
 
 echo
 echo "deploy.test.sh: ${pass} passed, ${fail} failed"
