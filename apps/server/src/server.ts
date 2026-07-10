@@ -30,7 +30,7 @@ import {
   setAuthCookies,
 } from "./cookies";
 import { JsonlAuditLogger } from "./audit-logger";
-import { probeSshHostKey, SshTerminalSession } from "./ssh";
+import { probeSshHostKey, SshConnectError, SshTerminalSession } from "./ssh";
 import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
 
@@ -673,7 +673,12 @@ export async function createOmxtermServer(
       ) => {
         if (closed) return;
         closed = true;
+        // terminal.close() aborts a still-pending SSH dial; scrub here too so
+        // the key/passphrase are cleared on cancellation even when the socket
+        // closes before connect() settles (#76). Idempotent with the scrub in
+        // the connect resolve/reject paths below.
         terminal.close();
+        scrubSshConnectionSecrets(context.grant.profile);
         audit.write({
           event: "session_ended",
           severity,
@@ -746,7 +751,21 @@ export async function createOmxtermServer(
           });
           send({ type: "ready", sessionId: terminalSessionId });
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          // Clear the key/passphrase on failure, timeout, and cancellation too,
+          // not just on success — the grant must not outlive the attempt (#76).
+          scrubSshConnectionSecrets(context.grant.profile);
+          audit.write({
+            event: "session_connect_failed",
+            severity: "warn",
+            sessionId: context.session.id,
+            host: context.grant.profile.host,
+            port: context.grant.profile.port,
+            reason:
+              error instanceof SshConnectError
+                ? error.reason
+                : "ssh_connect_failed",
+          });
           send({
             type: "error",
             code: "ssh_connect_failed",
