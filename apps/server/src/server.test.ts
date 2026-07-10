@@ -116,20 +116,7 @@ async function openRawWebSocket(
     const socket = connect(port, "127.0.0.1");
     let response = "";
     socket.on("connect", () => {
-      socket.write(
-        [
-          `GET ${path} HTTP/1.1`,
-          "Host: 127.0.0.1",
-          "Connection: Upgrade",
-          "Upgrade: websocket",
-          "Sec-WebSocket-Version: 13",
-          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-          `Origin: ${baseConfig.allowedOrigins[0]}`,
-          `Cookie: ${cookie}`,
-          "",
-          "",
-        ].join("\r\n"),
-      );
+      socket.write(rawWebSocketUpgradeRequest(path, cookie));
     });
     socket.on("data", function readHandshake(chunk) {
       response += chunk;
@@ -144,6 +131,21 @@ async function openRawWebSocket(
     });
     socket.on("error", reject);
   });
+}
+
+function rawWebSocketUpgradeRequest(path: string, cookie: string): string {
+  return [
+    `GET ${path} HTTP/1.1`,
+    "Host: 127.0.0.1",
+    "Connection: Upgrade",
+    "Upgrade: websocket",
+    "Sec-WebSocket-Version: 13",
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+    `Origin: ${baseConfig.allowedOrigins[0]}`,
+    `Cookie: ${cookie}`,
+    "",
+    "",
+  ].join("\r\n");
 }
 
 async function terminalTicket(
@@ -242,11 +244,8 @@ describe("WebSocket upgrade boundary", () => {
         const cookie = await loginCookieHeader(app, config);
         const ticket = await terminalTicket(app, config, cookie);
         const port = await listenOnLoopback(app);
-        socket = await openRawWebSocket(
-          port,
-          `/terminal/ws?ticket=${encodeURIComponent(ticket)}`,
-          cookie,
-        );
+        const path = `/terminal/ws?ticket=${encodeURIComponent(ticket)}`;
+        socket = await openRawWebSocket(port, path, cookie);
 
         socket.write(frame());
 
@@ -255,6 +254,12 @@ describe("WebSocket upgrade boundary", () => {
         );
         const health = await app.inject({ method: "GET", url: "/health" });
         expect(health.statusCode).toBe(200);
+
+        const replayResponse = await sendRawHttpRequest(
+          port,
+          rawWebSocketUpgradeRequest(path, cookie),
+        );
+        expect(replayResponse).toMatch(/^HTTP\/1\.1 403 /);
 
         const auditLog = readFileSync(auditLogPath, "utf8");
         expect(auditLog).toContain('"reason":"websocket_error"');
