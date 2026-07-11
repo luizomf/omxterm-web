@@ -19,7 +19,7 @@ describe('normalizeFingerprint', () => {
 
 describe('sshDialHost', () => {
   test('dials the pinned validated IP instead of the hostname so ssh2 never re-resolves (#26)', () => {
-    expect(sshDialHost({ host: 'kvm4.vpn', pinnedAddress: '10.100.0.4' })).toBe('10.100.0.4');
+    expect(sshDialHost({ host: 'private-host.example', pinnedAddress: '10.100.0.4' })).toBe('10.100.0.4');
   });
 
   test('falls back to the hostname when no IP was pinned (unrestricted/localhost demo)', () => {
