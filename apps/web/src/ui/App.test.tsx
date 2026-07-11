@@ -156,4 +156,29 @@ describe('ConnectionGate private key masking (#94)', () => {
     await waitFor(() => expect(privateKeyField).toHaveValue(fakeFileKey));
     expect(privateKeyField).toHaveAttribute('data-masked', 'true');
   });
+
+  test('re-masks a file-loaded key even after the field was revealed', async () => {
+    const privateKeyField = await renderConnectionForm();
+    const fakeFileKey =
+      '-----BEGIN FAKE KEY-----\nreloaded-placeholder\n-----END FAKE KEY-----';
+    const keyFile = new File([fakeFileKey], 'id_ed25519', {
+      type: 'text/plain',
+    });
+
+    // Reveal first, then load a new file: the fresh key must not inherit the
+    // prior reveal and leak in plaintext.
+    fireEvent.click(screen.getByRole('button', { name: /show private key/i }));
+    expect(privateKeyField).toHaveAttribute('data-masked', 'false');
+
+    const fileInput = screen.getByLabelText('Load private key file');
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [keyFile] } });
+    });
+
+    await waitFor(() => expect(privateKeyField).toHaveValue(fakeFileKey));
+    expect(privateKeyField).toHaveAttribute('data-masked', 'true');
+    expect(
+      screen.getByRole('button', { name: /show private key/i }),
+    ).toHaveAttribute('aria-pressed', 'false');
+  });
 });

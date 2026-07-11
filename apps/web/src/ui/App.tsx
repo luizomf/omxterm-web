@@ -223,6 +223,9 @@ function ConnectionGate({
   async function readKeyFile(file: File | undefined) {
     if (!file) return;
     setField('privateKey', await file.text());
+    // A freshly loaded key must never inherit a prior reveal; re-mask so
+    // file-loaded keys stay hidden by default even if the field was shown (#94).
+    setPrivateKeyRevealed(false);
   }
 
   return (
