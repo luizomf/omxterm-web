@@ -33,6 +33,7 @@ import { JsonlAuditLogger } from "./audit-logger";
 import { probeSshHostKey, SshConnectError, SshTerminalSession } from "./ssh";
 import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
+import { createTerminalInboundGuard } from "./terminal-inbound-guard";
 
 const accessSchema = z.object({ accessToken: z.string().min(1).max(4096) });
 const hostKeySchema = z.object({
@@ -91,6 +92,20 @@ const GLOBAL_WS_KEY = "global";
 // socket drains to the low mark. Conservative MVP byte budgets.
 const WS_OUTPUT_HIGH_WATER_MARK = 1024 * 1024;
 const WS_OUTPUT_LOW_WATER_MARK = 256 * 1024;
+
+// Inbound flow-control budget for one authenticated terminal connection (#77).
+// The 64 KiB `maxPayload` only bounds a single frame; without these an
+// authenticated client can flood messages faster than the SSH target/audit sink
+// drains them, growing memory and hammering the event loop and disk. The caps
+// are generous versus real interactive use — fast typing is tens of frames/sec
+// and a paste is one <=64 KiB frame — so legitimate traffic never trips them,
+// while a sustained flood is closed with a `terminal_flood` audit event.
+const INBOUND_WINDOW_MS = 1000;
+const MAX_INBOUND_MESSAGES_PER_WINDOW = 512;
+const MAX_INBOUND_BYTES_PER_WINDOW = 2 * 1024 * 1024;
+// Bytes of unsent input held while the SSH channel pushes back before the
+// backlog counts as sustained overflow and the connection is closed.
+const MAX_QUEUED_INPUT_BYTES = 1024 * 1024;
 
 type AuthenticatedRequest = {
   session: AccessSession;
@@ -667,12 +682,57 @@ export async function createOmxtermServer(
         backpressure.observe(ws.bufferedAmount);
       };
 
+      // Bound inbound terminal traffic so an authenticated client cannot outrun
+      // the SSH target or audit sink (#77): a per-connection byte/message budget
+      // that closes on a flood, a strictly bounded input queue that honors SSH
+      // write backpressure, and coalesced resizes that avoid synchronous audit
+      // amplification. Legitimate typing, paste, resize, and Ctrl-C pass through.
+      const inbound = createTerminalInboundGuard({
+        limits: {
+          windowMs: INBOUND_WINDOW_MS,
+          maxMessagesPerWindow: MAX_INBOUND_MESSAGES_PER_WINDOW,
+          maxBytesPerWindow: MAX_INBOUND_BYTES_PER_WINDOW,
+          maxQueuedInputBytes: MAX_QUEUED_INPUT_BYTES,
+        },
+        now: () => Date.now(),
+        scheduleResizeFlush: (flush) => {
+          setImmediate(flush);
+        },
+        parseFrame: (text) => codec.parseClientMessage(text),
+        writeInput: (data) => terminal.write(data),
+        subscribeDrain: (listener) => {
+          terminal.on("drain", listener);
+          return () => terminal.off("drain", listener);
+        },
+        applyResize: (cols, rows) => {
+          terminal.resize(cols, rows);
+          audit.write({
+            event: "resize",
+            severity: "info",
+            sessionId: context.session.id,
+            cols,
+            rows,
+          });
+        },
+        sendMessage: send,
+        onOverflow: (reason) => {
+          audit.write({
+            event: "terminal_flood",
+            severity: "warn",
+            sessionId: context.session.id,
+            reason,
+          });
+          if (ws.readyState === WebSocket.OPEN) ws.close(1008, "inbound_flood");
+        },
+      });
+
       const closeTerminalSession = (
         reason: "websocket_closed" | "websocket_error",
         severity: "info" | "warn",
       ) => {
         if (closed) return;
         closed = true;
+        inbound.dispose();
         // terminal.close() aborts a still-pending SSH dial; scrub here too so
         // the key/passphrase are cleared on cancellation even when the socket
         // closes before connect() settles (#76). Idempotent with the scrub in
@@ -708,25 +768,7 @@ export async function createOmxtermServer(
       ws.on("message", (raw) => {
         const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
         bytesIn += Buffer.byteLength(text);
-        const parsed = codec.parseClientMessage(text);
-        if (!parsed.ok) {
-          send({ type: "error", code: parsed.code, message: parsed.message });
-          return;
-        }
-        if (parsed.message.type === "input")
-          terminal.write(parsed.message.data);
-        if (parsed.message.type === "resize") {
-          terminal.resize(parsed.message.cols, parsed.message.rows);
-          audit.write({
-            event: "resize",
-            severity: "info",
-            sessionId: context.session.id,
-            cols: parsed.message.cols,
-            rows: parsed.message.rows,
-          });
-        }
-        if (parsed.message.type === "ping")
-          send({ type: "pong", ts: parsed.message.ts });
+        inbound.handleFrame(text);
       });
 
       ws.on("error", () => {
