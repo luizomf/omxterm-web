@@ -50,7 +50,9 @@ The **connection form** collects one connection's inputs:
 - **Port** — SSH port, `22` by default.
 - **Username** — the remote user to log in as (e.g. `root`).
 - **Private key** — paste the key, or use **Load private key file** to read one
-  from disk into the field.
+  from disk into the field. The key is **masked by default** (including when
+  loaded from a file) to guard against shoulder-surfing; use the **Show/Hide**
+  control to reveal or re-hide it while editing.
 - **Passphrase (optional)** — only if your private key is encrypted.
 
 Press **Continue to fingerprint**. Nothing here is saved: OMXTerm does not keep

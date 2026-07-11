@@ -1,6 +1,14 @@
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { useSshBrokerFlow } from './App';
+import { App, useSshBrokerFlow } from './App';
 
 // Placeholder, obviously-fake credentials. Never assert on their values or let
 // them reach test output: the point of #81 is not leaking real ones (see the
@@ -83,5 +91,69 @@ describe('useSshBrokerFlow credential lifetime', () => {
     expect(result.current.step).toBe('host-key');
     expect(result.current.error).toBeTruthy();
     expect(result.current.pendingHostKey !== null).toBe(true);
+  });
+});
+
+describe('ConnectionGate private key masking (#94)', () => {
+  // checkAuth mock resolves authenticated, so <App /> lands on the connect form.
+  async function renderConnectionForm() {
+    render(<App />);
+    return (await screen.findByLabelText('Private key')) as HTMLTextAreaElement;
+  }
+
+  test('masks the private key field by default and offers a reveal control', async () => {
+    const privateKeyField = await renderConnectionForm();
+
+    expect(privateKeyField).toHaveAttribute('data-masked', 'true');
+    expect(
+      screen.getByRole('button', { name: /show private key/i }),
+    ).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('reveals and re-hides the private key through the toggle control', async () => {
+    const privateKeyField = await renderConnectionForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /show private key/i }));
+    expect(privateKeyField).toHaveAttribute('data-masked', 'false');
+    const hideControl = screen.getByRole('button', {
+      name: /hide private key/i,
+    });
+    expect(hideControl).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(hideControl);
+    expect(privateKeyField).toHaveAttribute('data-masked', 'true');
+    expect(
+      screen.getByRole('button', { name: /show private key/i }),
+    ).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('preserves multiline key content when toggling the reveal control', async () => {
+    const privateKeyField = await renderConnectionForm();
+    // Obviously-fake multiline fixture; never a real key (mirrors the #81 note).
+    const fakeMultilineKey =
+      '-----BEGIN FAKE KEY-----\nline-two-placeholder\n-----END FAKE KEY-----';
+
+    fireEvent.change(privateKeyField, { target: { value: fakeMultilineKey } });
+    fireEvent.click(screen.getByRole('button', { name: /show private key/i }));
+    fireEvent.click(screen.getByRole('button', { name: /hide private key/i }));
+
+    expect(privateKeyField).toHaveValue(fakeMultilineKey);
+  });
+
+  test('keeps a private key loaded from a file masked by default', async () => {
+    const privateKeyField = await renderConnectionForm();
+    const fakeFileKey =
+      '-----BEGIN FAKE KEY-----\nfrom-file-placeholder\n-----END FAKE KEY-----';
+    const keyFile = new File([fakeFileKey], 'id_ed25519', {
+      type: 'text/plain',
+    });
+
+    const fileInput = screen.getByLabelText('Load private key file');
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [keyFile] } });
+    });
+
+    await waitFor(() => expect(privateKeyField).toHaveValue(fakeFileKey));
+    expect(privateKeyField).toHaveAttribute('data-masked', 'true');
   });
 });
