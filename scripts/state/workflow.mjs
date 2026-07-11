@@ -39,9 +39,12 @@ function requireOption(options, name) {
 
 function optionalNumber(options, name) {
   if (options[name] === undefined) return null;
-  const value = Number.parseInt(options[name], 10);
+  const raw = String(options[name]).trim();
+  // Number.parseInt would silently accept "1.5" (→1) or "3abc" (→3); require the
+  // whole string to be digits so malformed CLI input is rejected, not truncated.
+  const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN;
   if (!Number.isSafeInteger(value) || value < 1) {
-    fail(`--${name} must be a positive integer.`);
+    fail(`--${name} must be a positive integer, received "${options[name]}".`);
   }
   return value;
 }
@@ -198,12 +201,15 @@ function retry(options, path, now) {
 
 function stop(options, path, now) {
   const state = readState(path);
+  const previousStatus = state.coordination.status;
+  if (TERMINAL_STATUSES.has(previousStatus)) {
+    fail(`Workflow already terminal with status "${previousStatus}"; cannot overwrite the outcome.`);
+  }
   const status = options.status || 'stopped';
   if (!TERMINAL_STATUSES.has(status)) {
     fail(`Stop status must be one of: ${[...TERMINAL_STATUSES].join(', ')}.`);
   }
   const reason = requireOption(options, 'reason');
-  const previousStatus = state.coordination.status;
   state.coordination.status = status;
   state.coordination.worker = 'none';
   state.coordination.next = { owner: 'human', action: options.next || 'Inspect workflow state.' };

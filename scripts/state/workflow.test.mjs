@@ -116,3 +116,63 @@ test('records an explicit stop and prevents later transitions', () => {
     );
   });
 });
+
+test('refuses to overwrite a terminal outcome with another stop', () => {
+  withState(() => {
+    run([...START.slice(0, -1), '1']);
+    run(['transition', '--status', 'awaiting_review', '--worker', 'webhook', '--next', 'Review PR.']);
+    run(['transition', '--status', 'reviewing', '--worker', 'brien', '--next', 'Review PR.']);
+    const passed = run(['transition', '--status', 'passed', '--worker', 'brien', '--next', 'Merge PR.', '--reason', 'Looks good.']);
+    assert.equal(passed.coordination.status, 'passed');
+
+    assert.throws(
+      () => run(['stop', '--reason', 'Late stop.', '--next', 'Wait.']),
+      /already terminal with status "passed"/,
+    );
+    const current = run(['show']);
+    assert.equal(current.coordination.status, 'passed');
+    assert.equal(current.stop.reason, 'Looks good.');
+  });
+});
+
+test('refuses to stop an already-stopped workflow twice', () => {
+  withState(() => {
+    run(START);
+    run(['stop', '--reason', 'First stop.', '--next', 'Wait.']);
+
+    assert.throws(
+      () => run(['stop', '--reason', 'Second stop.', '--next', 'Wait.']),
+      /already terminal with status "stopped"/,
+    );
+    assert.equal(run(['show']).stop.reason, 'First stop.');
+  });
+});
+
+test('rejects malformed numeric options instead of truncating them', () => {
+  for (const [name, value] of [
+    ['--max-attempts', '1.5'],
+    ['--max-attempts', '3abc'],
+    ['--issue', '10.2'],
+    ['--issue', '102x'],
+    ['--pr', '10 3'],
+    ['--max-attempts', '0'],
+    ['--max-attempts', '-1'],
+  ]) {
+    withState(() => {
+      const args = [...START.slice(0, -2)];
+      assert.throws(
+        () => run([...args, name, value]),
+        new RegExp(`${name.slice(2)} must be a positive integer, received "${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`),
+        `${name}=${value} should be rejected`,
+      );
+    });
+  }
+});
+
+test('accepts a well-formed positive integer option', () => {
+  withState(() => {
+    const state = run([...START.slice(0, -2), '--max-attempts', '5', '--pr', '103']);
+    assert.equal(state.coordination.maxAttempts, 5);
+    assert.equal(state.task.pullRequest, 103);
+  });
+});
