@@ -330,10 +330,12 @@ function dispatchReviewBatch(options, path, now) {
 
 function completeReviewBatch(options, path, now) {
   const state = readState(path);
-  if (state.coordination.status !== 'reviewing') {
-    fail(`Review batch completion requires status "reviewing", found "${state.coordination.status}".`);
-  }
   const delegationId = requireOption(options, 'delegation-id');
+  if (state.coordination.status !== 'reviewing') {
+    const duplicate = state.reviewBatch?.status === 'completed' && state.reviewBatch.delegationId === delegationId;
+    const outcome = duplicate ? 'ignored_duplicate' : 'ignored_stale_batch';
+    return commandOutcome(state, outcome, `Review batch ${delegationId} cannot change workflow status ${state.coordination.status}.`);
+  }
   if (!state.reviewBatch) {
     return commandOutcome(state, 'ignored_stale_batch', `Review batch ${delegationId} no longer belongs to this claim.`);
   }

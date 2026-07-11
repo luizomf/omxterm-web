@@ -490,6 +490,10 @@ test('blocks review decisions until the matching asynchronous review batch compl
       '--delegation-id', 'deleg-review-b', '--deadline-at', '2026-07-11T19:30:00.000Z',
     ]).command.outcome, 'ignored_stale_batch');
     assert.equal(run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'All reviewers passed.']).command.outcome, 'passed');
+    assert.equal(
+      run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a']).command.outcome,
+      'ignored_duplicate',
+    );
   });
 });
 
@@ -502,14 +506,18 @@ test('ignores late batch completion after a newer SHA owns the review', () => {
       '--delegation-id', 'deleg-review-a', '--deadline-at', '2026-07-11T19:30:00.000Z',
     ]);
     run([
-      'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
-      '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
     ]);
 
     assert.equal(
       run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a']).command.outcome,
       'ignored_stale_batch',
     );
+    run([
+      'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+      '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
     run([
       'dispatch-review-batch', '--pr', '103', '--sha', 'sha-b',
       '--delegation-id', 'deleg-review-b', '--deadline-at', '2026-07-11T20:30:00.000Z',
