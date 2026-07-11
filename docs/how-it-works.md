@@ -272,6 +272,17 @@ From here the broker bridges the small JSON terminal protocol
   bounds-checked, never fed to the shell as input), `ping`.
 - **Server → client:** `ready`, `output`, `error`, `exit`, `pong`.
 
+`resize` is validated against a shared contract, `TERMINAL_SIZE_BOUNDS`
+(`20–512` cols × `5–256` rows). That range covers realistic large layouts — a
+2560×2160 CSS viewport fits ~304×128 cells at the shipped font — with headroom
+for 4K panels and zoom, while still rejecting absurd dimensions (#80). The
+frontend imports the same bounds and clamps its fitted grid through
+`clampTerminalSize` before resizing xterm and sending, so the rendered grid and
+the PTY never diverge. A rejected `resize` comes back as a scoped `error`
+(`resize_out_of_bounds`); the client surfaces it but keeps the session
+`connected` rather than failing the whole transport, since the PTY simply holds
+its last valid size.
+
 The broker also **bounds the inbound side** so an authenticated client cannot
 outrun the SSH target or the audit sink (#77). The 64 KB `maxPayload` only limits
 one frame; on top of it, each connection carries a fixed-window byte/message
