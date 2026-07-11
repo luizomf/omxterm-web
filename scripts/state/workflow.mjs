@@ -175,7 +175,7 @@ function start(options, path, now) {
       pullRequest,
       repository: options.repository || 'luizomf/omxterm',
     },
-    queue: queueFrom(options),
+    queue: { ...queueFrom(options), continuation: null },
     coordination: {
       status: 'queued',
       codeAttempt: 0,
@@ -471,21 +471,88 @@ function completeWorkflow(options, path, now) {
     fail(`Completing requires status "passed", found "${state.coordination.status}".`);
   }
   const mergeSha = requireGitSha(options, 'merge-sha');
-  const action = state.queue.nextIssue ? `Start issue #${state.queue.nextIssue}.` : 'Queue is complete.';
+  const nextIssue = state.queue.nextIssue;
+  const action = nextIssue
+    ? `Claim and dispatch the durable continuation for issue #${nextIssue} with claim-continuation.`
+    : 'Queue is complete.';
   state.coordination = {
     ...state.coordination,
     status: 'completed',
     worker: 'none',
     expectedEvent: null,
-    next: { owner: state.queue.nextIssue ? 'brien' : 'none', action },
+    next: { owner: nextIssue ? 'brien' : 'none', action },
+  };
+  // A completed PR is terminal for review, but a declared nextIssue still owes the queue a
+  // durable handoff. `continuation` survives independently of coordination.status so a crashed
+  // or missed session leaves a claimable/recoverable record instead of only human-readable prose (#110).
+  state.queue = {
+    ...state.queue,
+    continuation: nextIssue
+      ? { status: 'pending', issue: nextIssue, claimedBy: null, claimedAt: null, completedAt: null, evidence: null }
+      : null,
   };
   state.merge = { sha: mergeSha, completedAt: now };
   state.lease = null;
-  state.wakeup.deadlineAt = null;
+  state.wakeup = nextIssue ? { deadlineAt: now, lastTriggeredAt: null } : { deadlineAt: null, lastTriggeredAt: null };
   state.stop = { requested: true, reason: `Merged as ${mergeSha}.` };
-  appendHistory(state, { event: 'workflow_completed', status: 'completed', mergeSha, next: action }, now);
+  appendHistory(state, { event: 'workflow_completed', status: 'completed', mergeSha, next: action, continuationPending: Boolean(nextIssue) }, now);
   writeState(path, state);
   return commandOutcome(state, 'completed', `Workflow completed at merge ${mergeSha}.`);
+}
+
+function claimContinuation(options, path, now) {
+  const state = readState(path);
+  if (state.coordination.status !== 'completed') {
+    fail(`Continuation claim requires status "completed", found "${state.coordination.status}".`);
+  }
+  if (!state.queue.continuation) {
+    fail('Workflow has no pending queue continuation to claim.');
+  }
+  if (state.queue.continuation.status === 'done') {
+    return commandOutcome(state, 'ignored_terminal', `Issue #${state.queue.continuation.issue} continuation is already done.`);
+  }
+  const worker = requireOption(options, 'worker');
+  if (state.queue.continuation.status === 'claimed') {
+    const outcome = state.queue.continuation.claimedBy === worker ? 'ignored_duplicate' : 'ignored_worker_active';
+    return commandOutcome(state, outcome, `${state.queue.continuation.claimedBy} already claimed issue #${state.queue.continuation.issue} continuation.`);
+  }
+  const next = requireOption(options, 'next');
+  const deadlineAt = requireOption(options, 'deadline-at');
+  state.queue.continuation = { ...state.queue.continuation, status: 'claimed', claimedBy: worker, claimedAt: now };
+  state.coordination = { ...state.coordination, next: { owner: worker, action: next } };
+  state.wakeup = { deadlineAt, lastTriggeredAt: null };
+  appendHistory(state, { event: 'continuation_claimed', issue: state.queue.continuation.issue, worker, next }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'continuation_claimed', `${worker} claimed issue #${state.queue.continuation.issue} continuation.`);
+}
+
+function completeContinuation(options, path, now) {
+  const state = readState(path);
+  if (state.coordination.status !== 'completed') {
+    fail(`Continuation completion requires status "completed", found "${state.coordination.status}".`);
+  }
+  if (!state.queue.continuation) {
+    fail('Workflow has no pending queue continuation to complete.');
+  }
+  if (state.queue.continuation.status === 'done') {
+    return commandOutcome(state, 'ignored_terminal', `Issue #${state.queue.continuation.issue} continuation is already done.`);
+  }
+  if (state.queue.continuation.status !== 'claimed') {
+    fail(`Continuation must be "claimed" before it can be completed, found "${state.queue.continuation.status}".`);
+  }
+  const issueOption = requireOption(options, 'issue');
+  if (Number(issueOption) !== state.queue.continuation.issue) {
+    fail(`--issue must match the claimed continuation issue #${state.queue.continuation.issue}, received "${issueOption}".`);
+  }
+  // Free-text but required: forces the caller to name the concrete branch/PR/workflow-state
+  // artifact it verified, instead of silently marking the queue step done on trust (#110).
+  const evidence = requireOption(options, 'evidence');
+  state.queue.continuation = { ...state.queue.continuation, status: 'done', completedAt: now, evidence };
+  state.coordination = { ...state.coordination, next: { owner: 'none', action: `Issue #${state.queue.continuation.issue} continuation verified: ${evidence}` } };
+  state.wakeup = { deadlineAt: null, lastTriggeredAt: null };
+  appendHistory(state, { event: 'continuation_completed', issue: state.queue.continuation.issue, evidence }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'continuation_completed', `Issue #${state.queue.continuation.issue} continuation verified.`);
 }
 
 function stop(options, path, now) {
@@ -514,7 +581,12 @@ function stop(options, path, now) {
 
 function recordWakeup(options, path, now) {
   const state = readState(path);
-  if (TERMINAL_STATUSES.has(state.coordination.status)) {
+  // "completed" is normally terminal for wakeups too, but a declared nextIssue leaves a
+  // pending/claimed continuation record that a missed or crashed session must still be able
+  // to recover through (#110); only a continuation already marked "done" stays a true no-op.
+  const continuationPending = state.coordination.status === 'completed' && state.queue.continuation?.status
+    && state.queue.continuation.status !== 'done';
+  if (TERMINAL_STATUSES.has(state.coordination.status) && !continuationPending) {
     return commandOutcome(state, 'ignored_terminal', `Workflow is ${state.coordination.status}.`);
   }
   state.wakeup.lastTriggeredAt = now;
@@ -546,13 +618,15 @@ export function run(argv, now = new Date().toISOString()) {
     takeover,
     pass: passReview,
     complete: completeWorkflow,
+    'claim-continuation': claimContinuation,
+    'complete-continuation': completeContinuation,
     resume: resumeWorkflow,
     stop,
     wake: recordWakeup,
   };
   if (command === 'show') return readState(path);
   if (!operations[command]) {
-    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|resume|stop|wake [--name value ...]');
+    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|claim-continuation|complete-continuation|resume|stop|wake [--name value ...]');
   }
   return mutate(path, () => operations[command](options, path, now));
 }

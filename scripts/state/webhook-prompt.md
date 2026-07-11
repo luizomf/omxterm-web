@@ -16,7 +16,7 @@ For `opened`, `ready_for_review`, `reopened`, or `synchronize`:
 2. Claim exact remote SHA with `claim-review`. `ignored_duplicate`, `ignored_worker_active`, and `ignored_terminal` mean clean no-op; do not mark blocked.
 3. Review read-only. Run real tests, typecheck, build, and `git diff --check` as required by the repository.
 4. Revalidate remote SHA before publishing.
-5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, record `complete --merge-sha <sha>`, and publish completed state. If `nextIssue` exists, continue in this same session: validate the issue, determine its successor or explicit queue end, and create or dispatch its durable implementation step. Confirm that step exists before returning a final response. Only an explicit queue end or a recorded concrete blocker permits the session to stop.
+5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, record `complete --merge-sha <sha>`, and publish completed state. If `nextIssue` exists, `complete` leaves `queue.continuation` `pending`; continue in this same session: run `claim-continuation`, validate the issue, determine its successor or explicit queue end, create or dispatch its durable implementation step, then record `complete-continuation --issue <n> --evidence "..."` naming what you verified exists. Publish state again. Only an explicit queue end or a recorded concrete blocker permits the session to stop.
 6. With findings: write one complete correction prompt containing every verified blocker found in the full review, dispatch the durable Claude runner using Sonnet/high, confirm its systemd unit or terminal runner result, publish state with `publish-state.mjs`, then stop. Do not wait or start another review.
 
 Claude only implements, tests, commits, and pushes. Its push emits `pull_request.synchronize`, which creates the next Hermes review session. Claude must not update workflow state, review, merge, or choose the next issue.
@@ -25,7 +25,7 @@ If Claude cannot start, lacks auth/quota, or dies, Brien takes over only after p
 
 Code revision count is diagnostic only. Findings never exhaust the loop: review, correct, and review again until the current OMXTerm change passes. Use `blocked` only for a concrete external condition that prevents code progress and cannot be recovered by Claude or Brien. Never stop because a revision count reached an arbitrary limit.
 
-A final message is not a workflow transition. Never report `Start issue #N`, `next issue #N`, or `queue continued` and then end without performing and verifying that action. A completed PR with `nextIssue` still has pending queue work.
+A final message is not a workflow transition. Never report `Start issue #N`, `next issue #N`, or `queue continued` and then end without recording `claim-continuation` and `complete-continuation --evidence "..."`. A completed PR whose `queue.continuation` is not `done` still has pending queue work.
 
 ## Workflow wakeup
 
@@ -36,8 +36,8 @@ For `workflow_wakeup`, reconcile instead of blindly reviewing:
 - runner stopped with partial work: inspect and resume safely;
 - runner stopped with commit but no push: validate and push;
 - Claude unavailable: record failed runner, take over, complete, test, commit, and push;
-- workflow completed with `nextIssue`: perform and verify the next durable queue step;
-- workflow completed with explicit queue end, or superseded: no-op.
+- workflow `completed` with `queue.continuation.status` `pending` or `claimed`: `claim-continuation`, perform the next durable queue step, then `complete-continuation --evidence "..."`;
+- workflow completed with explicit queue end (`queue.continuation` is `null`), or continuation already `done`: no-op.
 
 Use process manager identity and state, not PID alone. Do not delete a lock until its recorded runner is proven inactive.
 
