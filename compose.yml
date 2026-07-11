@@ -28,9 +28,19 @@ services:
     # (see compose.prod.yml and docs/deploy.md).
     restart: unless-stopped
     env_file: .env
+    # `environment:` here wins over `env_file:` for the same key (Compose
+    # precedence), so this pins the container's bind address regardless of what
+    # OMXTERM_SERVER_HOST is set to in .env. .env.example ships
+    # OMXTERM_SERVER_HOST=127.0.0.1 (the right default for local `npm run dev`,
+    # which runs the broker directly on the host), and a fresh clone's .env is
+    # typically copied straight from it — without this override, that value
+    # would leak into the container via env_file and make the broker bind its
+    # own loopback, unreachable from Docker's published port or an in-network
+    # proxy even though ports below still publish correctly.
+    environment:
+      OMXTERM_SERVER_HOST: "0.0.0.0"
     # Host side pinned to loopback so the broker is reachable only through a
     # reverse proxy you deliberately place in front of it, not on the LAN or the
-    # public internet. The container itself binds 0.0.0.0 (see Dockerfile) so
-    # Docker's published port and any in-network proxy can reach it.
+    # public internet.
     ports:
       - "127.0.0.1:3000:3000"

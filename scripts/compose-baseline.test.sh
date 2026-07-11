@@ -42,14 +42,18 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
-# Resolve configs in a throwaway project dir with an EMPTY .env so the checks
-# never depend on a real local .env — compose.yml's `env_file: .env` only needs
-# the file to exist, not to hold valid values. This mirrors a fresh clone.
+# Resolve configs in a throwaway project dir with .env copied straight from
+# .env.example — the exact starting point a fresh clone runs with (README's
+# `cp .env.example .env`). In particular .env.example ships
+# OMXTERM_SERVER_HOST=127.0.0.1 (the right default for local `npm run dev`),
+# so resolving against it, rather than an empty file, is what actually catches
+# that value leaking into the container and shadowing the Dockerfile's
+# OMXTERM_SERVER_HOST=0.0.0.0 bind.
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 cp "${REPO_ROOT}/compose.yml" "${WORK}/compose.yml"
 cp "${REPO_ROOT}/compose.prod.yml" "${WORK}/compose.prod.yml"
-: >"${WORK}/.env"
+cp "${REPO_ROOT}/.env.example" "${WORK}/.env"
 
 # Resolve the merged config for the given -f list, then assert the named contract
 # against it. Reports the compose error verbatim if resolution itself fails.
@@ -71,7 +75,7 @@ check_config() {
 
 echo "portable baseline (compose.yml alone)"
 check_config \
-  "fresh-clone config resolves; publishes only to loopback; no external network, pinned address, or global container_name" \
+  "fresh-clone config resolves against .env.example; publishes only to loopback; pins the container to OMXTERM_SERVER_HOST=0.0.0.0 despite .env.example's 127.0.0.1; no external network, pinned address, or global container_name" \
   baseline \
   -f "${WORK}/compose.yml"
 

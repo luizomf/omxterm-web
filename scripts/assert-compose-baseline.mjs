@@ -2,8 +2,9 @@
 // read from stdin (issue #96). The mode argument selects the contract:
 //
 //   baseline — the portable, safe-by-default descriptor (compose.yml alone):
-//              publishes only to loopback, needs no pre-created external network,
-//              and pins no fixed container address.
+//              publishes only to loopback, binds the container itself to every
+//              interface regardless of the host's OMXTERM_SERVER_HOST, needs no
+//              pre-created external network, and pins no fixed container address.
 //   prod     — the maintainer's production override (compose.yml + compose.prod.yml):
 //              still joins the broker to a Compose-created, stably-named shared
 //              network a separate-stack reverse proxy can attach to.
@@ -29,6 +30,7 @@ const networks = config.networks ?? {};
 
 if (mode === "baseline") {
   assertLoopbackOnlyPublish(broker);
+  assertContainerBindsAllInterfaces(broker);
   assertNoPreCreatedNetwork(networks);
   assertNoPinnedAddress(broker);
   assertNoGlobalContainerName(broker);
@@ -68,6 +70,24 @@ function assertLoopbackOnlyPublish(service) {
           "the safe-by-default baseline must bind published ports to loopback (e.g. 127.0.0.1)",
       );
     }
+  }
+}
+
+// .env.example ships OMXTERM_SERVER_HOST=127.0.0.1 — the right default for
+// local `npm run dev`, which runs the broker directly on the host — and a
+// fresh clone's .env is typically copied straight from it. compose.yml loads
+// that file via `env_file`, so without an explicit `environment:` override the
+// value would leak into the container and make the broker bind its own
+// loopback, unreachable from Docker's published port or an in-network proxy
+// even though the port mapping below still resolves correctly.
+function assertContainerBindsAllInterfaces(service) {
+  const boundHost = service.environment?.OMXTERM_SERVER_HOST;
+  if (boundHost !== "0.0.0.0") {
+    fail(
+      `omxterm resolves OMXTERM_SERVER_HOST to "${boundHost ?? "<unset>"}" inside the container; ` +
+        'the baseline must pin it to "0.0.0.0" via `environment:` so .env.example\'s ' +
+        "127.0.0.1 default (meant for local `npm run dev`) cannot shadow the container bind",
+    );
   }
 }
 
