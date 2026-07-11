@@ -319,6 +319,28 @@ test('passes only the SHA currently under review and exposes the next issue', ()
   });
 });
 
+test('records merge completion after a passed review', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    const completed = run(['complete', '--pr', '103', '--merge-sha', 'merge-sha'], '2026-07-11T21:00:00.000Z');
+    assert.equal(completed.command.outcome, 'completed');
+    assert.equal(completed.coordination.status, 'completed');
+    assert.equal(completed.coordination.next.owner, 'none');
+    assert.equal(completed.coordination.next.action, 'Queue is complete.');
+    assert.deepEqual(completed.merge, { sha: 'merge-sha', completedAt: '2026-07-11T21:00:00.000Z' });
+    assert.equal(run(['complete', '--pr', '103', '--merge-sha', 'merge-sha']).command.outcome, 'ignored_terminal');
+  });
+});
+
+test('refuses merge completion before review passes', () => {
+  withState(() => {
+    run(START);
+    assert.throws(() => run(['complete', '--pr', '103', '--merge-sha', 'merge-sha']), /requires status "passed"/);
+  });
+});
+
 test('records a guardian wakeup without changing workflow ownership', () => {
   withState(() => {
     run(START);

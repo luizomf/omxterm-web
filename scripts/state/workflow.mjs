@@ -6,7 +6,7 @@ import { homedir, hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_STATE_DIR = resolve(process.env.XDG_STATE_HOME || resolve(homedir(), '.local/state'), 'omxterm-agent/pr');
-const TERMINAL_STATUSES = new Set(['passed', 'failed', 'blocked', 'stopped']);
+const TERMINAL_STATUSES = new Set(['passed', 'completed', 'failed', 'blocked', 'stopped']);
 const RUNNER_STATUSES = new Set(['starting', 'running', 'succeeded', 'failed', 'abandoned']);
 const TERMINAL_RUNNER_STATUSES = new Set(['succeeded', 'failed', 'abandoned']);
 const ACTIVE_RUNNER_STATUSES = new Set(['starting', 'running']);
@@ -436,6 +436,32 @@ function passReview(options, path, now) {
   return commandOutcome(state, 'passed', reason);
 }
 
+function completeWorkflow(options, path, now) {
+  const state = readState(path);
+  if (state.coordination.status === 'completed') {
+    return commandOutcome(state, 'ignored_terminal', 'Workflow is already completed.');
+  }
+  if (state.coordination.status !== 'passed') {
+    fail(`Completing requires status "passed", found "${state.coordination.status}".`);
+  }
+  const mergeSha = requireOption(options, 'merge-sha');
+  const action = state.queue.nextIssue ? `Start issue #${state.queue.nextIssue}.` : 'Queue is complete.';
+  state.coordination = {
+    ...state.coordination,
+    status: 'completed',
+    worker: 'none',
+    expectedEvent: null,
+    next: { owner: state.queue.nextIssue ? 'brien' : 'none', action },
+  };
+  state.merge = { sha: mergeSha, completedAt: now };
+  state.lease = null;
+  state.wakeup.deadlineAt = null;
+  state.stop = { requested: true, reason: `Merged as ${mergeSha}.` };
+  appendHistory(state, { event: 'workflow_completed', status: 'completed', mergeSha, next: action }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'completed', `Workflow completed at merge ${mergeSha}.`);
+}
+
 function stop(options, path, now) {
   const state = readState(path);
   const previousStatus = state.coordination.status;
@@ -493,12 +519,13 @@ export function run(argv, now = new Date().toISOString()) {
     'confirm-runner-stop': confirmRunnerStop,
     takeover,
     pass: passReview,
+    complete: completeWorkflow,
     stop,
     wake: recordWakeup,
   };
   if (command === 'show') return readState(path);
   if (!operations[command]) {
-    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|stop|wake [--name value ...]');
+    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|stop|wake [--name value ...]');
   }
   return mutate(path, () => operations[command](options, path, now));
 }

@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-STATE_DIR = Path(os.environ.get("OMXTERM_AGENT_STATE_DIR", Path.home() / ".local/state/omxterm-agent/pr"))
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+STATE_DIR = Path(os.environ.get("OMXTERM_AGENT_STATE_DIR", STATE_HOME / "omxterm-agent/pr"))
 SUBSCRIPTIONS = Path.home() / ".hermes/webhook_subscriptions.json"
 WORKFLOW = Path(__file__).resolve().with_name("workflow.mjs")
 ROUTE = "omxterm-pr-review"

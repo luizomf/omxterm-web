@@ -56,6 +56,7 @@ function waitForRunner(pullRequest, runnerId) {
 
 function runnerEnvironment(options) {
   const environment = {
+    XDG_STATE_HOME: process.env.XDG_STATE_HOME,
     OMXTERM_AGENT_STATE_PATH: process.env.OMXTERM_AGENT_STATE_PATH,
     OMXTERM_AGENT_STATE_DIR: process.env.OMXTERM_AGENT_STATE_DIR,
     OMXTERM_CLAUDE_LOCK_PATH: process.env.OMXTERM_CLAUDE_LOCK_PATH,
@@ -79,11 +80,14 @@ function main() {
   let launched = false;
 
   try {
-    run([
+    const dispatch = run([
       'dispatch-fix', '--pr', pullRequest, '--sha', sha, '--worker', 'claude',
       '--runner-id', runnerId, '--deadline-at', required(options, 'deadline-at'),
       '--reason', required(options, 'reason'), '--next', 'Claude implements, tests, commits, and pushes. Await synchronize or guardian wakeup.',
     ]);
+    if (dispatch.command?.outcome !== 'dispatched' || dispatch.runner?.id !== runnerId) {
+      throw new Error(`Canonical dispatch refused runner ${runnerId}: ${dispatch.command?.outcome || 'unknown outcome'}.`);
+    }
     const result = spawnSync('systemd-run', [
       '--user', `--unit=${runnerId}`, '--collect', '--quiet',
       `--property=WorkingDirectory=${workdir}`,

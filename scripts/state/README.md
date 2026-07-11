@@ -65,6 +65,10 @@ node scripts/state/workflow.mjs show --pr 105
 # Conclude a verified review.
 node scripts/state/workflow.mjs pass \
   --pr 105 --sha def456 --reason "Full review passed."
+
+# Close canonical state after GitHub confirms the merge.
+node scripts/state/workflow.mjs complete \
+  --pr 105 --merge-sha fedcba
 ```
 
 `claim-review` returns an outcome instead of failing for expected concurrency:
@@ -169,6 +173,7 @@ projection. External state and its lock remain the coordination authority.
 ## Terminal states
 
 - `passed`: reviewed SHA is valid; merge and continue to `nextIssue`, or finish explicit queue end.
+- `completed`: GitHub confirmed the merge; this PR has no pending workflow action.
 - `failed`: bounded code attempts exhausted; follow `continueOnFailure` queue policy.
 - `blocked`: real external impossibility or corrupt state, not normal concurrency.
 - `stopped`: explicit operator stop.

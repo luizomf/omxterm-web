@@ -6,7 +6,7 @@ import { run } from './workflow.mjs';
 
 const COMMENT_MARKER = '<!-- agent-workflow-state -->';
 const RESPONSE_MARKER = '<!-- brien-webhook-response -->';
-const STATUS_STATES = { passed: 'success', failed: 'failure', blocked: 'error', stopped: 'error' };
+const STATUS_STATES = { passed: 'success', completed: 'success', failed: 'failure', blocked: 'error', stopped: 'error' };
 
 function ghApi(args, input) {
   const result = spawnSync('gh', ['api', ...args], { encoding: 'utf8', input: input ? `${JSON.stringify(input)}\n` : undefined });
@@ -52,7 +52,8 @@ function publishCommitStatus(state, owner, repository) {
 
 function publishStickyComment(state, owner, repository) {
   const viewer = ghApi(['user']);
-  const comments = ghApi([`repos/${owner}/${repository}/issues/${state.task.pullRequest}/comments?per_page=100`]);
+  const commentPages = ghApi([`repos/${owner}/${repository}/issues/${state.task.pullRequest}/comments?per_page=100`, '--paginate', '--slurp']);
+  const comments = commentPages.flat();
   const existing = comments.find((comment) => comment.user?.login === viewer.login && comment.body?.includes(COMMENT_MARKER));
   const endpoint = existing
     ? `repos/${owner}/${repository}/issues/comments/${existing.id}`

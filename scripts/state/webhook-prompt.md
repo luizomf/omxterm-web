@@ -16,7 +16,7 @@ For `opened`, `ready_for_review`, `reopened`, or `synchronize`:
 2. Claim exact remote SHA with `claim-review`. `ignored_duplicate`, `ignored_worker_active`, and `ignored_terminal` mean clean no-op; do not mark blocked.
 3. Review read-only. Run real tests, typecheck, build, and `git diff --check` as required by the repository.
 4. Revalidate remote SHA before publishing.
-5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, then start `nextIssue` or finish explicit queue end.
+5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, record `complete --merge-sha <sha>`, publish completed state, then start `nextIssue` or finish explicit queue end.
 6. With findings: write a complete correction prompt outside Git, dispatch the durable Claude runner using Sonnet/high, confirm its systemd unit or terminal runner result, publish state with `publish-state.mjs`, then stop. Do not wait or start another review.
 
 Claude only implements, tests, commits, and pushes. Its push emits `pull_request.synchronize`, which creates the next Hermes review session. Claude must not update workflow state, review, merge, or choose the next issue.
