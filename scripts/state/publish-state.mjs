@@ -23,7 +23,7 @@ function commentBody(state) {
     '## Agent workflow state',
     '',
     `- Phase: **${state.coordination.status}**`,
-    `- Code attempt: **${state.coordination.codeAttempt}/${state.coordination.maxCodeAttempts}**`,
+    `- Code revisions: **${state.coordination.codeAttempt}**`,
     `- Worker: **${state.coordination.worker}**`,
     `- Head SHA: \`${state.coordination.headSha}\``,
     `- Runner: **${runner}**`,
@@ -39,7 +39,7 @@ function commentBody(state) {
 
 function publishCommitStatus(state, owner, repository) {
   const status = STATUS_STATES[state.coordination.status] || 'pending';
-  const description = `${state.coordination.status} · attempt ${state.coordination.codeAttempt}/${state.coordination.maxCodeAttempts} · worker ${state.coordination.worker}`.slice(0, 140);
+  const description = `${state.coordination.status} · revisions ${state.coordination.codeAttempt} · worker ${state.coordination.worker}`.slice(0, 140);
   return ghApi([
     `repos/${owner}/${repository}/statuses/${state.coordination.headSha}`,
     '-X', 'POST', '--input', '-',
