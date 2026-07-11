@@ -71,9 +71,28 @@ node scripts/state/workflow.mjs pass \
 
 - `ignored_duplicate`: same SHA already under review;
 - `ignored_worker_active`: correction still owns the same SHA;
-- `ignored_terminal`: workflow already finished.
+- `ignored_terminal`: workflow already finished;
+- `ignored_runner_stop_pending`: a newer SHA superseded the recorded runner, but its
+  systemd unit is not yet confirmed inactive. Run `confirm-runner-stop` first.
 
 These are no-op outcomes, never blockers.
+
+A newer SHA (via `ingest`, or discovered directly by Brien during `claim-review`) marks
+a `starting`/`running` runner `abandoned` immediately, but that only updates JSON — the
+systemd unit it names may still be executing Claude. The runner's `stopConfirmed` field
+stays `false` until proven otherwise, and `claim-review` refuses every further claim for
+that PR while it is `false`. Nothing else can clear it:
+
+```bash
+# After confirming via `systemctl --user is-active <runner-id>` (never a raw PID) that
+# the unit is inactive, failed, or no longer exists.
+node scripts/state/workflow.mjs confirm-runner-stop \
+  --pr 105 --runner-id omxterm-pr-105-a1 --unit-status inactive \
+  --reason "systemctl --user is-active reported inactive."
+```
+
+`--unit-status` only accepts `inactive`, `failed`, or `not-found`; any other value is
+rejected so this command cannot be satisfied by an active or activating unit.
 
 ## Claude runner
 
@@ -109,7 +128,10 @@ On `workflow_wakeup`, Brien reconciles evidence in this order:
 2. Read workflow state.
 3. Inspect the recorded systemd unit and runner log; never trust PID alone.
 4. If runner is alive, renew the deadline and stop.
-5. If SHA changed, treat the webhook as missed and review the remote SHA.
+5. If SHA changed, treat the webhook as missed and review the remote SHA. If a runner was
+   superseded (`stopConfirmed: false`), `claim-review` refuses every claim for this PR
+   until `systemctl --user stop <runner-id>` is issued and its unit is confirmed inactive
+   with `workflow.mjs confirm-runner-stop`.
 6. If Claude died, inspect worktree, commit, push state, and log.
 7. Recover partial work or take over with `workflow.mjs takeover` only after proving Claude stopped.
 8. If everything already completed, do nothing.

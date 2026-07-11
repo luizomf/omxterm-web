@@ -9,6 +9,10 @@ const DEFAULT_STATE_DIR = resolve(process.env.XDG_STATE_HOME || resolve(homedir(
 const TERMINAL_STATUSES = new Set(['passed', 'failed', 'blocked', 'stopped']);
 const RUNNER_STATUSES = new Set(['starting', 'running', 'succeeded', 'failed', 'abandoned']);
 const TERMINAL_RUNNER_STATUSES = new Set(['succeeded', 'failed', 'abandoned']);
+const ACTIVE_RUNNER_STATUSES = new Set(['starting', 'running']);
+// systemd never reports "active" or "activating" for a unit that has actually stopped, so
+// restricting this set is what keeps confirm-runner-stop from being satisfied by a lie.
+const CONFIRMED_INACTIVE_UNIT_STATUSES = new Set(['inactive', 'failed', 'not-found']);
 
 function fail(message) {
   throw new Error(message);
@@ -119,6 +123,16 @@ function commandOutcome(state, outcome, reason) {
   return { ...state, command: { outcome, reason } };
 }
 
+// Marking a runner "abandoned" here only updates JSON; the systemd unit it names may
+// still be alive (mid `systemd-run`, or Claude actively executing inside claude-runner.mjs).
+// stopConfirmed stays false until confirm-runner-stop proves the unit is inactive, and
+// claim-review refuses to hand the workflow to a new reviewer/implementer until then.
+function supersedeActiveRunner(state, now, reason) {
+  if (!state.runner || !ACTIVE_RUNNER_STATUSES.has(state.runner.status)) return false;
+  state.runner = { ...state.runner, status: 'abandoned', stopConfirmed: false, updatedAt: now, reason };
+  return true;
+}
+
 function queueFrom(options) {
   const nextIssue = optionalNumber(options, 'next-issue');
   const end = optionalBoolean(options, 'queue-end');
@@ -194,9 +208,7 @@ function ingestEvent(options, path, now) {
     return commandOutcome(state, 'ignored_duplicate', `SHA ${sha} is already known in status ${currentStatus}.`);
   }
 
-  if (state.runner && ['starting', 'running'].includes(state.runner.status)) {
-    state.runner = { ...state.runner, status: 'abandoned', updatedAt: now, reason: 'Superseded by a newer GitHub SHA.' };
-  }
+  const supersededRunner = supersedeActiveRunner(state, now, 'Superseded by a newer GitHub SHA.');
   state.coordination = {
     ...state.coordination,
     status: 'queued',
@@ -204,12 +216,14 @@ function ingestEvent(options, path, now) {
     worker: 'webhook',
     headSha: sha,
     expectedEvent: 'pull_request',
-    next: { owner: 'brien', action: `Claim and review SHA ${sha}.` },
+    next: supersededRunner
+      ? { owner: 'brien', action: `Stop and confirm runner ${state.runner.id} inactive, then claim SHA ${sha}.` }
+      : { owner: 'brien', action: `Claim and review SHA ${sha}.` },
   };
   state.lease = null;
   state.wakeup = { deadlineAt, lastTriggeredAt: null };
   state.stop = { requested: false, reason: null };
-  appendHistory(state, { event: 'github_event_ingested', from: currentStatus, status: 'queued', sha, action: options.action || null }, now);
+  appendHistory(state, { event: 'github_event_ingested', from: currentStatus, status: 'queued', sha, action: options.action || null, runnerSuperseded: supersededRunner }, now);
   writeState(path, state);
   return commandOutcome(state, 'event_queued', `Queued new SHA ${sha}.`);
 }
@@ -229,6 +243,28 @@ function claimReview(options, path, now) {
   }
   if (!['queued', 'reviewing', 'fixing'].includes(status)) {
     fail(`Cannot claim a review from status "${status}".`);
+  }
+  if (state.runner?.stopConfirmed === false) {
+    return commandOutcome(state, 'ignored_runner_stop_pending', `Runner ${state.runner.id} stop is not yet confirmed inactive; run confirm-runner-stop before claiming SHA ${sha}.`);
+  }
+  // Brien can discover a newer SHA directly (recovery step: "treat the webhook as missed")
+  // without an `ingest` call ever running. Mirror ingestEvent's supersede-and-requeue
+  // transition here, including moving status out of "fixing" so takeover's own guard
+  // (which only inspects runner.status, already flipped to "abandoned" below) cannot be
+  // used to bypass this block while the runner's systemd unit is still unconfirmed.
+  if (state.coordination.headSha !== sha && supersedeActiveRunner(state, now, 'Superseded by a newer GitHub SHA observed during claim-review.')) {
+    state.coordination = {
+      ...state.coordination,
+      status: 'queued',
+      worker: 'webhook',
+      headSha: sha,
+      expectedEvent: 'pull_request',
+      next: { owner: 'brien', action: `Stop and confirm runner ${state.runner.id} inactive, then claim SHA ${sha}.` },
+    };
+    state.lease = null;
+    appendHistory(state, { event: 'runner_superseded_pending_stop', runnerId: state.runner.id, sha }, now);
+    writeState(path, state);
+    return commandOutcome(state, 'ignored_runner_stop_pending', `Runner ${state.runner.id} may still be running SHA ${state.runner.baseSha}; stop and confirm it inactive before claiming SHA ${sha}.`);
   }
 
   const worker = requireOption(options, 'worker');
@@ -324,6 +360,29 @@ function updateRunner(options, path, now) {
   appendHistory(state, { event: 'runner_updated', runnerId, status, reason: options.reason || null }, now);
   writeState(path, state);
   return commandOutcome(state, 'runner_updated', `${runnerId} is ${status}.`);
+}
+
+// The caller must have already inspected the named systemd unit (never a raw PID) and
+// pass what it observed. This is the only way stopConfirmed can flip back to true, which
+// is what unblocks claim-review for the SHA that superseded this runner.
+function confirmRunnerStop(options, path, now) {
+  const state = readState(path);
+  const runnerId = requireOption(options, 'runner-id');
+  if (!state.runner || state.runner.id !== runnerId) {
+    return commandOutcome(state, 'ignored_stale_runner', `Runner ${runnerId} no longer owns this workflow.`);
+  }
+  if (state.runner.stopConfirmed !== false) {
+    return commandOutcome(state, 'ignored_already_confirmed', `Runner ${runnerId} stop is already confirmed.`);
+  }
+  const unitStatus = requireOption(options, 'unit-status');
+  if (!CONFIRMED_INACTIVE_UNIT_STATUSES.has(unitStatus)) {
+    fail(`--unit-status must confirm the systemd unit is inactive (one of ${[...CONFIRMED_INACTIVE_UNIT_STATUSES].join(', ')}), received "${unitStatus}".`);
+  }
+  const reason = requireOption(options, 'reason');
+  state.runner = { ...state.runner, stopConfirmed: true, stopConfirmedAt: now, stopUnitStatus: unitStatus };
+  appendHistory(state, { event: 'runner_stop_confirmed', runnerId, unitStatus, reason }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'runner_stop_confirmed', `Runner ${runnerId} confirmed inactive (${unitStatus}).`);
 }
 
 function takeover(options, path, now) {
@@ -431,6 +490,7 @@ export function run(argv, now = new Date().toISOString()) {
     'claim-review': claimReview,
     'dispatch-fix': dispatchFix,
     runner: updateRunner,
+    'confirm-runner-stop': confirmRunnerStop,
     takeover,
     pass: passReview,
     stop,
@@ -438,7 +498,7 @@ export function run(argv, now = new Date().toISOString()) {
   };
   if (command === 'show') return readState(path);
   if (!operations[command]) {
-    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|takeover|pass|stop|wake [--name value ...]');
+    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|stop|wake [--name value ...]');
   }
   return mutate(path, () => operations[command](options, path, now));
 }

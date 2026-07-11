@@ -173,7 +173,7 @@ test('lets Brien recover a failed Claude run without consuming another code atte
   });
 });
 
-test('claims a new SHA after the correction push', () => {
+test('claims a new SHA once the runner that owned the previous SHA already reported terminal', () => {
   withState(() => {
     run(START);
     run(CLAIM);
@@ -182,6 +182,7 @@ test('claims a new SHA after the correction push', () => {
       '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
       '--reason', 'Review blocker.', '--next', 'Implement.',
     ]);
+    run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'succeeded']);
     const review = run([
       'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
       '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
@@ -189,6 +190,118 @@ test('claims a new SHA after the correction push', () => {
     assert.equal(review.command.outcome, 'claimed');
     assert.equal(review.coordination.status, 'reviewing');
     assert.equal(review.coordination.headSha, 'sha-b');
+  });
+});
+
+test('blocks claiming a newer SHA while the previous runner is still starting or running', () => {
+  withState(() => {
+    for (const runnerStatus of ['starting', 'running']) {
+      run(START);
+      run(CLAIM);
+      run([
+        'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+        '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
+        '--reason', 'Review blocker.', '--next', 'Implement.',
+      ]);
+      if (runnerStatus === 'running') {
+        run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'running']);
+      }
+
+      const blocked = run([
+        'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+        '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+      ]);
+      assert.equal(blocked.command.outcome, 'ignored_runner_stop_pending', runnerStatus);
+      assert.equal(blocked.runner.status, 'abandoned', runnerStatus);
+      assert.equal(blocked.runner.stopConfirmed, false, runnerStatus);
+      // The runner id must still be claimable by the still-running Claude subprocess: proves
+      // this path never lets an implementer keep going while a new SHA is under review.
+      const staleSelfReport = run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'succeeded']);
+      assert.equal(staleSelfReport.command.outcome, 'ignored_superseded_runner', runnerStatus);
+
+      const retriedWhileUnconfirmed = run([
+        'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+        '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+      ]);
+      assert.equal(retriedWhileUnconfirmed.command.outcome, 'ignored_runner_stop_pending', runnerStatus);
+
+      assert.throws(
+        () => run(['takeover', '--pr', '103', '--worker', 'brien', '--reason', 'Stale.', '--next', 'Resume.', '--deadline-at', '2026-07-11T20:00:00.000Z']),
+        /Cannot|requires status/,
+        runnerStatus,
+      );
+
+      run(['confirm-runner-stop', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--unit-status', 'inactive', '--reason', 'systemctl confirmed inactive.']);
+      const unblocked = run([
+        'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+        '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+      ]);
+      assert.equal(unblocked.command.outcome, 'claimed', runnerStatus);
+      assert.equal(unblocked.coordination.headSha, 'sha-b', runnerStatus);
+
+      run(['pass', '--pr', '103', '--sha', 'sha-b', '--reason', 'cleanup']);
+    }
+  });
+});
+
+test('blocks a newer SHA delivered through ingest until the abandoned runner is confirmed stopped', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run([
+      'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+      '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
+      '--reason', 'Review blocker.', '--next', 'Implement.',
+    ]);
+    run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'running']);
+    const ingested = run([
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+    assert.equal(ingested.runner.stopConfirmed, false);
+    assert.match(ingested.coordination.next.action, /Stop and confirm runner/);
+
+    const blocked = run([
+      'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+      '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+    assert.equal(blocked.command.outcome, 'ignored_runner_stop_pending');
+
+    run(['confirm-runner-stop', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--unit-status', 'inactive', '--reason', 'systemctl confirmed inactive.']);
+    const claimed = run([
+      'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+      '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+    assert.equal(claimed.command.outcome, 'claimed');
+  });
+});
+
+test('confirm-runner-stop requires the recorded runner id and a systemd-derived inactive status', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run([
+      'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+      '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
+      '--reason', 'Review blocker.', '--next', 'Implement.',
+    ]);
+    run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'running']);
+    run(['ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize', '--deadline-at', '2026-07-11T20:00:00.000Z']);
+
+    const staleId = run(['confirm-runner-stop', '--pr', '103', '--runner-id', 'wrong-id', '--unit-status', 'inactive', '--reason', 'x']);
+    assert.equal(staleId.command.outcome, 'ignored_stale_runner');
+
+    assert.throws(
+      () => run(['confirm-runner-stop', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--unit-status', 'active', '--reason', 'x']),
+      /must confirm the systemd unit is inactive/,
+    );
+
+    const confirmed = run(['confirm-runner-stop', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--unit-status', 'inactive', '--reason', 'systemctl confirmed inactive.']);
+    assert.equal(confirmed.command.outcome, 'runner_stop_confirmed');
+    assert.equal(confirmed.runner.stopConfirmed, true);
+
+    const alreadyConfirmed = run(['confirm-runner-stop', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--unit-status', 'inactive', '--reason', 'x']);
+    assert.equal(alreadyConfirmed.command.outcome, 'ignored_already_confirmed');
   });
 });
 
