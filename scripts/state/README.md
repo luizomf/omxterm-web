@@ -99,6 +99,8 @@ Prompt content is supplied on stdin. A transient user systemd unit keeps Claude 
 
 Brien must confirm either the systemd unit is active or the runner already recorded a terminal result. It then ends the session. It must never start a second model while the first runner may still be alive.
 
+`claude-runner.mjs` claims `running` before it executes Claude. If a newer SHA or a takeover already retired that runner id (`succeeded`, `failed`, or `abandoned`), `runner` returns the no-op outcome `ignored_superseded_runner` instead of reviving it, and `claude-runner.mjs` refuses to execute Claude at all.
+
 ## Recovery
 
 On `workflow_wakeup`, Brien reconciles evidence in this order:

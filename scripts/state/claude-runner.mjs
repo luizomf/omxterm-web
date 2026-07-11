@@ -43,7 +43,14 @@ function main() {
   const logPath = resolve(options['log-file'] || resolve(STATE_HOME, 'runners', `${runnerId}.log`));
   mkdirSync(dirname(logPath), { recursive: true });
 
-  run(['runner', '--pr', pullRequest, '--runner-id', runnerId, '--status', 'running']);
+  const claim = run(['runner', '--pr', pullRequest, '--runner-id', runnerId, '--status', 'running']);
+  if (claim.command.outcome !== 'runner_updated') {
+    // The workflow already moved on (newer SHA ingested, or a takeover) while this
+    // unit was still starting. Executing Claude here would run a stale correction
+    // prompt against a checkout the workflow no longer owns.
+    releaseGlobalLock(lockPath, runnerId);
+    throw new Error(`Refusing to run Claude: ${claim.command.reason}`);
+  }
   const log = openSync(logPath, 'a', 0o600);
   let result;
   let executionError = null;

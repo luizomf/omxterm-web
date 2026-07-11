@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const DEFAULT_STATE_DIR = resolve(process.env.XDG_STATE_HOME || resolve(homedir(), '.local/state'), 'omxterm-agent/pr');
 const TERMINAL_STATUSES = new Set(['passed', 'failed', 'blocked', 'stopped']);
 const RUNNER_STATUSES = new Set(['starting', 'running', 'succeeded', 'failed', 'abandoned']);
+const TERMINAL_RUNNER_STATUSES = new Set(['succeeded', 'failed', 'abandoned']);
 
 function fail(message) {
   throw new Error(message);
@@ -306,6 +307,12 @@ function updateRunner(options, path, now) {
   const runnerId = requireOption(options, 'runner-id');
   if (!state.runner || state.runner.id !== runnerId) {
     return commandOutcome(state, 'ignored_stale_runner', `Runner ${runnerId} no longer owns this workflow.`);
+  }
+  // A newer SHA (ingest) or a takeover already retired this runner id; a late status
+  // report from that same id must not revive it, or a stale unit could execute Claude
+  // against work that no longer matches the current head SHA.
+  if (TERMINAL_RUNNER_STATUSES.has(state.runner.status)) {
+    return commandOutcome(state, 'ignored_superseded_runner', `Runner ${runnerId} is already ${state.runner.status} and cannot transition further.`);
   }
   const status = requireOption(options, 'status');
   if (!RUNNER_STATUSES.has(status)) fail(`Unknown runner status "${status}".`);

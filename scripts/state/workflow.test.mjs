@@ -127,6 +127,32 @@ test('does not let Brien take over while Claude may still be running', () => {
   });
 });
 
+test('refuses to revive a runner abandoned by a newer SHA before it reported running', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run([
+      'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+      '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
+      '--reason', 'Review blocker.', '--next', 'Implement.',
+    ]);
+    const superseded = run([
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+    assert.equal(superseded.runner.status, 'abandoned');
+
+    const revived = run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'running']);
+    assert.equal(revived.command.outcome, 'ignored_superseded_runner');
+    assert.equal(revived.runner.status, 'abandoned');
+
+    const stillAbandoned = run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'succeeded']);
+    assert.equal(stillAbandoned.command.outcome, 'ignored_superseded_runner');
+    assert.equal(stillAbandoned.runner.status, 'abandoned');
+    assert.equal(run(['show', '--pr', '103']).coordination.headSha, 'sha-b');
+  });
+});
+
 test('lets Brien recover a failed Claude run without consuming another code attempt', () => {
   withState(() => {
     run(START);

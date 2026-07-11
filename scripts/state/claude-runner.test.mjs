@@ -74,6 +74,54 @@ test('runs Claude with Sonnet/high, passes prompt on stdin, and records success'
   }
 });
 
+test('refuses to run Claude when the runner was superseded before it claimed running', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'omxterm-claude-runner-superseded-'));
+  const statePath = join(directory, '103.json');
+  const promptPath = join(directory, 'prompt.md');
+  const capturePath = join(directory, 'capture.json');
+  const fakeClaude = join(directory, 'claude');
+  const lockPath = join(directory, 'claude.lock');
+  const logPath = join(directory, 'runner.log');
+  try {
+    prepareState(statePath);
+    process.env.OMXTERM_AGENT_STATE_PATH = statePath;
+    run([
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T21:00:00.000Z',
+    ]);
+    delete process.env.OMXTERM_AGENT_STATE_PATH;
+
+    writeFileSync(promptPath, 'Fix the verified blocker.');
+    writeFileSync(fakeClaude, `#!/usr/bin/env node\nimport { writeFileSync } from 'node:fs';\nlet input='';process.stdin.on('data',d=>input+=d).on('end',()=>writeFileSync(process.env.CAPTURE_PATH,JSON.stringify({args:process.argv.slice(2),input})));\n`);
+    chmodSync(fakeClaude, 0o700);
+    writeFileSync(lockPath, 'runner-test\n');
+
+    const result = spawnSync(process.execPath, [
+      RUNNER, '--pr', '103', '--runner-id', 'runner-test', '--prompt-file', promptPath,
+      '--workdir', directory, '--log-file', logPath,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        OMXTERM_AGENT_STATE_PATH: statePath,
+        OMXTERM_CLAUDE_PATH: fakeClaude,
+        OMXTERM_CLAUDE_LOCK_PATH: lockPath,
+        CAPTURE_PATH: capturePath,
+      },
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Refusing to run Claude/);
+    assert.throws(() => readFileSync(capturePath), /ENOENT/);
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.equal(state.runner.status, 'abandoned');
+    assert.equal(state.coordination.headSha, 'sha-b');
+    assert.throws(() => readFileSync(lockPath), /ENOENT/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('records runner failure and releases its lock when prompt loading fails', () => {
   const directory = mkdtempSync(join(tmpdir(), 'omxterm-claude-runner-failure-'));
   const statePath = join(directory, '103.json');
