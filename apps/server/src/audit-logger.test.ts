@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   AuditSinkError,
   createFileAuditSink,
+  createStdoutAuditSink,
   JsonlAuditLogger,
   type AuditFileSystem,
+  type AuditWritableStream,
 } from "./audit-logger";
 
 // A fake file system that records calls so the "create the directory once, not
@@ -135,6 +137,98 @@ describe("JsonlAuditLogger runtime failure containment", () => {
     // The sink is attempted exactly once; reporting never loops back into it.
     expect(sinkCalls).toBe(1);
     expect(reporterCalls).toBe(1);
+  });
+});
+
+// A stdout-like async Writable whose buffer can be marked full so write()
+// returns false, exercising the sink's drop-while-congested backpressure without
+// monkeypatching the real process.stdout.
+class FakeCongestibleStream implements AuditWritableStream {
+  writes: string[] = [];
+  bufferFull = false;
+  #drainListeners: Array<() => void> = [];
+
+  write(chunk: string): boolean {
+    this.writes.push(chunk);
+    // When the buffer is full the chunk is still accepted, but Node signals
+    // backpressure by returning false.
+    return !this.bufferFull;
+  }
+
+  once(_event: "drain", listener: () => void): void {
+    this.#drainListeners.push(listener);
+  }
+
+  emitDrain(): void {
+    const listeners = this.#drainListeners;
+    this.#drainListeners = [];
+    for (const listener of listeners) listener();
+  }
+}
+
+describe("createStdoutAuditSink backpressure", () => {
+  test("writes straight through while the stream drains normally", () => {
+    const stream = new FakeCongestibleStream();
+    const sink = createStdoutAuditSink(stream);
+
+    sink('{"event":"a"}\n');
+    sink('{"event":"b"}\n');
+
+    expect(stream.writes).toEqual(['{"event":"a"}\n', '{"event":"b"}\n']);
+  });
+
+  test("drops events while congested instead of growing the buffer, then recovers on drain", () => {
+    const stream = new FakeCongestibleStream();
+    const sink = createStdoutAuditSink(stream);
+
+    // The stream signals backpressure: this chunk is accepted but write() is false.
+    stream.bufferFull = true;
+    sink('{"event":"congests"}\n');
+    expect(stream.writes).toEqual(['{"event":"congests"}\n']);
+
+    // While congested, further events are dropped and never reach the stream, so
+    // the internal buffer cannot grow without bound.
+    expect(() => sink('{"event":"dropped-1"}\n')).toThrow(AuditSinkError);
+    expect(() => sink('{"event":"dropped-2"}\n')).toThrow(AuditSinkError);
+    expect(stream.writes).toEqual(['{"event":"congests"}\n']);
+
+    // Once the consumer catches up the stream drains and writes resume.
+    stream.bufferFull = false;
+    stream.emitDrain();
+    sink('{"event":"after-drain"}\n');
+    expect(stream.writes).toEqual([
+      '{"event":"congests"}\n',
+      '{"event":"after-drain"}\n',
+    ]);
+  });
+
+  test("surfaces congestion drops once per streak via JsonlAuditLogger, without recursion or a storm", () => {
+    const stream = new FakeCongestibleStream();
+    const reported: string[] = [];
+    const logger = new JsonlAuditLogger(createStdoutAuditSink(stream), (event) =>
+      reported.push(event),
+    );
+
+    stream.bufferFull = true;
+    // The first event is written (write() === false only marks the onset of
+    // congestion; the chunk itself was accepted), so nothing is reported yet.
+    logger.write({ event: "session_started", severity: "info" });
+    expect(reported).toEqual([]);
+    // Subsequent events are dropped; only the onset of the streak is reported.
+    logger.write({ event: "resize", severity: "info" });
+    logger.write({ event: "resize", severity: "info" });
+    expect(reported).toEqual(["resize"]);
+    // Exactly one line reached the stream — congested drops never buffer.
+    expect(stream.writes).toHaveLength(1);
+
+    // A fresh outage after drain reports again, so drops are never silent.
+    stream.bufferFull = false;
+    stream.emitDrain();
+    logger.write({ event: "session_ended", severity: "info" });
+    stream.bufferFull = true;
+    logger.write({ event: "terminal_flood", severity: "warn" });
+    logger.write({ event: "terminal_flood", severity: "warn" });
+    expect(reported).toEqual(["resize", "terminal_flood"]);
   });
 });
 

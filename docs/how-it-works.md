@@ -108,7 +108,9 @@ The broker refuses to start with a weak gate. `loadConfig`
   startup**, failing fast with a useful boot error if it cannot. When unset,
   audit events go to stdout. After boot, a sink write that fails (e.g. the disk
   fills) is contained — it is reported once to stderr and never escapes a
-  request/upgrade/WebSocket/SSH handler.
+  request/upgrade/WebSocket/SSH handler. The stdout sink additionally drops
+  events while it is under backpressure (rather than buffering without bound),
+  reporting the onset once; see the audit-log section below.
 - `OMXTERM_WEB_ROOT` — optional path to the built web SPA. When set, the broker
   serves the SPA itself (single origin); unset in dev, where Vite serves it.
 
@@ -334,10 +336,20 @@ much. Treat the audit log as sensitive operational data: protect it like any
 server log and review it before sharing outside the operators, rather than
 assuming it is automatically public-safe.
 
-The sink is deliberately simple for the MVP: synchronous append with no
-in-memory queue, so it applies natural backpressure and cannot be amplified into
-unbounded memory (the inbound guard above already caps event frequency). A
-durable or async audit pipeline and full log rotation are out of scope.
+The sink is deliberately simple for the MVP, and its two backends stay bounded
+in different ways — neither keeps an in-memory queue that can grow without limit.
+The **file sink** (`OMXTERM_AUDIT_LOG`) appends **synchronously**, so the OS
+write buffer paces the writer (natural backpressure) and there is nothing to
+accumulate. **stdout** (the default) is an **asynchronous** stream, so it has no
+such natural bound: when its buffer fills, `write()` returns `false` and further
+writes would keep buffering unboundedly. The stdout sink therefore switches to
+**dropping audit events while congested** and resumes on the next `drain`. The
+onset of a drop streak is reported once to stderr (never through the sink
+itself), so lost lines are visible and never silently pretended successful. The
+inbound guard above already caps terminal-event frequency, but not every audit
+call site (e.g. access rejections), so this drop policy is what keeps stdout from
+being amplified into unbounded memory. A durable or async audit pipeline and full
+log rotation are out of scope.
 
 ---
 

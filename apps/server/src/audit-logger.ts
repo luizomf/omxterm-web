@@ -86,9 +86,45 @@ export function createFileAuditSink(
   };
 }
 
-export function createStdoutAuditSink(): AuditSink {
+// The subset of a Node Writable stream the stdout sink needs, injected so the
+// backpressure/drain contract is testable without monkeypatching the global
+// process.stdout (#79).
+export type AuditWritableStream = {
+  write(chunk: string): boolean;
+  once(event: 'drain', listener: () => void): void;
+};
+
+// stdout is an ASYNCHRONOUS Writable, unlike the synchronous file sink: when
+// write() returns false the chunk was accepted but the internal buffer is over
+// its highWaterMark, and every further write() keeps growing that buffer with no
+// bound. Not every audit call site is frequency-capped by the inbound guard
+// (#77) — request/access-rejection paths are not — so a stalled stdout (piped
+// into a slow or blocked reader) could accumulate unbounded memory. To stay
+// bounded we stop feeding the buffer while congested: the write() === false
+// chunk is the last one handed off, then subsequent events are DROPPED (each
+// surfaced by throwing, so JsonlAuditLogger contains it and reports once per
+// streak) until the stream emits 'drain'. This trades a bounded window of lost
+// audit lines for a hard memory bound — the right call for an MVP whose audit
+// sink must never become an amplification vector.
+export function createStdoutAuditSink(
+  stream: AuditWritableStream = process.stdout,
+): AuditSink {
+  let congested = false;
   return (line) => {
-    process.stdout.write(line);
+    if (congested) {
+      throw new AuditSinkError(
+        'stdout audit sink is congested (backpressure); dropped an audit event until drain.',
+      );
+    }
+    const flushed = stream.write(line);
+    if (!flushed) {
+      // Only one 'drain' listener per streak: while congested we never call
+      // write() again, so this registers exactly once until it fires.
+      congested = true;
+      stream.once('drain', () => {
+        congested = false;
+      });
+    }
   };
 }
 
