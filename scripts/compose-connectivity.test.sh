@@ -10,6 +10,12 @@
 # exposes that seam, so the documented connectivity path cannot quietly become
 # impossible.
 #
+# It also guards the bootstrap ordering: the fresh-install runbook runs
+# `docker compose create` to create the omxterm-edge network, reads its subnet
+# into OMXTERM_TRUST_PROXY, and only then starts the broker. That works only while
+# Compose itself creates the network — an `external: true` network would have to be
+# pre-created out of band, so the create-then-inspect step would find nothing.
+#
 # Skips (does not fail) when the docker CLI is unavailable, so the gate stays
 # green in docker-less environments.
 #
@@ -52,7 +58,17 @@ printf '%s' "${config_json}" | node -e '
     process.exit(1);
   }
   for (const key of attached) {
-    const resolvedName = ((cfg.networks || {})[key] || {}).name;
+    const network = (cfg.networks || {})[key] || {};
+    const resolvedName = network.name;
+    // An external network is created out of band, not by `docker compose create`,
+    // so the runbook could not inspect its subnet before starting the broker.
+    if (network.external) {
+      console.error(
+        `  FAIL: omxterm network "${key}" is declared external; Compose would not create it, ` +
+        "so `docker compose create` + `docker network inspect omxterm-edge` could not bootstrap its subnet",
+      );
+      process.exit(1);
+    }
     const isStableShared =
       key !== "default" &&
       typeof resolvedName === "string" &&
@@ -66,7 +82,7 @@ printf '%s' "${config_json}" | node -e '
       process.exit(1);
     }
   }
-  console.log("  ok: omxterm exposes a stably-named shared network for the reverse proxy");
+  console.log("  ok: omxterm exposes a Compose-created, stably-named shared network for the reverse proxy");
 '
 status=$?
 

@@ -99,12 +99,12 @@ ENV
 - `OMXTERM_ACCESS_TOKEN` — generate one: `openssl rand -base64 32`.
 - `OMXTERM_TRUST_PROXY` — the subnet of the network the proxy reaches the broker
   over (`omxterm-edge`), so `request.ip` is the real client and HTTPS is detected
-  from `X-Forwarded-Proto`. Prefer the subnet over a blanket `true`. Read it after
-  `docker compose up` (step 3) has created the network:
-
-  ```bash
-  docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
-  ```
+  from `X-Forwarded-Proto`. Prefer the subnet over a blanket `true`. That network
+  does not exist yet, so leave the `__DOCKER_NETWORK_SUBNET__` placeholder here and
+  fill it in step 3, once Compose has created the network. The broker is not
+  started until then, so it never runs with the placeholder — and it could not
+  anyway: Fastify refuses to boot on an invalid trust address, so there is no
+  "start now, fix later" shortcut.
 
 - `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist (default-deny SSRF guard).
   Set it to the range(s) of hosts the broker is allowed to SSH into — for
@@ -118,18 +118,37 @@ ENV
 > bind is non-loopback — that's the guard against shipping auth cookies in the
 > clear.
 
-## 3. Build and start
+## 3. Create the network, finish `.env`, then start
+
+`OMXTERM_TRUST_PROXY` needs the `omxterm-edge` subnet, which only exists once
+Compose has created the network. So build and create the container **without
+starting it** — this creates the network too, but leaves the broker in the
+`Created` state, so it never boots with the step-2 placeholder:
 
 ```bash
 cd /opt/omxterm
-docker compose up -d --build
+docker compose create --build   # builds the image, creates the omxterm-edge network + container; does NOT start the broker
+```
+
+Read the subnet Compose assigned and write it into `.env`, replacing
+`__DOCKER_NETWORK_SUBNET__`:
+
+```bash
+docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
+```
+
+Now start the broker. Editing `.env` changes the resolved service config, so
+`up` recreates the container with the finished trust setting before starting it:
+
+```bash
+docker compose up -d
 docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
-`docker compose up` creates the `omxterm-edge` network (a stable name, so the
-attach command below is reliable) and joins the broker to it. A reverse proxy
-running in its own stack is not on that network yet — attach it once so it can
-resolve the broker by name:
+Compose created the `omxterm-edge` network (a stable name, so the attach command
+below is reliable) and joined the broker to it. A reverse proxy running in its
+own stack is not on that network yet — attach it once so it can resolve the
+broker by name:
 
 ```bash
 # Run once, and again only if you recreate the proxy container.
