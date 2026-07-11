@@ -6,7 +6,7 @@ import { homedir, hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_STATE_DIR = resolve(process.env.XDG_STATE_HOME || resolve(homedir(), '.local/state'), 'omxterm-agent/pr');
-const TERMINAL_STATUSES = new Set(['passed', 'failed', 'blocked', 'stopped']);
+const TERMINAL_STATUSES = new Set(['passed', 'completed', 'failed', 'blocked', 'stopped']);
 const RUNNER_STATUSES = new Set(['starting', 'running', 'succeeded', 'failed', 'abandoned']);
 const TERMINAL_RUNNER_STATUSES = new Set(['succeeded', 'failed', 'abandoned']);
 const ACTIVE_RUNNER_STATUSES = new Set(['starting', 'running']);
@@ -34,6 +34,16 @@ function parseOptions(args) {
 function requireOption(options, name) {
   const value = options[name]?.trim();
   if (!value) fail(`Missing required option --${name}.`);
+  return value;
+}
+
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+function requireGitSha(options, name) {
+  const value = requireOption(options, name);
+  if (!GIT_SHA_PATTERN.test(value)) {
+    fail(`--${name} must be a full 40-character lowercase hexadecimal Git SHA, received "${value}".`);
+  }
   return value;
 }
 
@@ -204,6 +214,9 @@ function ingestEvent(options, path, now) {
 
   const state = readState(path);
   const currentStatus = state.coordination.status;
+  if (currentStatus === 'completed') {
+    return commandOutcome(state, 'ignored_terminal', 'Workflow is completed; later PR events cannot reopen it.');
+  }
   if (state.coordination.headSha === sha) {
     return commandOutcome(state, 'ignored_duplicate', `SHA ${sha} is already known in status ${currentStatus}.`);
   }
@@ -212,7 +225,7 @@ function ingestEvent(options, path, now) {
   state.coordination = {
     ...state.coordination,
     status: 'queued',
-    codeAttempt: TERMINAL_STATUSES.has(currentStatus) ? 0 : state.coordination.codeAttempt,
+    codeAttempt: state.coordination.codeAttempt,
     worker: 'webhook',
     headSha: sha,
     expectedEvent: 'pull_request',
@@ -297,20 +310,6 @@ function dispatchFix(options, path, now) {
 
   const codeAttempt = state.coordination.codeAttempt + 1;
   const reason = requireOption(options, 'reason');
-  if (codeAttempt > state.coordination.maxCodeAttempts) {
-    state.coordination = {
-      ...state.coordination,
-      status: 'failed',
-      worker: 'none',
-      expectedEvent: null,
-      next: failureNext(state),
-    };
-    state.stop = { requested: true, reason: 'Maximum code correction attempts exhausted.' };
-    appendHistory(state, { event: 'attempts_exhausted', status: 'failed', reason }, now);
-    writeState(path, state);
-    return commandOutcome(state, 'attempts_exhausted', state.stop.reason);
-  }
-
   const worker = requireOption(options, 'worker');
   const runnerId = requireOption(options, 'runner-id');
   const deadlineAt = requireOption(options, 'deadline-at');
@@ -336,6 +335,27 @@ function failureNext(state) {
     return { owner: 'brien', action: `Record failure and start issue #${state.queue.nextIssue}.` };
   }
   return { owner: 'none', action: state.queue.end ? 'Queue finished with a failed task.' : 'Stop the queue after failure.' };
+}
+
+function resumeWorkflow(options, path, now) {
+  const state = readState(path);
+  if (state.coordination.status !== 'failed') {
+    return commandOutcome(state, 'ignored_not_failed', `Workflow is ${state.coordination.status}, not failed.`);
+  }
+  const reason = requireOption(options, 'reason');
+  state.coordination = {
+    ...state.coordination,
+    status: 'queued',
+    worker: 'webhook',
+    expectedEvent: 'pull_request',
+    next: { owner: 'brien', action: `Claim and review SHA ${state.coordination.headSha}.` },
+  };
+  state.lease = null;
+  state.wakeup = { deadlineAt: options['deadline-at'] || null, lastTriggeredAt: null };
+  state.stop = { requested: false, reason: null };
+  appendHistory(state, { event: 'workflow_resumed', from: 'failed', status: 'queued', reason }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'resumed', reason);
 }
 
 function updateRunner(options, path, now) {
@@ -436,6 +456,32 @@ function passReview(options, path, now) {
   return commandOutcome(state, 'passed', reason);
 }
 
+function completeWorkflow(options, path, now) {
+  const state = readState(path);
+  if (state.coordination.status === 'completed') {
+    return commandOutcome(state, 'ignored_terminal', 'Workflow is already completed.');
+  }
+  if (state.coordination.status !== 'passed') {
+    fail(`Completing requires status "passed", found "${state.coordination.status}".`);
+  }
+  const mergeSha = requireGitSha(options, 'merge-sha');
+  const action = state.queue.nextIssue ? `Start issue #${state.queue.nextIssue}.` : 'Queue is complete.';
+  state.coordination = {
+    ...state.coordination,
+    status: 'completed',
+    worker: 'none',
+    expectedEvent: null,
+    next: { owner: state.queue.nextIssue ? 'brien' : 'none', action },
+  };
+  state.merge = { sha: mergeSha, completedAt: now };
+  state.lease = null;
+  state.wakeup.deadlineAt = null;
+  state.stop = { requested: true, reason: `Merged as ${mergeSha}.` };
+  appendHistory(state, { event: 'workflow_completed', status: 'completed', mergeSha, next: action }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'completed', `Workflow completed at merge ${mergeSha}.`);
+}
+
 function stop(options, path, now) {
   const state = readState(path);
   const previousStatus = state.coordination.status;
@@ -493,12 +539,14 @@ export function run(argv, now = new Date().toISOString()) {
     'confirm-runner-stop': confirmRunnerStop,
     takeover,
     pass: passReview,
+    complete: completeWorkflow,
+    resume: resumeWorkflow,
     stop,
     wake: recordWakeup,
   };
   if (command === 'show') return readState(path);
   if (!operations[command]) {
-    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|stop|wake [--name value ...]');
+    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|resume|stop|wake [--name value ...]');
   }
   return mutate(path, () => operations[command](options, path, now));
 }

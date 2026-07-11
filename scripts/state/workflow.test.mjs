@@ -68,7 +68,7 @@ test('persists a GitHub event before Hermes starts and ignores redelivery', () =
   });
 });
 
-test('requeues a terminal workflow when the PR receives a new SHA', () => {
+test('requeues a passed workflow when the PR changes before merge', () => {
   withState(() => {
     run(START);
     run(CLAIM);
@@ -80,6 +80,25 @@ test('requeues a terminal workflow when the PR receives a new SHA', () => {
     assert.equal(queued.coordination.status, 'queued');
     assert.equal(queued.coordination.codeAttempt, 0);
     assert.equal(queued.stop.requested, false);
+  });
+});
+
+test('does not reopen a completed workflow when a delayed event has another SHA', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', 'abcdef0123456789abcdef0123456789abcdef01']);
+
+    const delayed = run([
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+
+    assert.equal(delayed.command.outcome, 'ignored_terminal');
+    assert.equal(delayed.coordination.status, 'completed');
+    assert.equal(delayed.coordination.headSha, 'sha-a');
+    assert.equal(delayed.history.at(-1).event, 'workflow_completed');
   });
 });
 
@@ -107,6 +126,55 @@ test('dispatches one correction and waits for a synchronize event', () => {
     assert.equal(fixing.coordination.codeAttempt, 1);
     assert.equal(fixing.coordination.expectedEvent, 'pull_request.synchronize');
     assert.equal(fixing.runner.status, 'starting');
+  });
+});
+
+test('continues dispatching corrections beyond the configured diagnostic count', () => {
+  withState(() => {
+    run([...START.slice(0, START.indexOf('--max-attempts')), '--max-attempts', '1', '--queue-end', 'true']);
+    run(CLAIM);
+    run([
+      'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+      '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
+      '--reason', 'First finding.', '--next', 'Implement.',
+    ]);
+    run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'succeeded']);
+    run([
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+    run([
+      'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+      '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+
+    const second = run([
+      'dispatch-fix', '--pr', '103', '--sha', 'sha-b', '--worker', 'claude',
+      '--runner-id', 'omxterm-pr-103-a2', '--deadline-at', '2026-07-11T21:00:00.000Z',
+      '--reason', 'Second finding.', '--next', 'Implement.',
+    ]);
+
+    assert.equal(second.command.outcome, 'dispatched');
+    assert.equal(second.coordination.status, 'fixing');
+    assert.equal(second.coordination.codeAttempt, 2);
+  });
+});
+
+test('resumes a legacy failed workflow without resetting revision history', () => {
+  withState(() => {
+    run(START);
+    run(['stop', '--pr', '103', '--status', 'failed', '--reason', 'Legacy attempt ceiling.']);
+
+    const resumed = run([
+      'resume', '--pr', '103', '--reason', 'Attempt count no longer stops code progress.',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+
+    assert.equal(resumed.command.outcome, 'resumed');
+    assert.equal(resumed.coordination.status, 'queued');
+    assert.equal(resumed.coordination.worker, 'webhook');
+    assert.equal(resumed.stop.requested, false);
+    assert.equal(resumed.history.at(-1).event, 'workflow_resumed');
   });
 });
 
@@ -316,6 +384,45 @@ test('passes only the SHA currently under review and exposes the next issue', ()
     const passed = run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
     assert.equal(passed.coordination.status, 'passed');
     assert.match(passed.coordination.next.action, /issue #104/);
+  });
+});
+
+const VALID_MERGE_SHA = 'abcdef0123456789abcdef0123456789abcdef01';
+
+test('records merge completion after a passed review', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    const completed = run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA], '2026-07-11T21:00:00.000Z');
+    assert.equal(completed.command.outcome, 'completed');
+    assert.equal(completed.coordination.status, 'completed');
+    assert.equal(completed.coordination.next.owner, 'none');
+    assert.equal(completed.coordination.next.action, 'Queue is complete.');
+    assert.deepEqual(completed.merge, { sha: VALID_MERGE_SHA, completedAt: '2026-07-11T21:00:00.000Z' });
+    assert.equal(run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]).command.outcome, 'ignored_terminal');
+  });
+});
+
+test('refuses merge completion before review passes', () => {
+  withState(() => {
+    run(START);
+    assert.throws(() => run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]), /requires status "passed"/);
+  });
+});
+
+test('rejects a malformed merge SHA and records no completion or merge metadata', () => {
+  withState((statePath) => {
+    run(START);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    assert.throws(
+      () => run(['complete', '--pr', '103', '--merge-sha', 'definitely-not-a-git-sha']),
+      /--merge-sha must be a full 40-character lowercase hexadecimal Git SHA, received "definitely-not-a-git-sha"/,
+    );
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.equal(state.coordination.status, 'passed');
+    assert.equal(state.merge, undefined);
   });
 });
 

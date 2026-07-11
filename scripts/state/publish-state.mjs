@@ -6,10 +6,11 @@ import { run } from './workflow.mjs';
 
 const COMMENT_MARKER = '<!-- agent-workflow-state -->';
 const RESPONSE_MARKER = '<!-- brien-webhook-response -->';
-const STATUS_STATES = { passed: 'success', failed: 'failure', blocked: 'error', stopped: 'error' };
+const STATUS_STATES = { passed: 'success', completed: 'success', failed: 'failure', blocked: 'error', stopped: 'error' };
 
 function ghApi(args, input) {
-  const result = spawnSync('gh', ['api', ...args], { encoding: 'utf8', input: input ? `${JSON.stringify(input)}\n` : undefined });
+  const binary = process.env.OMXTERM_GH_BIN || 'gh';
+  const result = spawnSync(binary, ['api', ...args], { encoding: 'utf8', input: input ? `${JSON.stringify(input)}\n` : undefined });
   if (result.status !== 0) throw new Error(result.stderr.trim() || `gh api exited with status ${result.status}.`);
   return result.stdout ? JSON.parse(result.stdout) : null;
 }
@@ -22,7 +23,7 @@ function commentBody(state) {
     '## Agent workflow state',
     '',
     `- Phase: **${state.coordination.status}**`,
-    `- Code attempt: **${state.coordination.codeAttempt}/${state.coordination.maxCodeAttempts}**`,
+    `- Code revisions: **${state.coordination.codeAttempt}**`,
     `- Worker: **${state.coordination.worker}**`,
     `- Head SHA: \`${state.coordination.headSha}\``,
     `- Runner: **${runner}**`,
@@ -38,7 +39,7 @@ function commentBody(state) {
 
 function publishCommitStatus(state, owner, repository) {
   const status = STATUS_STATES[state.coordination.status] || 'pending';
-  const description = `${state.coordination.status} · attempt ${state.coordination.codeAttempt}/${state.coordination.maxCodeAttempts} · worker ${state.coordination.worker}`.slice(0, 140);
+  const description = `${state.coordination.status} · revisions ${state.coordination.codeAttempt} · worker ${state.coordination.worker}`.slice(0, 140);
   return ghApi([
     `repos/${owner}/${repository}/statuses/${state.coordination.headSha}`,
     '-X', 'POST', '--input', '-',
@@ -52,7 +53,9 @@ function publishCommitStatus(state, owner, repository) {
 
 function publishStickyComment(state, owner, repository) {
   const viewer = ghApi(['user']);
-  const comments = ghApi([`repos/${owner}/${repository}/issues/${state.task.pullRequest}/comments?per_page=100`]);
+  // Installed `gh` CLI versions vary in --slurp support; --paginate alone already
+  // merges every REST array page into one JSON array on stdout, so avoid --slurp.
+  const comments = ghApi([`repos/${owner}/${repository}/issues/${state.task.pullRequest}/comments?per_page=100`, '--paginate']);
   const existing = comments.find((comment) => comment.user?.login === viewer.login && comment.body?.includes(COMMENT_MARKER));
   const endpoint = existing
     ? `repos/${owner}/${repository}/issues/comments/${existing.id}`

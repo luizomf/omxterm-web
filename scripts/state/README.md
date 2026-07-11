@@ -17,7 +17,7 @@ GitHub event → webhook → Hermes/Brien → review
 ```
 
 - GitHub events wake Hermes; chat does not start the normal loop.
-- Brien is the orchestrator and reviewer. It may dispatch Claude or take over when Claude is proven unavailable.
+- Brien is the orchestrator and reviewer. It may dispatch Claude, take over when Claude is proven unavailable, or directly repair a verified workflow defect that prevents the loop from advancing. Direct repair still requires proof that no Claude runner is active, tight workflow-only scope, regression coverage, and full repository verification.
 - Claude only implements, tests, commits, and pushes. It never reviews, merges, advances the queue, or starts Brien.
 - A push emits `pull_request.synchronize`; that event starts a fresh review session.
 - The guardian wakes Brien when the expected GitHub event or runner completion never arrives.
@@ -27,7 +27,7 @@ GitHub event → webhook → Hermes/Brien → review
 Each state records:
 
 - PR, issue, repository, and current remote SHA;
-- phase, code-attempt count, worker, expected event, and next action;
+- phase, informational code-revision count, worker, expected event, and next action;
 - lease owner/deadline;
 - durable runner id, status, base SHA, and timestamps;
 - next issue or explicit queue end;
@@ -35,7 +35,7 @@ Each state records:
 
 Exactly one of `nextIssue` or `queue.end` must be set. Missing both is invalid; the loop may not silently forget what follows.
 
-Code attempts count reviewed implementations. Authentication, quota, startup, process, push, and webhook delivery failures are recovery events and do not consume another code attempt.
+Code revisions count reviewed implementations for observability. They never cap or stop the loop. Authentication, quota, startup, process, push, and webhook delivery failures are recovery events and do not consume another code revision. Only a concrete external condition that prevents OMXTerm code progress may set `blocked`.
 
 ## Commands
 
@@ -46,7 +46,7 @@ Commands require `--pr`; tests may override the path with `OMXTERM_AGENT_STATE_P
 node scripts/state/workflow.mjs start \
   --task "Fix issue #104" --issue 104 --pr 105 \
   --worker webhook --next "Review PR #105." --sha abc123 \
-  --max-attempts 3 --next-issue 106
+  --next-issue 106
 
 # Persist an accepted GitHub event before Hermes starts.
 node scripts/state/workflow.mjs ingest \
@@ -65,6 +65,16 @@ node scripts/state/workflow.mjs show --pr 105
 # Conclude a verified review.
 node scripts/state/workflow.mjs pass \
   --pr 105 --sha def456 --reason "Full review passed."
+
+# Close canonical state after GitHub confirms the merge.
+# --merge-sha must be the full 40-character lowercase hex commit SHA GitHub reports for the merge.
+node scripts/state/workflow.mjs complete \
+  --pr 105 --merge-sha fedcba0123456789fedcba0123456789fedcba01
+
+# Recover state written by the old bounded-attempt protocol.
+node scripts/state/workflow.mjs resume \
+  --pr 105 --reason "Continue review/correction loop." \
+  --deadline-at 2026-07-11T20:30:00.000Z
 ```
 
 `claim-review` returns an outcome instead of failing for expected concurrency:
@@ -136,7 +146,7 @@ On `workflow_wakeup`, Brien reconciles evidence in this order:
 7. Recover partial work or take over with `workflow.mjs takeover` only after proving Claude stopped.
 8. If everything already completed, do nothing.
 
-Runner startup/auth/quota failure causes Brien takeover. A code rejection causes another bounded Claude correction. A stale SHA aborts publication; the new SHA wins.
+Runner startup/auth/quota failure causes Brien takeover. A code rejection causes another Claude correction without an arbitrary retry ceiling. A stale SHA aborts publication; the new SHA wins.
 
 The guardian runs periodically and emits no message when nothing is overdue. It records the wakeup atomically, then sends a signed local `workflow_wakeup` event through the same Hermes route.
 
@@ -169,7 +179,8 @@ projection. External state and its lock remain the coordination authority.
 ## Terminal states
 
 - `passed`: reviewed SHA is valid; merge and continue to `nextIssue`, or finish explicit queue end.
-- `failed`: bounded code attempts exhausted; follow `continueOnFailure` queue policy.
+- `completed`: GitHub confirmed the merge; this PR has no pending workflow action.
+- `failed`: legacy/recoverable failure state; use `resume` after correcting its cause.
 - `blocked`: real external impossibility or corrupt state, not normal concurrency.
 - `stopped`: explicit operator stop.
 
