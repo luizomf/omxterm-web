@@ -1,22 +1,27 @@
 # Deploying OMXTerm
 
 This is the runbook for putting OMXTerm behind a reverse proxy on a server. It
-walks one concrete example — a single container at `omxterm.example.com`, behind
-a reverse proxy that terminates TLS — but the steps are proxy-agnostic; only the
-routing snippet is specific to the proxy you pick.
+walks one concrete example — a single container reached at `omxterm.example.com`
+through a reverse proxy that terminates TLS — but the steps are proxy-agnostic;
+only the routing snippet is specific to the proxy you pick.
 
 For the env knobs themselves and why each exists, see the
 [README Deploy section](../README.md#deploy) and
 [`how-it-works.md`](./how-it-works.md). This document is the _how to roll it
 out_, not the security model.
 
-> The tracked `compose.yml` puts the broker on a neutral, stably-named
-> `omxterm-edge` network so a separately-running reverse proxy can attach to it
-> (step 3). The full portable, safe-by-default baseline (loopback-bound
-> publishing, a proxy-agnostic topology) is tracked in #96, and a
-> safe-public-exposure guide in #98. Until those land, keep any deployment-
-> specific address or edge wiring in a local Compose override rather than in the
-> tracked descriptor.
+OMXTerm ships two Compose paths:
+
+- **Portable baseline** (`compose.yml`, the default) — publishes only to
+  loopback so a reverse proxy on the same host can forward to it. No pre-created
+  network, no fixed container address, no specific proxy product. This is what a
+  fresh clone runs.
+- **Production override** (`compose.prod.yml`, opt-in) — the maintainer's
+  app-scoped rollout, where the reverse proxy runs in its own stack and reaches
+  the broker over a shared, stably-named Docker network. Layered explicitly on
+  top of the baseline.
+
+Pick the path that matches where your proxy runs; both serve the same image.
 
 ---
 
@@ -28,11 +33,18 @@ relative `/api` calls and the same-origin `wss://` just work, with no path
 splitting in the proxy.
 
 ```text
-Browser ──HTTPS/WSS──> Reverse proxy (edge, TLS) ──HTTP──> omxterm:3000
-                                                             ├─ /            SPA (apps/web/dist)
-                                                             ├─ /api/*       broker API
-                                                             └─ /terminal/ws WebSocket
+Browser ──HTTPS/WSS──> Reverse proxy (edge, TLS) ──HTTP──> OMXTerm broker :3000
+                                                            ├─ /            SPA (apps/web/dist)
+                                                            ├─ /api/*       broker API
+                                                            └─ /terminal/ws WebSocket
 ```
+
+How the proxy reaches the broker depends on where the proxy runs:
+
+- **Reverse proxy on the host** (portable baseline): forward to
+  `http://127.0.0.1:3000`, the loopback port `compose.yml` publishes.
+- **Reverse proxy in its own stack** (production override): attach it to the
+  shared `omxterm-edge` network and forward to `http://omxterm:3000`.
 
 The broker serves the SPA only when `OMXTERM_WEB_ROOT` is set (the image sets it
 to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web.
@@ -41,17 +53,11 @@ to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web
 
 - Host: any Linux server you control. Optionally reach your SSH targets over a
   private network or VPN so the broker only dials hosts you intend to.
-- A reverse proxy (Traefik, Caddy, or nginx) runs as the edge, terminates TLS
-  (e.g. via Let's Encrypt), and forwards to the container over the shared
-  `omxterm-edge` network. If the proxy runs in its own stack, attach it to that
-  network so it resolves the broker as `omxterm:3000` (step 3). This runbook uses
-  **Traefik v3** with the file provider as one worked example; any proxy works.
-- Convention used below: clone the repo somewhere stable such as
-  `/opt/omxterm`. Adjust the paths to wherever you keep the checkout.
-
-If your edge is different (Caddy, nginx, Traefik via Docker labels), only steps
-4–5 change: route the host to `omxterm:3000`, terminate TLS, and optionally add
-basic auth.
+- A reverse proxy (Traefik, Caddy, nginx, …) as the edge, terminating TLS (e.g.
+  via Let's Encrypt). This runbook uses **Traefik v3** with the file provider as
+  one worked example; any proxy works.
+- Convention used below: clone the repo somewhere stable such as `/opt/omxterm`.
+  Adjust the paths to wherever you keep the checkout.
 
 ---
 
@@ -59,7 +65,7 @@ basic auth.
 
 - **DNS**: `omxterm.example.com` resolves to the edge host (A/AAAA record).
 - A reverse proxy in front of the container, terminating TLS.
-- Docker + compose on the host; the repo cloned at `/opt/omxterm`.
+- Docker + Compose on the host; the repo cloned at `/opt/omxterm`.
 
 ---
 
@@ -91,64 +97,81 @@ cat > .env <<'ENV'
 OMXTERM_ACCESS_TOKEN=__REPLACE_WITH_A_STRONG_TOKEN__
 OMXTERM_ALLOWED_ORIGIN=https://omxterm.example.com
 OMXTERM_SECURE_COOKIES=true
-OMXTERM_TRUST_PROXY=__DOCKER_NETWORK_SUBNET__
 OMXTERM_SSH_ALLOWED_CIDR=10.0.0.0/24
+# OMXTERM_TRUST_PROXY — set once you know how the proxy reaches the broker (step 3).
 ENV
 ```
 
 - `OMXTERM_ACCESS_TOKEN` — generate one: `openssl rand -base64 32`.
-- `OMXTERM_TRUST_PROXY` — the subnet of the network the proxy reaches the broker
-  over (`omxterm-edge`), so `request.ip` is the real client and HTTPS is detected
-  from `X-Forwarded-Proto`. Prefer the subnet over a blanket `true`. That network
-  does not exist yet, so leave the `__DOCKER_NETWORK_SUBNET__` placeholder here and
-  fill it in step 3, once Compose has created the network. The broker is not
-  started until then, so it never runs with the placeholder — and it could not
-  anyway: Fastify refuses to boot on an invalid trust address, so there is no
-  "start now, fix later" shortcut.
-
+- `OMXTERM_SECURE_COOKIES=true` — the auth cookies are the authentication, so
+  they must be `Secure` on any HTTPS deploy. The broker also **refuses to boot**
+  if this is false while binding to a non-loopback host (the image binds
+  `0.0.0.0`), so you cannot ship cookies in the clear by accident.
 - `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist (default-deny SSRF guard).
   Set it to the range(s) of hosts the broker is allowed to SSH into — for
   example your private network or VPN subnet — so it cannot be aimed at loopback,
   cloud metadata, or the public internet. `10.0.0.0/24` above is a placeholder;
   use your own.
-- `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked
-  into the image; don't set them here unless you need to override.
+- `OMXTERM_TRUST_PROXY` — left for step 3 because its correct value depends on
+  the topology. Leaving it unset is a valid boot state (the broker starts fine),
+  so there is no placeholder to crash on — you set it and re-run `up`.
+- `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked into
+  the image; don't set them here. In particular, do **not** set
+  `OMXTERM_SERVER_HOST` to a loopback value — the container must keep binding
+  `0.0.0.0` so Docker's published port and any in-network proxy can reach it.
 
-> The broker **refuses to boot** if `OMXTERM_SECURE_COOKIES` is false while the
-> bind is non-loopback — that's the guard against shipping auth cookies in the
-> clear.
+## 3. Start the broker
 
-## 3. Create the network, finish `.env`, then start
+Choose the path that matches where your reverse proxy runs.
 
-`OMXTERM_TRUST_PROXY` needs the `omxterm-edge` subnet, which only exists once
-Compose has created the network. So build and create the container **without
-starting it** — this creates the network too, but leaves the broker in the
-`Created` state, so it never boots with the step-2 placeholder:
+### 3a. Portable baseline — proxy on the same host
 
 ```bash
 cd /opt/omxterm
-docker compose create --build   # builds the image, creates the omxterm-edge network + container; does NOT start the broker
-```
-
-Read the subnet Compose assigned and write it into `.env`, replacing
-`__DOCKER_NETWORK_SUBNET__`:
-
-```bash
-docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
-```
-
-Now start the broker. Editing `.env` changes the resolved service config, so
-`up` recreates the container with the finished trust setting before starting it:
-
-```bash
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
-Compose created the `omxterm-edge` network (a stable name, so the attach command
-below is reliable) and joined the broker to it. A reverse proxy running in its
-own stack is not on that network yet — attach it once so it can resolve the
-broker by name:
+`compose.yml` publishes the broker on `127.0.0.1:3000` only, so nothing outside
+the host can reach it directly — your reverse proxy (on the host) forwards to
+`http://127.0.0.1:3000`. Because the port is loopback-only, the sole client that
+can reach it is your trusted proxy, so it is safe to set:
+
+```bash
+# Add to .env, then `docker compose up -d` again to apply.
+OMXTERM_TRUST_PROXY=true
+```
+
+`OMXTERM_TRUST_PROXY` makes `request.ip` the real client (rate limiting) and lets
+HTTPS be detected from `X-Forwarded-Proto`. If you prefer to be strict, set it to
+the Docker network's subnet instead of `true`:
+
+```bash
+docker network inspect omxterm_default -f '{{(index .IPAM.Config 0).Subnet}}'
+```
+
+### 3b. Production override — proxy in its own stack
+
+Layer `compose.prod.yml` explicitly to put the broker on the shared
+`omxterm-edge` network (Compose creates it on `up`; nothing is pre-created):
+
+```bash
+cd /opt/omxterm
+docker compose -f compose.yml -f compose.prod.yml up -d --build
+docker compose -f compose.yml -f compose.prod.yml logs -f omxterm
+```
+
+Read the subnet Compose assigned to `omxterm-edge` and set `OMXTERM_TRUST_PROXY`
+to it, then re-run `up` so the change takes effect:
+
+```bash
+docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
+# Put the printed subnet in .env as OMXTERM_TRUST_PROXY=<subnet>, then:
+docker compose -f compose.yml -f compose.prod.yml up -d
+```
+
+A reverse proxy running in its own stack is not on `omxterm-edge` yet — attach it
+once so it can resolve the broker by name:
 
 ```bash
 # Run once, and again only if you recreate the proxy container.
@@ -176,11 +199,10 @@ htpasswd -nB <user> | sudo tee -a /etc/omxterm/auth/omxterm-usersfile
 
 ## 5. Route it in the reverse proxy (Traefik example)
 
-The `http://omxterm:3000` service URL below resolves only if the Traefik
-container shares the `omxterm-edge` network — attach it there once (step 3) if it
-runs in its own stack. With Traefik's file provider, add these entries to your
-dynamic configuration (merge into the existing `http.routers`, `http.services`,
-and `http.middlewares` maps — don't duplicate the top-level keys):
+With Traefik's file provider, add these entries to your dynamic configuration
+(merge into the existing `http.routers`, `http.services`, and `http.middlewares`
+maps — don't duplicate the top-level keys). The router and middleware are the
+same for both topologies from step 3; only the service URL differs:
 
 > ⚠️ If this config file is shared with other routes, a YAML typo is hot-reloaded
 > and can break them too. Back it up first and re-read it after saving.
@@ -198,17 +220,36 @@ http:
         - omxterm-auth
       service: omxterm
 
-  services:
-    omxterm:
-      loadBalancer:
-        servers:
-          - url: 'http://omxterm:3000'
-
   middlewares:
     omxterm-auth:
       basicAuth:
         usersFile: /auth/omxterm-usersfile
         realm: omxterm
+```
+
+Then add the `http.services` entry that matches the topology you started in
+step 3 — copy the one block, not both:
+
+**3a. Portable baseline — proxy on the host:**
+
+```yaml
+http:
+  services:
+    omxterm:
+      loadBalancer:
+        servers:
+          - url: 'http://127.0.0.1:3000'
+```
+
+**3b. Production override — proxy in its own stack, attached to `omxterm-edge`:**
+
+```yaml
+http:
+  services:
+    omxterm:
+      loadBalancer:
+        servers:
+          - url: 'http://omxterm:3000'
 ```
 
 The file provider applies the change on save (`watch=true`) — no proxy restart.
@@ -249,7 +290,9 @@ docker compose exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
 ## Updating
 
 Run the deploy helper. It fast-forwards `main` and rebuilds **only** the
-OMXTerm service, leaving the reverse proxy and any other routes running:
+OMXTerm service, leaving the reverse proxy and any other routes running. It
+applies the production override by default, so an update keeps the broker on
+`omxterm-edge` for a separate-stack proxy:
 
 ```bash
 /opt/omxterm/scripts/deploy
@@ -257,12 +300,20 @@ OMXTerm service, leaving the reverse proxy and any other routes running:
 
 It stops before any Docker action when the checkout is dirty or `main` has
 diverged from its upstream, so it never discards local work or rewrites history.
-To roll out by hand instead:
+To deploy the plain portable baseline instead, clear the override:
+
+```bash
+OMXTERM_COMPOSE_OVERRIDE= /opt/omxterm/scripts/deploy
+```
+
+To roll out by hand instead (app service only; don't touch the proxy):
 
 ```bash
 cd /opt/omxterm
 git fetch origin && git merge --ff-only origin/main
-docker compose up -d --build omxterm   # app service only; don't touch the proxy
+docker compose up -d --build omxterm                                  # portable baseline
+# or, for the production edge topology:
+docker compose -f compose.yml -f compose.prod.yml up -d --build omxterm
 ```
 
 The stores are in-memory, so a rebuild drops active sessions and pending tickets
@@ -275,6 +326,6 @@ Roll back the app service only; the edge stays up throughout.
 ```bash
 cd /opt/omxterm
 git checkout <previous-good-sha>       # detached HEAD, non-destructive
-docker compose up -d --build omxterm
+docker compose up -d --build omxterm   # add -f compose.prod.yml for the edge topology
 # If a proxy config edit caused it, restore the backup you made in step 5.
 ```

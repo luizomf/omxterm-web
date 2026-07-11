@@ -112,6 +112,21 @@ test_clean_uptodate_deploys_app_only() {
   pass_test "app recreated, edge untouched, nothing stopped"
 }
 
+test_applies_production_override() {
+  echo "app-scoped deploy applies the production edge override on top of the baseline"
+  setup_sandbox
+
+  if ! run_deploy; then
+    fail_test "expected exit 0 on a clean, up-to-date checkout"
+    return
+  fi
+  grep -q -- "-f compose.yml" "${DOCKER_LOG}" || fail_test "expected the portable baseline compose.yml to be applied"
+  grep -q -- "-f compose.prod.yml" "${DOCKER_LOG}" ||
+    fail_test "expected the production edge override compose.prod.yml to be applied"
+  grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
+  pass_test "baseline + production override applied, app-scoped"
+}
+
 test_behind_remote_fast_forwards() {
   echo "clean + behind remote fast-forwards, then deploys"
   setup_sandbox
@@ -228,6 +243,7 @@ test_ignores_generic_project_dirs() {
 }
 
 test_clean_uptodate_deploys_app_only
+test_applies_production_override
 test_behind_remote_fast_forwards
 test_diverged_branch_fails_without_touching_anything
 test_dirty_tracked_file_stops_before_docker
