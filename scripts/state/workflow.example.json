@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "task": {
+    "description": "Fix issue #102",
+    "issue": 102,
+    "pullRequest": 103,
+    "repository": "luizomf/omxterm"
+  },
+  "coordination": {
+    "status": "reviewing",
+    "attempt": 1,
+    "maxAttempts": 3,
+    "worker": "brien",
+    "headSha": "abc123",
+    "next": {
+      "owner": "brien",
+      "action": "Publish one final review."
+    }
+  },
+  "stop": {
+    "requested": false,
+    "reason": null,
+    "conditions": [
+      "review passed",
+      "3 attempts exhausted",
+      "blocked",
+      "explicit stop"
+    ]
+  },
+  "createdAt": "2026-07-11T18:00:00.000Z",
+  "updatedAt": "2026-07-11T18:05:00.000Z",
+  "history": []
+}

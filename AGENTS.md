@@ -40,6 +40,21 @@ accurate as part of the workflow.
 6. Delete the branch after merge (squash and delete; `--delete-branch` handles
    this).
 
+### Local agent workflow state
+
+When an implementation/review loop is coordinated through
+`scripts/state/workflow.json`, every participating agent must read
+[`scripts/state/README.md`](./scripts/state/README.md) and inspect the current
+state before acting. Update the state before handing work to another agent.
+
+The state records the active task, PR/SHA, current worker, attempt, next action,
+and stop conditions. Treat terminal states (`passed`, `failed`, `blocked`, or
+`stopped`) as a hard stop. Reviewers review; correction work must be assigned
+through the state instead of being implemented silently by the reviewer.
+
+Runtime state, locks, and temporary files are local and ignored by Git while
+the protocol is being validated. Do not commit them.
+
 Since Git and GitHub are the main project context, be explicit, precise, and
 concise about every change. Always describe what matters for project
 understanding in commits, issues, PRs, and handoffs.

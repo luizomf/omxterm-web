@@ -189,6 +189,11 @@ docker/volumes/**
 # Temporary imports from other repos
 _swarm2/
 
+# Local agent workflow coordination (protocol/tooling remain tracked)
+/scripts/state/workflow.json
+/scripts/state/workflow.json.lock
+/scripts/state/workflow.json.*.tmp
+
 # Spyder project settings
 .spyderproject
 .spyproject
