@@ -319,25 +319,42 @@ test('passes only the SHA currently under review and exposes the next issue', ()
   });
 });
 
+const VALID_MERGE_SHA = 'abcdef0123456789abcdef0123456789abcdef01';
+
 test('records merge completion after a passed review', () => {
   withState(() => {
     run(START);
     run(CLAIM);
     run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
-    const completed = run(['complete', '--pr', '103', '--merge-sha', 'merge-sha'], '2026-07-11T21:00:00.000Z');
+    const completed = run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA], '2026-07-11T21:00:00.000Z');
     assert.equal(completed.command.outcome, 'completed');
     assert.equal(completed.coordination.status, 'completed');
     assert.equal(completed.coordination.next.owner, 'none');
     assert.equal(completed.coordination.next.action, 'Queue is complete.');
-    assert.deepEqual(completed.merge, { sha: 'merge-sha', completedAt: '2026-07-11T21:00:00.000Z' });
-    assert.equal(run(['complete', '--pr', '103', '--merge-sha', 'merge-sha']).command.outcome, 'ignored_terminal');
+    assert.deepEqual(completed.merge, { sha: VALID_MERGE_SHA, completedAt: '2026-07-11T21:00:00.000Z' });
+    assert.equal(run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]).command.outcome, 'ignored_terminal');
   });
 });
 
 test('refuses merge completion before review passes', () => {
   withState(() => {
     run(START);
-    assert.throws(() => run(['complete', '--pr', '103', '--merge-sha', 'merge-sha']), /requires status "passed"/);
+    assert.throws(() => run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]), /requires status "passed"/);
+  });
+});
+
+test('rejects a malformed merge SHA and records no completion or merge metadata', () => {
+  withState((statePath) => {
+    run(START);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    assert.throws(
+      () => run(['complete', '--pr', '103', '--merge-sha', 'definitely-not-a-git-sha']),
+      /--merge-sha must be a full 40-character lowercase hexadecimal Git SHA, received "definitely-not-a-git-sha"/,
+    );
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assert.equal(state.coordination.status, 'passed');
+    assert.equal(state.merge, undefined);
   });
 });
 

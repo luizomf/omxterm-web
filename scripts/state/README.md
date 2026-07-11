@@ -67,8 +67,9 @@ node scripts/state/workflow.mjs pass \
   --pr 105 --sha def456 --reason "Full review passed."
 
 # Close canonical state after GitHub confirms the merge.
+# --merge-sha must be the full 40-character lowercase hex commit SHA GitHub reports for the merge.
 node scripts/state/workflow.mjs complete \
-  --pr 105 --merge-sha fedcba
+  --pr 105 --merge-sha fedcba0123456789fedcba0123456789fedcba01
 ```
 
 `claim-review` returns an outcome instead of failing for expected concurrency:

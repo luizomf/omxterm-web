@@ -37,6 +37,16 @@ function requireOption(options, name) {
   return value;
 }
 
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+function requireGitSha(options, name) {
+  const value = requireOption(options, name);
+  if (!GIT_SHA_PATTERN.test(value)) {
+    fail(`--${name} must be a full 40-character lowercase hexadecimal Git SHA, received "${value}".`);
+  }
+  return value;
+}
+
 function optionalNumber(options, name) {
   if (options[name] === undefined) return null;
   const raw = String(options[name]).trim();
@@ -444,7 +454,7 @@ function completeWorkflow(options, path, now) {
   if (state.coordination.status !== 'passed') {
     fail(`Completing requires status "passed", found "${state.coordination.status}".`);
   }
-  const mergeSha = requireOption(options, 'merge-sha');
+  const mergeSha = requireGitSha(options, 'merge-sha');
   const action = state.queue.nextIssue ? `Start issue #${state.queue.nextIssue}.` : 'Queue is complete.';
   state.coordination = {
     ...state.coordination,
