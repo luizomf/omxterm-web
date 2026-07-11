@@ -3,8 +3,14 @@ import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { createOmxtermServer, scrubSshConnectionSecrets } from "./server";
+import {
+  ACCESS_GATE_MAX_FAILURES,
+  ACCESS_GATE_WINDOW_MS,
+  createOmxtermServer,
+  scrubSshConnectionSecrets,
+} from "./server";
 import { JsonlAuditLogger } from "./audit-logger";
+import type { AuditEvent, AuditLogger } from "@omxterm/core/audit";
 import type { ServerConfig } from "./config";
 
 const baseConfig: ServerConfig = {
@@ -73,6 +79,215 @@ describe("POST /api/access", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ ok: true });
       expect(response.headers["set-cookie"]).toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+type ClientLocation = { remoteAddress?: string; forwardedFor?: string };
+
+function accessAttempt(
+  app: Awaited<ReturnType<typeof createOmxtermServer>>,
+  config: ServerConfig,
+  accessToken: string,
+  client: ClientLocation = {},
+) {
+  const headers: Record<string, string | undefined> = {
+    origin: config.allowedOrigins[0],
+  };
+  if (client.forwardedFor !== undefined) {
+    headers["x-forwarded-for"] = client.forwardedFor;
+  }
+  return app.inject({
+    method: "POST",
+    url: "/api/access",
+    headers,
+    ...(client.remoteAddress !== undefined
+      ? { remoteAddress: client.remoteAddress }
+      : {}),
+    payload: { accessToken },
+  });
+}
+
+async function exhaustAccessFailureBudget(
+  app: Awaited<ReturnType<typeof createOmxtermServer>>,
+  config: ServerConfig,
+  client: ClientLocation = {},
+): Promise<void> {
+  for (let attempt = 0; attempt < ACCESS_GATE_MAX_FAILURES; attempt++) {
+    const response = await accessAttempt(app, config, "wrong-token", client);
+    expect(response.statusCode).toBe(401);
+  }
+}
+
+describe("POST /api/access abuse policy", () => {
+  test("blocks a client with 429 and a valid Retry-After once its failed-attempt budget is exhausted", async () => {
+    const app = await createOmxtermServer(baseConfig);
+    try {
+      const client = { remoteAddress: "203.0.113.10" };
+      await exhaustAccessFailureBudget(app, baseConfig, client);
+
+      const blocked = await accessAttempt(app, baseConfig, "wrong-token", client);
+
+      expect(blocked.statusCode).toBe(429);
+      const retryAfter = Number(blocked.headers["retry-after"]);
+      expect(Number.isInteger(retryAfter)).toBe(true);
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(
+        Math.ceil(ACCESS_GATE_WINDOW_MS / 1000),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("tracks a second client's failure budget independently of a blocked client", async () => {
+    const app = await createOmxtermServer(baseConfig);
+    try {
+      const blockedClient = { remoteAddress: "203.0.113.10" };
+      const otherClient = { remoteAddress: "203.0.113.20" };
+      await exhaustAccessFailureBudget(app, baseConfig, blockedClient);
+      const stillBlocked = await accessAttempt(
+        app,
+        baseConfig,
+        "wrong-token",
+        blockedClient,
+      );
+      expect(stillBlocked.statusCode).toBe(429);
+
+      const otherAttempt = await accessAttempt(
+        app,
+        baseConfig,
+        "wrong-token",
+        otherClient,
+      );
+
+      expect(otherAttempt.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("a successful login resets the client's failed-attempt window to a full budget", async () => {
+    const app = await createOmxtermServer(baseConfig);
+    try {
+      const client = { remoteAddress: "203.0.113.30" };
+      // One short of the block, then succeed — the reset must restore the FULL
+      // budget, not merely avoid tripping the limiter on this one occasion.
+      for (let attempt = 0; attempt < ACCESS_GATE_MAX_FAILURES - 1; attempt++) {
+        const response = await accessAttempt(
+          app,
+          baseConfig,
+          "wrong-token",
+          client,
+        );
+        expect(response.statusCode).toBe(401);
+      }
+      const login = await accessAttempt(
+        app,
+        baseConfig,
+        baseConfig.accessToken,
+        client,
+      );
+      expect(login.statusCode).toBe(200);
+
+      await exhaustAccessFailureBudget(app, baseConfig, client);
+      const blocked = await accessAttempt(app, baseConfig, "wrong-token", client);
+
+      expect(blocked.statusCode).toBe(429);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("a direct-server deployment keys on the real socket peer and ignores a spoofed X-Forwarded-For", async () => {
+    const config: ServerConfig = { ...baseConfig, trustProxy: false };
+    const app = await createOmxtermServer(config);
+    try {
+      const peerAddress = "203.0.113.40";
+      for (let attempt = 0; attempt < ACCESS_GATE_MAX_FAILURES; attempt++) {
+        const response = await accessAttempt(app, config, "wrong-token", {
+          remoteAddress: peerAddress,
+          forwardedFor: `198.51.100.${attempt}`,
+        });
+        expect(response.statusCode).toBe(401);
+      }
+
+      const blocked = await accessAttempt(app, config, "wrong-token", {
+        remoteAddress: peerAddress,
+        forwardedFor: "198.51.100.250",
+      });
+
+      expect(blocked.statusCode).toBe(429);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("a trusted-proxy deployment keys on the forwarded client, giving each real client its own budget", async () => {
+    const trustedProxyAddress = "10.0.0.1";
+    const config: ServerConfig = {
+      ...baseConfig,
+      trustProxy: trustedProxyAddress,
+    };
+    const app = await createOmxtermServer(config);
+    try {
+      const throughProxy = (forwardedFor: string): ClientLocation => ({
+        remoteAddress: trustedProxyAddress,
+        forwardedFor,
+      });
+      await exhaustAccessFailureBudget(
+        app,
+        config,
+        throughProxy("198.51.100.5"),
+      );
+      const blocked = await accessAttempt(
+        app,
+        config,
+        "wrong-token",
+        throughProxy("198.51.100.5"),
+      );
+      expect(blocked.statusCode).toBe(429);
+
+      const otherRealClient = await accessAttempt(
+        app,
+        config,
+        "wrong-token",
+        throughProxy("198.51.100.9"),
+      );
+
+      expect(otherRealClient.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("audits an invalid access attempt with metadata only, never the attempted token", async () => {
+    const events: Omit<AuditEvent, "ts">[] = [];
+    const audit: AuditLogger = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const secretToken = "definitely-the-wrong-secret-token-value";
+    const app = await createOmxtermServer(baseConfig, { audit });
+    try {
+      const response = await accessAttempt(app, baseConfig, secretToken, {
+        remoteAddress: "203.0.113.50",
+      });
+      expect(response.statusCode).toBe(401);
+
+      expect(events).toHaveLength(1);
+      const [rejection] = events;
+      if (!rejection) throw new Error("Expected one audit event to be recorded.");
+      const serialized = JSON.stringify(events);
+      expect(serialized).not.toContain(secretToken);
+      expect(serialized.toLowerCase()).not.toContain("cookie");
+      expect(serialized.toLowerCase()).not.toContain("authorization");
+      expect(Object.keys(rejection).sort()).toEqual(
+        ["event", "origin", "reason", "severity"].sort(),
+      );
     } finally {
       await app.close();
     }
