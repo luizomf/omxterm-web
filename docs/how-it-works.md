@@ -103,7 +103,12 @@ The broker refuses to start with a weak gate. `loadConfig`
   `X-Forwarded-Proto`. Accepts `true`/`false`, a hop count, or a trusted proxy
   IP/CIDR allowlist; leave it unset on a directly exposed server, where
   `X-Forwarded-*` headers are spoofable.
-- `OMXTERM_AUDIT_LOG` — optional path for the JSONL audit log.
+- `OMXTERM_AUDIT_LOG` — optional path for the JSONL audit log. When set, the
+  broker creates the parent directory and proves the path is writable **once at
+  startup**, failing fast with a useful boot error if it cannot. When unset,
+  audit events go to stdout. After boot, a sink write that fails (e.g. the disk
+  fills) is contained — it is reported once to stderr and never escapes a
+  request/upgrade/WebSocket/SSH handler.
 - `OMXTERM_WEB_ROOT` — optional path to the built web SPA. When set, the broker
   serves the SPA itself (single origin); unset in dev, where Vite serves it.
 
@@ -320,7 +325,19 @@ per-connection inbound flood was closed, with a normalized reason like
 `session_ended` (with byte counts).
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
-keystroke or terminal output — the log is safe to share.
+keystroke or terminal output.
+
+**Metadata-only does not mean safe to publish.** The events intentionally
+contain infrastructure metadata — target host and port, `Origin`, session IDs,
+timestamps, and byte counts — that can reveal who connects where, when, and how
+much. Treat the audit log as sensitive operational data: protect it like any
+server log and review it before sharing outside the operators, rather than
+assuming it is automatically public-safe.
+
+The sink is deliberately simple for the MVP: synchronous append with no
+in-memory queue, so it applies natural backpressure and cannot be amplified into
+unbounded memory (the inbound guard above already caps event frequency). A
+durable or async audit pipeline and full log rotation are out of scope.
 
 ---
 
