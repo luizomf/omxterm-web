@@ -571,6 +571,18 @@ function completeWorkflow(options, path, now) {
   return commandOutcome(state, 'completed', `Workflow completed at merge ${mergeSha}.`);
 }
 
+function continuationLeaseExpired(state, now) {
+  const deadline = Date.parse(state.wakeup?.deadlineAt || '');
+  const currentTime = Date.parse(now);
+  return Number.isFinite(deadline) && Number.isFinite(currentTime) && deadline <= currentTime;
+}
+
+function continuationRunnerIsInactive(state) {
+  if (!state.runner) return true;
+  if (ACTIVE_RUNNER_STATUSES.has(state.runner.status)) return false;
+  return state.runner.status !== 'abandoned' || state.runner.stopConfirmed === true;
+}
+
 function claimContinuation(options, path, now) {
   const state = readState(path);
   if (state.coordination.status !== 'completed') {
@@ -584,8 +596,21 @@ function claimContinuation(options, path, now) {
   }
   const worker = requireOption(options, 'worker');
   if (state.queue.continuation.status === 'claimed') {
-    const outcome = state.queue.continuation.claimedBy === worker ? 'ignored_duplicate' : 'ignored_worker_active';
-    return commandOutcome(state, outcome, `${state.queue.continuation.claimedBy} already claimed issue #${state.queue.continuation.issue} continuation.`);
+    if (!continuationLeaseExpired(state, now) || !continuationRunnerIsInactive(state)) {
+      const outcome = state.queue.continuation.claimedBy === worker ? 'ignored_duplicate' : 'ignored_worker_active';
+      return commandOutcome(state, outcome, `${state.queue.continuation.claimedBy} already claimed issue #${state.queue.continuation.issue} continuation.`);
+    }
+    const next = requireOption(options, 'next');
+    const deadlineAt = requireOption(options, 'deadline-at');
+    const previousWorker = state.queue.continuation.claimedBy;
+    state.queue.continuation = { ...state.queue.continuation, claimedBy: worker, claimedAt: now };
+    state.coordination = { ...state.coordination, next: { owner: worker, action: next } };
+    state.wakeup = { deadlineAt, lastTriggeredAt: null };
+    appendHistory(state, {
+      event: 'continuation_reclaimed', issue: state.queue.continuation.issue, from: previousWorker, worker, next,
+    }, now);
+    writeState(path, state);
+    return commandOutcome(state, 'continuation_reclaimed', `${worker} reclaimed expired issue #${state.queue.continuation.issue} continuation from ${previousWorker}.`);
   }
   const next = requireOption(options, 'next');
   const deadlineAt = requireOption(options, 'deadline-at');
@@ -595,6 +620,22 @@ function claimContinuation(options, path, now) {
   appendHistory(state, { event: 'continuation_claimed', issue: state.queue.continuation.issue, worker, next }, now);
   writeState(path, state);
   return commandOutcome(state, 'continuation_claimed', `${worker} claimed issue #${state.queue.continuation.issue} continuation.`);
+}
+
+function evidenceStateFor(options, path, state) {
+  const evidencePullRequest = optionalNumber(options, 'evidence-pr');
+  if (!evidencePullRequest) fail('Missing required option --evidence-pr.');
+  const evidencePath = resolve(dirname(path), `${evidencePullRequest}.json`);
+  const evidenceState = readState(evidencePath);
+  if (evidenceState.task?.pullRequest !== evidencePullRequest
+    || evidenceState.task?.issue !== state.queue.continuation.issue
+    || evidenceState.task?.repository !== state.task.repository) {
+    fail(`Evidence workflow PR #${evidencePullRequest} does not match issue #${state.queue.continuation.issue} in ${state.task.repository}.`);
+  }
+  if (TERMINAL_STATUSES.has(evidenceState.coordination?.status)) {
+    fail(`Evidence workflow PR #${evidencePullRequest} is terminal, not a durable implementation step.`);
+  }
+  return evidencePullRequest;
 }
 
 function completeContinuation(options, path, now) {
@@ -615,10 +656,13 @@ function completeContinuation(options, path, now) {
   if (Number(issueOption) !== state.queue.continuation.issue) {
     fail(`--issue must match the claimed continuation issue #${state.queue.continuation.issue}, received "${issueOption}".`);
   }
-  // Free-text but required: forces the caller to name the concrete branch/PR/workflow-state
-  // artifact it verified, instead of silently marking the queue step done on trust (#110).
+  const evidencePullRequest = evidenceStateFor(options, path, state);
+  // The prose aids operators, but the sibling workflow state is the completion evidence.
+  // A free-text assertion alone cannot prove the next durable step exists (#113).
   const evidence = requireOption(options, 'evidence');
-  state.queue.continuation = { ...state.queue.continuation, status: 'done', completedAt: now, evidence };
+  state.queue.continuation = {
+    ...state.queue.continuation, status: 'done', completedAt: now, evidence, evidencePullRequest,
+  };
   state.coordination = { ...state.coordination, next: { owner: 'none', action: `Issue #${state.queue.continuation.issue} continuation verified: ${evidence}` } };
   state.wakeup = { deadlineAt: null, lastTriggeredAt: null };
   appendHistory(state, { event: 'continuation_completed', issue: state.queue.continuation.issue, evidence }, now);

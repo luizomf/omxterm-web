@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import { run } from './workflow.mjs';
@@ -15,6 +15,13 @@ function withState(testFunction) {
     delete process.env.OMXTERM_AGENT_STATE_PATH;
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function writeEvidenceState(currentStatePath, pullRequest, issue, status = 'queued') {
+  writeFileSync(join(dirname(currentStatePath), `${pullRequest}.json`), JSON.stringify({
+    task: { pullRequest, issue, repository: 'luizomf/omxterm' },
+    coordination: { status },
+  }));
 }
 
 const START = [
@@ -600,8 +607,8 @@ test('completing a passed review with a next issue records a durable pending con
   });
 });
 
-test('claims and completes a queue continuation with durable evidence, in the normal case', () => {
-  withState(() => {
+test('claims and completes a queue continuation with durable workflow evidence, in the normal case', () => {
+  withState((statePath) => {
     run([...START.slice(0, -2), '--next-issue', '104']);
     run(CLAIM);
     run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
@@ -617,13 +624,14 @@ test('claims and completes a queue continuation with durable evidence, in the no
     assert.equal(claimed.queue.continuation.claimedBy, 'brien');
     assert.equal(claimed.wakeup.deadlineAt, '2026-07-11T21:30:00.000Z');
 
+    writeEvidenceState(statePath, 110, 104);
     const completed = run([
       'complete-continuation', '--pr', '103', '--issue', '104',
-      '--evidence', 'Created branch fix/104-x, opened PR #110, wrote 110.json.',
+      '--evidence-pr', '110', '--evidence', 'Created and verified workflow state for PR #110.',
     ]);
     assert.equal(completed.command.outcome, 'continuation_completed');
     assert.equal(completed.queue.continuation.status, 'done');
-    assert.match(completed.queue.continuation.evidence, /PR #110/);
+    assert.equal(completed.queue.continuation.evidencePullRequest, 110);
     assert.equal(completed.coordination.next.owner, 'none');
     assert.equal(completed.wakeup.deadlineAt, null);
   });
@@ -637,18 +645,71 @@ test('treats a duplicate or competing continuation claim as a clean no-op', () =
     run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
     run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it.', '--deadline-at', '2026-07-11T21:30:00.000Z']);
 
-    const duplicate = run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it again.', '--deadline-at', '2026-07-11T22:00:00.000Z']);
+    const duplicate = run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it again.', '--deadline-at', '2026-07-11T22:00:00.000Z'], '2026-07-11T21:00:00.000Z');
     assert.equal(duplicate.command.outcome, 'ignored_duplicate');
     assert.equal(duplicate.queue.continuation.claimedBy, 'brien');
 
-    const competing = run(['claim-continuation', '--pr', '103', '--worker', 'hermes', '--next', 'Steal it.', '--deadline-at', '2026-07-11T22:00:00.000Z']);
+    const competing = run(['claim-continuation', '--pr', '103', '--worker', 'hermes', '--next', 'Steal it.', '--deadline-at', '2026-07-11T22:00:00.000Z'], '2026-07-11T21:00:00.000Z');
     assert.equal(competing.command.outcome, 'ignored_worker_active');
     assert.equal(competing.queue.continuation.claimedBy, 'brien');
   });
 });
 
-test('recovers a missed queue continuation after an interrupted session via wakeup', () => {
+test('reclaims an expired continuation only after its recorded runner is inactive', () => {
   withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA], '2026-07-11T20:00:00.000Z');
+    run([
+      'claim-continuation', '--pr', '103', '--worker', 'first-brien', '--next', 'Start issue #104.',
+      '--deadline-at', '2026-07-11T20:30:00.000Z',
+    ], '2026-07-11T20:05:00.000Z');
+
+    const reclaimed = run([
+      'claim-continuation', '--pr', '103', '--worker', 'recovery-brien', '--next', 'Resume issue #104.',
+      '--deadline-at', '2026-07-11T21:30:00.000Z',
+    ], '2026-07-11T20:31:00.000Z');
+    assert.equal(reclaimed.command.outcome, 'continuation_reclaimed');
+    assert.equal(reclaimed.queue.continuation.claimedBy, 'recovery-brien');
+
+    reclaimed.runner = { id: 'omxterm-pr-103-a1', status: 'running' };
+    writeFileSync(process.env.OMXTERM_AGENT_STATE_PATH, JSON.stringify(reclaimed));
+    const protectedClaim = run([
+      'claim-continuation', '--pr', '103', '--worker', 'third-brien', '--next', 'Steal it.',
+      '--deadline-at', '2026-07-11T22:30:00.000Z',
+    ], '2026-07-11T21:31:00.000Z');
+    assert.equal(protectedClaim.command.outcome, 'ignored_worker_active');
+  });
+});
+
+test('rejects arbitrary continuation prose without matching active workflow evidence', () => {
+  withState((statePath) => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+    run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it.', '--deadline-at', '2026-07-11T21:30:00.000Z']);
+
+    assert.throws(
+      () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'x']),
+      /Missing required option --evidence-pr/,
+    );
+    writeEvidenceState(statePath, 110, 999);
+    assert.throws(
+      () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence-pr', '110', '--evidence', 'x']),
+      /does not match issue #104/,
+    );
+    writeEvidenceState(statePath, 110, 104, 'completed');
+    assert.throws(
+      () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence-pr', '110', '--evidence', 'x']),
+      /is terminal, not a durable implementation step/,
+    );
+  });
+});
+
+test('recovers a missed queue continuation after an interrupted session via wakeup', () => {
+  withState((statePath) => {
     run([...START.slice(0, -2), '--next-issue', '104']);
     run(CLAIM);
     run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
@@ -667,19 +728,27 @@ test('recovers a missed queue continuation after an interrupted session via wake
     ]);
     assert.equal(recovered.command.outcome, 'continuation_claimed');
 
-    const finished = run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'Verified branch and workflow state exist.']);
+    writeEvidenceState(statePath, 110, 104);
+    const finished = run([
+      'complete-continuation', '--pr', '103', '--issue', '104',
+      '--evidence-pr', '110', '--evidence', 'Verified durable workflow state.',
+    ]);
     assert.equal(finished.queue.continuation.status, 'done');
   });
 });
 
 test('does not resurrect a queue continuation once it is already done', () => {
-  withState(() => {
+  withState((statePath) => {
     run([...START.slice(0, -2), '--next-issue', '104']);
     run(CLAIM);
     run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
     run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
     run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it.', '--deadline-at', '2026-07-11T21:30:00.000Z']);
-    run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'Done.']);
+    writeEvidenceState(statePath, 110, 104);
+    run([
+      'complete-continuation', '--pr', '103', '--issue', '104',
+      '--evidence-pr', '110', '--evidence', 'Done.',
+    ]);
 
     assert.equal(run(['wake', '--pr', '103']).command.outcome, 'ignored_terminal');
     assert.equal(run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'x', '--deadline-at', '2026-07-11T22:00:00.000Z']).command.outcome, 'ignored_terminal');

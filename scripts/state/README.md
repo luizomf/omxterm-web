@@ -115,10 +115,16 @@ node scripts/state/workflow.mjs claim-continuation \
   --pr 105 --worker brien --next "Create branch and issue draft for #106." \
   --deadline-at 2026-07-11T21:30:00.000Z
 
+# A claimed continuation remains protected until its deadline. After expiry, another worker
+# may reclaim it only when the recorded runner is absent/inactive (an abandoned runner must
+# already have stopConfirmed=true); active runners remain an ownership barrier.
+
 # After proving the next durable step exists (new branch/PR/workflow state/runner), close the
-# continuation. --evidence is required free text naming what was verified.
+# continuation. --evidence-pr must name a non-terminal sibling workflow state for the
+# declared issue; --evidence records the operator-readable verification detail.
 node scripts/state/workflow.mjs complete-continuation \
-  --pr 105 --issue 106 --evidence "Opened PR #110 on branch fix/106-x; wrote 110.json."
+  --pr 105 --issue 106 --evidence-pr 110 \
+  --evidence "Validated workflow state for open PR #110 on branch fix/106-x."
 
 # Recover state written by the old bounded-attempt protocol.
 node scripts/state/workflow.mjs resume \

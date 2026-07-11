@@ -16,7 +16,7 @@ For `opened`, `ready_for_review`, `reopened`, or `synchronize`:
 2. Claim exact remote SHA with `claim-review`. `ignored_duplicate`, `ignored_worker_active`, and `ignored_terminal` mean clean no-op; do not mark blocked.
 3. Review read-only. Run real tests, typecheck, build, and `git diff --check` as required by the repository.
 4. Revalidate remote SHA before publishing.
-5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, record `complete --merge-sha <sha>`, and publish completed state. If `nextIssue` exists, `complete` leaves `queue.continuation` `pending`; continue in this same session: run `claim-continuation`, validate the issue, determine its successor or explicit queue end, create or dispatch its durable implementation step, then record `complete-continuation --issue <n> --evidence "..."` naming what you verified exists. Publish state again. Only an explicit queue end or a recorded concrete blocker permits the session to stop.
+5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, record `complete --merge-sha <sha>`, and publish completed state. If `nextIssue` exists, `complete` leaves `queue.continuation` `pending`; continue in this same session: run `claim-continuation`, validate the issue, determine its successor or explicit queue end, create or dispatch its durable implementation step, then record `complete-continuation --issue <n> --evidence-pr <pr> --evidence "..."` naming what you verified exists. Publish state again. Only an explicit queue end or a recorded concrete blocker permits the session to stop.
 6. With findings: write one complete correction prompt containing every verified blocker found in the full review, dispatch the durable Claude runner using Sonnet/high, confirm its systemd unit or terminal runner result, publish state with `publish-state.mjs`, then stop. Do not wait or start another review.
 
 If review uses `delegate_task`, its background batch is a barrier, not an
@@ -49,7 +49,7 @@ For `workflow_wakeup`, reconcile instead of blindly reviewing:
 - runner stopped with partial work: inspect and resume safely;
 - runner stopped with commit but no push: validate and push;
 - Claude unavailable: record failed runner, take over, complete, test, commit, and push;
-- workflow `completed` with `queue.continuation.status` `pending` or `claimed`: `claim-continuation`, perform the next durable queue step, then `complete-continuation --evidence "..."`;
+- workflow `completed` with `queue.continuation.status` `pending` or `claimed`: `claim-continuation`, perform the next durable queue step, then `complete-continuation --evidence-pr <pr> --evidence "..."` with the active sibling workflow state it verified;
 - workflow completed with explicit queue end (`queue.continuation` is `null`), or continuation already `done`: no-op.
 
 Use process manager identity and state, not PID alone. Do not delete a lock until its recorded runner is proven inactive.
