@@ -10,11 +10,13 @@ For the env knobs themselves and why each exists, see the
 [`how-it-works.md`](./how-it-works.md). This document is the _how to roll it
 out_, not the security model.
 
-> A portable, safe-by-default Compose baseline (loopback-bound publishing, no
-> pre-created external network) is tracked in #96, and a proxy-agnostic
+> The tracked `compose.yml` puts the broker on a neutral, stably-named
+> `omxterm-edge` network so a separately-running reverse proxy can attach to it
+> (step 3). The full portable, safe-by-default baseline (loopback-bound
+> publishing, a proxy-agnostic topology) is tracked in #96, and a
 > safe-public-exposure guide in #98. Until those land, keep any deployment-
-> specific network, address, or edge wiring in a local Compose override rather
-> than in the tracked descriptor.
+> specific address or edge wiring in a local Compose override rather than in the
+> tracked descriptor.
 
 ---
 
@@ -40,9 +42,10 @@ to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web
 - Host: any Linux server you control. Optionally reach your SSH targets over a
   private network or VPN so the broker only dials hosts you intend to.
 - A reverse proxy (Traefik, Caddy, or nginx) runs as the edge, terminates TLS
-  (e.g. via Let's Encrypt), and forwards to the container over the Compose
-  network. This runbook uses **Traefik v3** with the file provider as one worked
-  example; any proxy works.
+  (e.g. via Let's Encrypt), and forwards to the container over the shared
+  `omxterm-edge` network. If the proxy runs in its own stack, attach it to that
+  network so it resolves the broker as `omxterm:3000` (step 3). This runbook uses
+  **Traefik v3** with the file provider as one worked example; any proxy works.
 - Convention used below: clone the repo somewhere stable such as
   `/opt/omxterm`. Adjust the paths to wherever you keep the checkout.
 
@@ -94,12 +97,13 @@ ENV
 ```
 
 - `OMXTERM_ACCESS_TOKEN` — generate one: `openssl rand -base64 32`.
-- `OMXTERM_TRUST_PROXY` — the Compose network subnet, so `request.ip` is the
-  real client and HTTPS is detected from `X-Forwarded-Proto`. Prefer the subnet
-  over a blanket `true`. Read it from:
+- `OMXTERM_TRUST_PROXY` — the subnet of the network the proxy reaches the broker
+  over (`omxterm-edge`), so `request.ip` is the real client and HTTPS is detected
+  from `X-Forwarded-Proto`. Prefer the subnet over a blanket `true`. Read it after
+  `docker compose up` (step 3) has created the network:
 
   ```bash
-  docker network inspect omxterm_default -f '{{(index .IPAM.Config 0).Subnet}}'
+  docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
   ```
 
 - `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist (default-deny SSRF guard).
@@ -122,8 +126,18 @@ docker compose up -d --build
 docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
-The container joins the Compose network; the reverse proxy reaches it as
-`http://omxterm:3000`.
+`docker compose up` creates the `omxterm-edge` network (a stable name, so the
+attach command below is reliable) and joins the broker to it. A reverse proxy
+running in its own stack is not on that network yet — attach it once so it can
+resolve the broker by name:
+
+```bash
+# Run once, and again only if you recreate the proxy container.
+docker network connect omxterm-edge <your-reverse-proxy-container>
+```
+
+The proxy then reaches the broker as `http://omxterm:3000`. A proxy defined in
+this same Compose project is already on the network and needs no connect step.
 
 ## 4. Add basic-auth credentials (optional)
 
@@ -143,9 +157,11 @@ htpasswd -nB <user> | sudo tee -a /etc/omxterm/auth/omxterm-usersfile
 
 ## 5. Route it in the reverse proxy (Traefik example)
 
-With Traefik's file provider, add these entries to your dynamic configuration
-(merge into the existing `http.routers`, `http.services`, and
-`http.middlewares` maps — don't duplicate the top-level keys):
+The `http://omxterm:3000` service URL below resolves only if the Traefik
+container shares the `omxterm-edge` network — attach it there once (step 3) if it
+runs in its own stack. With Traefik's file provider, add these entries to your
+dynamic configuration (merge into the existing `http.routers`, `http.services`,
+and `http.middlewares` maps — don't duplicate the top-level keys):
 
 > ⚠️ If this config file is shared with other routes, a YAML typo is hot-reloaded
 > and can break them too. Back it up first and re-read it after saving.

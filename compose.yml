@@ -2,12 +2,24 @@
 # you place behind a reverse proxy terminating TLS (see docs/deploy.md). Secrets
 # and origin come from a local .env (git-ignored, never committed).
 #
-# A portable, safe-by-default baseline — loopback-bound publishing and a
-# reverse-proxy-agnostic topology — is tracked in #96; keep any deployment-
-# specific network, address, or edge wiring in a local override, not here.
+# The broker joins the `omxterm-edge` network (a stable name, created by Compose
+# on `up`) instead of only the project-default network. A reverse proxy running
+# in its own stack can attach to it — `docker network connect omxterm-edge
+# <proxy>` — and then reach the broker as `omxterm:3000`. Without this shared,
+# stably-named seam a proxy outside this project has no route to the container.
+#
+# The full portable, safe-by-default baseline (loopback-bound publishing, a
+# reverse-proxy-agnostic topology) is tracked in #96; keep any further
+# deployment-specific address or edge wiring in a local override, not here.
 services:
   omxterm:
     build: .
     container_name: omxterm
     restart: always
     env_file: .env
+    networks:
+      - edge
+
+networks:
+  edge:
+    name: omxterm-edge
