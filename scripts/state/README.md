@@ -35,6 +35,24 @@ Each state records:
 
 Exactly one of `nextIssue` or `queue.end` must be set. Missing both is invalid; the loop may not silently forget what follows.
 
+`completed` is terminal for one PR, not necessarily for its queue. When
+`nextIssue` is present, `complete` writes `queue.continuation: { status:
+"pending", issue, claimedBy: null, claimedAt: null, completedAt: null,
+evidence: null }` and leaves `wakeup.deadlineAt` set instead of clearing it.
+This is a durable, machine-checkable handoff, not just human-readable prose:
+a crashed or missed session leaves a record that `wake` and the guardian can
+still see and recover through, because `completed` with a non-`done`
+continuation is not treated as terminal for wakeup purposes.
+
+The same Brien session that records completion should continue immediately:
+claim the continuation with `claim-continuation`, then create or dispatch the
+next durable step (branch, issue, PR, workflow state, or runner), and finally
+call `complete-continuation` with `--evidence` naming what it verified exists.
+`evidence` is required text, not a formality — publishing `Start issue #N` and
+returning is not a transition. If that session dies first, a later
+`workflow_wakeup` finds the continuation still `pending` (or `claimed` but
+never completed) and must finish it the same way.
+
 Code revisions count reviewed implementations for observability. They never cap or stop the loop. Authentication, quota, startup, process, push, and webhook delivery failures are recovery events and do not consume another code revision. Only a concrete external condition that prevents OMXTerm code progress may set `blocked`.
 
 ## Commands
@@ -70,6 +88,18 @@ node scripts/state/workflow.mjs pass \
 # --merge-sha must be the full 40-character lowercase hex commit SHA GitHub reports for the merge.
 node scripts/state/workflow.mjs complete \
   --pr 105 --merge-sha fedcba0123456789fedcba0123456789fedcba01
+
+# When `complete` recorded a pending continuation (queue.nextIssue was set), claim it before
+# creating or dispatching issue 106's own durable step. Idempotent: a repeat claim by the same
+# worker is `ignored_duplicate`; a different worker while claimed is `ignored_worker_active`.
+node scripts/state/workflow.mjs claim-continuation \
+  --pr 105 --worker brien --next "Create branch and issue draft for #106." \
+  --deadline-at 2026-07-11T21:30:00.000Z
+
+# After proving the next durable step exists (new branch/PR/workflow state/runner), close the
+# continuation. --evidence is required free text naming what was verified.
+node scripts/state/workflow.mjs complete-continuation \
+  --pr 105 --issue 106 --evidence "Opened PR #110 on branch fix/106-x; wrote 110.json."
 
 # Recover state written by the old bounded-attempt protocol.
 node scripts/state/workflow.mjs resume \
@@ -144,7 +174,11 @@ On `workflow_wakeup`, Brien reconciles evidence in this order:
    with `workflow.mjs confirm-runner-stop`.
 6. If Claude died, inspect worktree, commit, push state, and log.
 7. Recover partial work or take over with `workflow.mjs takeover` only after proving Claude stopped.
-8. If everything already completed, do nothing.
+8. If the PR is `completed` with `queue.continuation.status` still `pending` or `claimed`,
+   claim (or reclaim) it with `claim-continuation`, create or dispatch that issue's next
+   durable step, and record `complete-continuation --evidence "..."` before stopping. If it
+   completed with an explicit queue end (`queue.continuation` is `null`), or the continuation
+   is already `done`, do nothing.
 
 Runner startup/auth/quota failure causes Brien takeover. A code rejection causes another Claude correction without an arbitrary retry ceiling. A stale SHA aborts publication; the new SHA wins.
 
@@ -179,7 +213,9 @@ projection. External state and its lock remain the coordination authority.
 ## Terminal states
 
 - `passed`: reviewed SHA is valid; merge and continue to `nextIssue`, or finish explicit queue end.
-- `completed`: GitHub confirmed the merge; this PR has no pending workflow action.
+- `completed`: GitHub confirmed the merge. This PR's own review/correction loop has no pending
+  action, but if `queue.continuation` is not `null` and not yet `done`, the queue itself still
+  owes a durable handoff — see Recovery step 8.
 - `failed`: legacy/recoverable failure state; use `resume` after correcting its cause.
 - `blocked`: real external impossibility or corrupt state, not normal concurrency.
 - `stopped`: explicit operator stop.

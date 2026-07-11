@@ -484,6 +484,150 @@ test('rejects a malformed merge SHA and records no completion or merge metadata'
   });
 });
 
+test('completing a passed review with a next issue records a durable pending continuation', () => {
+  withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    const completed = run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA], '2026-07-11T21:00:00.000Z');
+
+    assert.deepEqual(completed.queue.continuation, {
+      status: 'pending', issue: 104, claimedBy: null, claimedAt: null, completedAt: null, evidence: null,
+    });
+    assert.equal(completed.coordination.next.owner, 'brien');
+    assert.match(completed.coordination.next.action, /issue #104/);
+    // A live deadline (rather than null) is what lets the guardian recover this PR's
+    // queue continuation if the current session crashes before claiming it (#110).
+    assert.equal(completed.wakeup.deadlineAt, '2026-07-11T21:00:00.000Z');
+  });
+});
+
+test('claims and completes a queue continuation with durable evidence, in the normal case', () => {
+  withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+
+    const claimed = run([
+      'claim-continuation', '--pr', '103', '--worker', 'brien',
+      '--next', 'Create branch and issue draft for #104.',
+      '--deadline-at', '2026-07-11T21:30:00.000Z',
+    ]);
+    assert.equal(claimed.command.outcome, 'continuation_claimed');
+    assert.equal(claimed.queue.continuation.status, 'claimed');
+    assert.equal(claimed.queue.continuation.claimedBy, 'brien');
+    assert.equal(claimed.wakeup.deadlineAt, '2026-07-11T21:30:00.000Z');
+
+    const completed = run([
+      'complete-continuation', '--pr', '103', '--issue', '104',
+      '--evidence', 'Created branch fix/104-x, opened PR #110, wrote 110.json.',
+    ]);
+    assert.equal(completed.command.outcome, 'continuation_completed');
+    assert.equal(completed.queue.continuation.status, 'done');
+    assert.match(completed.queue.continuation.evidence, /PR #110/);
+    assert.equal(completed.coordination.next.owner, 'none');
+    assert.equal(completed.wakeup.deadlineAt, null);
+  });
+});
+
+test('treats a duplicate or competing continuation claim as a clean no-op', () => {
+  withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+    run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it.', '--deadline-at', '2026-07-11T21:30:00.000Z']);
+
+    const duplicate = run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it again.', '--deadline-at', '2026-07-11T22:00:00.000Z']);
+    assert.equal(duplicate.command.outcome, 'ignored_duplicate');
+    assert.equal(duplicate.queue.continuation.claimedBy, 'brien');
+
+    const competing = run(['claim-continuation', '--pr', '103', '--worker', 'hermes', '--next', 'Steal it.', '--deadline-at', '2026-07-11T22:00:00.000Z']);
+    assert.equal(competing.command.outcome, 'ignored_worker_active');
+    assert.equal(competing.queue.continuation.claimedBy, 'brien');
+  });
+});
+
+test('recovers a missed queue continuation after an interrupted session via wakeup', () => {
+  withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+    // Simulate the completing session crashing before it claims or dispatches issue #104:
+    // a fresh session only has the guardian-triggered `wake` to recover through.
+    const woken = run(['wake', '--pr', '103', '--reason', 'guardian deadline reached'], '2026-07-11T21:05:00.000Z');
+    assert.equal(woken.command.outcome, 'wakeup_recorded');
+    assert.equal(woken.coordination.status, 'completed');
+    assert.equal(woken.queue.continuation.status, 'pending');
+
+    const recovered = run([
+      'claim-continuation', '--pr', '103', '--worker', 'brien',
+      '--next', 'Create branch and issue draft for #104.',
+      '--deadline-at', '2026-07-11T21:30:00.000Z',
+    ]);
+    assert.equal(recovered.command.outcome, 'continuation_claimed');
+
+    const finished = run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'Verified branch and workflow state exist.']);
+    assert.equal(finished.queue.continuation.status, 'done');
+  });
+});
+
+test('does not resurrect a queue continuation once it is already done', () => {
+  withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+    run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'Work it.', '--deadline-at', '2026-07-11T21:30:00.000Z']);
+    run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'Done.']);
+
+    assert.equal(run(['wake', '--pr', '103']).command.outcome, 'ignored_terminal');
+    assert.equal(run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'x', '--deadline-at', '2026-07-11T22:00:00.000Z']).command.outcome, 'ignored_terminal');
+    assert.equal(run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'x']).command.outcome, 'ignored_terminal');
+  });
+});
+
+test('rejects continuation commands outside their required state', () => {
+  withState(() => {
+    run(START);
+    assert.throws(() => run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'x', '--deadline-at', '2026-07-11T22:00:00.000Z']), /requires status "completed"/);
+
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+    // START declared --queue-end true, so there is no nextIssue and no continuation to claim.
+    assert.throws(() => run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'x', '--deadline-at', '2026-07-11T22:00:00.000Z']), /no pending queue continuation/);
+    assert.throws(() => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'x']), /no pending queue continuation/);
+  });
+});
+
+test('refuses to complete a continuation before it is claimed, or for the wrong issue', () => {
+  withState(() => {
+    run([...START.slice(0, -2), '--next-issue', '104']);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+
+    assert.throws(() => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'x']), /must be "claimed"/);
+
+    run(['claim-continuation', '--pr', '103', '--worker', 'brien', '--next', 'x', '--deadline-at', '2026-07-11T22:00:00.000Z']);
+    assert.throws(() => run(['complete-continuation', '--pr', '103', '--issue', '999', '--evidence', 'x']), /must match the claimed continuation issue #104/);
+  });
+});
+
+test('a completed workflow with an explicit queue end stays a true wakeup no-op', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Looks good.']);
+    run(['complete', '--pr', '103', '--merge-sha', VALID_MERGE_SHA]);
+
+    assert.equal(run(['wake', '--pr', '103']).command.outcome, 'ignored_terminal');
+  });
+});
+
 test('records a guardian wakeup without changing workflow ownership', () => {
   withState(() => {
     run(START);

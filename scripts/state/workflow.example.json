@@ -9,7 +9,8 @@
   "queue": {
     "nextIssue": 106,
     "end": false,
-    "continueOnFailure": false
+    "continueOnFailure": false,
+    "continuation": null
   },
   "coordination": {
     "status": "fixing",

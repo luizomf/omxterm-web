@@ -39,8 +39,18 @@ def route_secret() -> str:
     return secret
 
 
+def continuation_pending(state: dict[str, Any]) -> bool:
+    status = state.get("coordination", {}).get("status")
+    continuation = (state.get("queue") or {}).get("continuation") or {}
+    return status == "completed" and continuation.get("status") in ("pending", "claimed")
+
+
 def due(state: dict[str, Any], now: datetime) -> bool:
-    if state.get("coordination", {}).get("status") not in ACTIVE_STATUSES:
+    status = state.get("coordination", {}).get("status")
+    # A completed PR is otherwise inactive, but a declared nextIssue leaves a durable
+    # continuation record that a crashed or missed session must still be recoverable through
+    # (#110); "done" is the only continuation state that stays a true no-op here.
+    if status not in ACTIVE_STATUSES and not continuation_pending(state):
         return False
     deadline = parse_time(state.get("wakeup", {}).get("deadlineAt"))
     last = parse_time(state.get("wakeup", {}).get("lastTriggeredAt"))

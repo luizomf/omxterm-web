@@ -99,6 +99,36 @@ test('forwards a non-default XDG_STATE_HOME to the transient Claude runner', () 
   });
 });
 
+test('guardian treats a completed workflow with a pending queue continuation as due for wakeup, but a finished one as a no-op', () => {
+  const script = `
+import importlib.util
+from datetime import datetime, timedelta, timezone
+
+spec = importlib.util.spec_from_file_location('workflow_guardian', ${JSON.stringify(GUARDIAN)})
+guardian = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guardian)
+
+now = datetime.now(timezone.utc)
+past = (now - timedelta(minutes=1)).isoformat()
+
+def state(continuation_status):
+    return {
+        'coordination': {'status': 'completed'},
+        'queue': {'continuation': None if continuation_status is None else {'status': continuation_status}},
+        'wakeup': {'deadlineAt': past, 'lastTriggeredAt': None},
+    }
+
+assert guardian.due(state('pending'), now) is True, 'a pending continuation must be recoverable after a missed session'
+assert guardian.due(state('claimed'), now) is True, 'a claimed-but-unfinished continuation must remain recoverable'
+assert guardian.due(state('done'), now) is False, 'a finished continuation must not keep waking the guardian'
+assert guardian.due(state(None), now) is False, 'an explicit queue end must stay a true no-op'
+print('ok')
+`;
+  const result = spawnSync('python3', ['-c', script], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), 'ok');
+});
+
 test('guardian discovers workflows under XDG_STATE_HOME', () => {
   temporaryDirectory('omxterm-guardian-', (directory) => {
     const stateDirectory = join(directory, 'omxterm-agent', 'pr');
