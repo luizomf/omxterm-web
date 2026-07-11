@@ -92,8 +92,8 @@ describe("checkSshEgress", () => {
   });
 
   test("allows a target that resolves inside the allowlist", async () => {
-    const resolve = resolverFor({ "kvm4.vpn": ["10.100.0.4"] });
-    const decision = await checkSshEgress("kvm4.vpn", vpnPolicy, resolve);
+    const resolve = resolverFor({ "private-host.example": ["10.100.0.4"] });
+    const decision = await checkSshEgress("private-host.example", vpnPolicy, resolve);
     expect(decision).toEqual({ allowed: true, addresses: ["10.100.0.4"] });
   });
 

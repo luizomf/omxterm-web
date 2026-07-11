@@ -1,13 +1,20 @@
 # Deploying OMXTerm
 
 This is the runbook for putting OMXTerm behind a reverse proxy on a server. It
-documents the reference deploy: a single container at `omxterm.inprod.cloud`,
-behind a shared Traefik that already terminates TLS for other sites.
+walks one concrete example — a single container at `omxterm.example.com`, behind
+a reverse proxy that terminates TLS — but the steps are proxy-agnostic; only the
+routing snippet is specific to the proxy you pick.
 
 For the env knobs themselves and why each exists, see the
 [README Deploy section](../README.md#deploy) and
 [`how-it-works.md`](./how-it-works.md). This document is the _how to roll it
 out_, not the security model.
+
+> A portable, safe-by-default Compose baseline (loopback-bound publishing, no
+> pre-created external network) is tracked in #96, and a proxy-agnostic
+> safe-public-exposure guide in #98. Until those land, keep any deployment-
+> specific network, address, or edge wiring in a local Compose override rather
+> than in the tracked descriptor.
 
 ---
 
@@ -19,37 +26,37 @@ relative `/api` calls and the same-origin `wss://` just work, with no path
 splitting in the proxy.
 
 ```text
-Browser ──HTTPS/WSS──> Traefik (edge, TLS + basicAuth) ──HTTP──> omxterm:3000
-                                                                   ├─ /            SPA (apps/web/dist)
-                                                                   ├─ /api/*       broker API
-                                                                   └─ /terminal/ws WebSocket
+Browser ──HTTPS/WSS──> Reverse proxy (edge, TLS) ──HTTP──> omxterm:3000
+                                                             ├─ /            SPA (apps/web/dist)
+                                                             ├─ /api/*       broker API
+                                                             └─ /terminal/ws WebSocket
 ```
 
 The broker serves the SPA only when `OMXTERM_WEB_ROOT` is set (the image sets it
 to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web.
 
-### Reference environment
+### Example environment
 
-- Host: Ubuntu jump host reachable over a WireGuard VPN (`wg0`,
-  `10.100.0.0/24`).
-- A shared **Traefik v3** runs as the edge for several sites. It is configured
-  by the **file provider** (a `dynamic.yml`), **not** Docker labels, and issues
-  TLS via Let's Encrypt (resolver `le`, HTTP challenge). Sites attach to the
-  external Docker network `read_inprod_web`.
-- Convention: app code in `/projects/code/<domain>/`, mutable state in
-  `/projects/state/<domain>/`.
+- Host: any Linux server you control. Optionally reach your SSH targets over a
+  private network or VPN so the broker only dials hosts you intend to.
+- A reverse proxy (Traefik, Caddy, or nginx) runs as the edge, terminates TLS
+  (e.g. via Let's Encrypt), and forwards to the container over the Compose
+  network. This runbook uses **Traefik v3** with the file provider as one worked
+  example; any proxy works.
+- Convention used below: clone the repo somewhere stable such as
+  `/opt/omxterm`. Adjust the paths to wherever you keep the checkout.
 
-If your edge is different (Caddy, nginx, Traefik via labels), only steps 4–5
-change: route the host to `omxterm:3000`, terminate TLS, and optionally add
+If your edge is different (Caddy, nginx, Traefik via Docker labels), only steps
+4–5 change: route the host to `omxterm:3000`, terminate TLS, and optionally add
 basic auth.
 
 ---
 
 ## Prerequisites
 
-- **DNS**: `omxterm.inprod.cloud` resolves to the edge host (A/AAAA record).
-- The shared Traefik and the `read_inprod_web` network are already up.
-- Docker + compose on the host; the repo cloned at `/projects/code/omxterm`.
+- **DNS**: `omxterm.example.com` resolves to the edge host (A/AAAA record).
+- A reverse proxy in front of the container, terminating TLS.
+- Docker + compose on the host; the repo cloned at `/opt/omxterm`.
 
 ---
 
@@ -61,7 +68,7 @@ never `reset --hard`s or creates merge commits, so it can't discard local work.
 To sync by hand, keep it non-destructive:
 
 ```bash
-cd /projects/code/omxterm
+cd /opt/omxterm
 git status --short            # must be empty; commit or stash your own work first
 git fetch origin
 git merge --ff-only origin/main   # fast-forward only; fails instead of rewriting
@@ -76,27 +83,30 @@ checkout that silently throws away uncommitted and untracked files.
 `compose.yml` with the production values:
 
 ```bash
-cd /projects/code/omxterm
+cd /opt/omxterm
 cat > .env <<'ENV'
 OMXTERM_ACCESS_TOKEN=__REPLACE_WITH_A_STRONG_TOKEN__
-OMXTERM_ALLOWED_ORIGIN=https://omxterm.inprod.cloud
+OMXTERM_ALLOWED_ORIGIN=https://omxterm.example.com
 OMXTERM_SECURE_COOKIES=true
 OMXTERM_TRUST_PROXY=__DOCKER_NETWORK_SUBNET__
-OMXTERM_SSH_ALLOWED_CIDR=10.100.0.0/24
+OMXTERM_SSH_ALLOWED_CIDR=10.0.0.0/24
 ENV
 ```
 
 - `OMXTERM_ACCESS_TOKEN` — generate one: `openssl rand -base64 32`.
-- `OMXTERM_TRUST_PROXY` — the `read_inprod_web` subnet, so `request.ip` is the
+- `OMXTERM_TRUST_PROXY` — the Compose network subnet, so `request.ip` is the
   real client and HTTPS is detected from `X-Forwarded-Proto`. Prefer the subnet
   over a blanket `true`. Read it from:
 
   ```bash
-  docker network inspect read_inprod_web -f '{{(index .IPAM.Config 0).Subnet}}'
+  docker network inspect omxterm_default -f '{{(index .IPAM.Config 0).Subnet}}'
   ```
 
-- `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist. `10.100.0.0/24` limits the
-  broker to VPN hosts (default-deny SSRF guard).
+- `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist (default-deny SSRF guard).
+  Set it to the range(s) of hosts the broker is allowed to SSH into — for
+  example your private network or VPN subnet — so it cannot be aimed at loopback,
+  cloud metadata, or the public internet. `10.0.0.0/24` above is a placeholder;
+  use your own.
 - `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked
   into the image; don't set them here unless you need to override.
 
@@ -107,50 +117,44 @@ ENV
 ## 3. Build and start
 
 ```bash
-cd /projects/code/omxterm
+cd /opt/omxterm
 docker compose up -d --build
 docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
-The container joins `read_inprod_web`; Traefik reaches it as
+The container joins the Compose network; the reverse proxy reaches it as
 `http://omxterm:3000`.
 
-## 4. Add the basic-auth credentials
+## 4. Add basic-auth credentials (optional)
 
 Basic auth is an extra barrier in front of OMXTerm's own access gate, useful
-while the deploy is still a private preview. The shared Traefik already mounts
-`/projects/state/read.inprod.cloud/auth` at `/auth`, so drop a dedicated users
-file there (bcrypt):
+while the deploy is still a private preview. Point your proxy at a dedicated
+bcrypt users file so OMXTerm's credentials stay separate from anything else the
+proxy serves:
 
 ```bash
 # -n prints to stdout; omitting -b makes htpasswd PROMPT for the password, so it
 # never lands in argv or shell history.
-htpasswd -nB <user> \
-  | sudo tee -a /projects/state/read.inprod.cloud/auth/omxterm-usersfile
+htpasswd -nB <user> | sudo tee -a /etc/omxterm/auth/omxterm-usersfile
 ```
 
-(`htpasswd` is in `apache2-utils`. Keep OMXTerm's users file separate from the
-other sites' so credentials don't bleed across. Do not pass the password with
+(`htpasswd` is in `apache2-utils`. Do not pass the password with
 `-b '<password>'`: that exposes it to shell history and process listings.)
 
-## 5. Route it in Traefik (shared `dynamic.yml`)
+## 5. Route it in the reverse proxy (Traefik example)
 
-> ⚠️ **This file is shared with other sites.** A YAML typo here is hot-reloaded
-> and can break their routing too. Back it up first and re-read it after saving.
+With Traefik's file provider, add these entries to your dynamic configuration
+(merge into the existing `http.routers`, `http.services`, and
+`http.middlewares` maps — don't duplicate the top-level keys):
 
-```bash
-sudo cp /projects/code/read.inprod.cloud/traefik/dynamic.yml{,.bak}
-```
-
-Add these entries under the existing `http.routers`, `http.services`, and
-`http.middlewares` maps (merge into the maps — don't duplicate the top-level
-keys):
+> ⚠️ If this config file is shared with other routes, a YAML typo is hot-reloaded
+> and can break them too. Back it up first and re-read it after saving.
 
 ```yaml
 http:
   routers:
     omxterm:
-      rule: 'Host(`omxterm.inprod.cloud`)'
+      rule: 'Host(`omxterm.example.com`)'
       entryPoints:
         - websecure
       tls:
@@ -172,49 +176,37 @@ http:
         realm: omxterm
 ```
 
-The file provider has `watch=true`, so the change applies on save — no Traefik
-restart. Watch the logs for parse errors:
+The file provider applies the change on save (`watch=true`) — no proxy restart.
+Watch the proxy logs for parse errors after saving.
 
-```bash
-docker logs -f readinprodcloud-traefik-1
-```
-
-> Do **not** reuse the other sites' security-headers middleware. OMXTerm sets
-> its own CSP and headers via `@fastify/helmet`; that middleware's strict
-> `default-src 'none'` CSP would break the app.
+> Do **not** reuse an unrelated strict security-headers middleware. OMXTerm sets
+> its own CSP and headers via `@fastify/helmet`; a `default-src 'none'` CSP from
+> another site would break the app.
 
 ## 6. Verify
 
 ```bash
 # TLS + basic auth challenge
-curl -sI https://omxterm.inprod.cloud | head -n 1   # 401 (basic auth)
+curl -sI https://omxterm.example.com | head -n 1   # 401 (basic auth)
 
 # Pass only the username; curl PROMPTS for the password, keeping it out of argv
 # and shell history.
-curl -sI -u <user> https://omxterm.inprod.cloud | head -n 1   # 200
+curl -sI -u <user> https://omxterm.example.com | head -n 1   # 200
 ```
 
-Confirm the OMXTerm rollout did **not** disturb the shared edge — the Traefik
-container and the other sites' routes should be unchanged:
-
-```bash
-# Traefik was never restarted by the deploy (uptime predates this rollout).
-docker inspect -f '{{.State.StartedAt}}' readinprodcloud-traefik-1
-
-# An unrelated site still answers through the same edge.
-curl -sI https://<another-site-on-this-edge> | head -n 1   # still 200/expected
-```
+If your proxy fronts other routes, confirm the OMXTerm rollout did not disturb
+them — the proxy container and the other routes should be unchanged.
 
 Then in a browser: clear the basic-auth prompt → the OMXTerm access gate → enter
-the access token → fill the SSH form for a VPN host (`10.100.0.x`) → confirm the
-host-key fingerprint → use the terminal. The full walkthrough is in
+the access token → fill the SSH form for an allowed host → confirm the host-key
+fingerprint → use the terminal. The full walkthrough is in
 [`usage.md`](./usage.md).
 
-If the SSH step fails to reach a `10.100.0.x` host, confirm the container can
-route to the VPN (bridge containers egress via the host, which owns `wg0`):
+If the SSH step fails to reach a host inside `OMXTERM_SSH_ALLOWED_CIDR`, confirm
+the container can route to that network:
 
 ```bash
-docker compose exec omxterm sh -lc 'getent hosts 10.100.0.2 || true'
+docker compose exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
 ```
 
 ---
@@ -222,10 +214,10 @@ docker compose exec omxterm sh -lc 'getent hosts 10.100.0.2 || true'
 ## Updating
 
 Run the deploy helper. It fast-forwards `main` and rebuilds **only** the
-OMXTerm service, leaving the shared Traefik edge and its other routes running:
+OMXTerm service, leaving the reverse proxy and any other routes running:
 
 ```bash
-/projects/code/omxterm/scripts/deploy
+/opt/omxterm/scripts/deploy
 ```
 
 It stops before any Docker action when the checkout is dirty or `main` has
@@ -233,9 +225,9 @@ diverged from its upstream, so it never discards local work or rewrites history.
 To roll out by hand instead:
 
 ```bash
-cd /projects/code/omxterm
+cd /opt/omxterm
 git fetch origin && git merge --ff-only origin/main
-docker compose up -d --build omxterm   # app service only; don't touch Traefik
+docker compose up -d --build omxterm   # app service only; don't touch the proxy
 ```
 
 The stores are in-memory, so a rebuild drops active sessions and pending tickets
@@ -243,13 +235,11 @@ The stores are in-memory, so a rebuild drops active sessions and pending tickets
 
 ## Rollback
 
-Roll back the app service only; the shared edge stays up throughout.
+Roll back the app service only; the edge stays up throughout.
 
 ```bash
-cd /projects/code/omxterm
+cd /opt/omxterm
 git checkout <previous-good-sha>       # detached HEAD, non-destructive
 docker compose up -d --build omxterm
-# If a dynamic.yml edit caused it, restore the backup from step 5:
-sudo mv /projects/code/read.inprod.cloud/traefik/dynamic.yml.bak \
-        /projects/code/read.inprod.cloud/traefik/dynamic.yml
+# If a proxy config edit caused it, restore the backup you made in step 5.
 ```
