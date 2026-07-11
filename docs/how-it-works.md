@@ -207,7 +207,8 @@ The browser receives `{ ticket, wsUrl: '/terminal/ws', expiresInSeconds: 60 }`.
 Once it has the ticket the browser **drops the private key and passphrase from
 its own React state** ([`apps/web/src/ui/App.tsx`](../apps/web/src/ui/App.tsx))
 — they are no longer needed for the socket, so they don't linger in memory for
-the whole terminal session.
+the whole terminal session. Leaving the confirmation the other way — **Back** —
+drops them too, so an abandoned attempt doesn't keep them referenced either.
 
 > **Why a ticket instead of just the cookie?** Cookies are sent automatically by
 > the browser, which is exactly what makes Cross-Site WebSocket Hijacking

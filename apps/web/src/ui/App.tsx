@@ -17,7 +17,10 @@ type PendingHostKey = {
   fingerprint: string;
 };
 
-export function App() {
+// Owns the broker flow state machine (access -> connect -> host-key -> terminal)
+// so the credential lifetime across each transition is testable at a public
+// seam instead of only through the rendered tree (#81).
+export function useSshBrokerFlow() {
   const [step, setStep] = useState<Step>('loading');
   const [error, setError] = useState<string | null>(null);
   const [pendingHostKey, setPendingHostKey] = useState<PendingHostKey | null>(
@@ -83,6 +86,8 @@ export function App() {
       setPendingHostKey(null);
       setStep('terminal');
     } catch (caught) {
+      // Keep the pending profile so the user can retry trusting on the same
+      // confirmation screen; it is dropped as soon as they leave (#81).
       setError(
         caught instanceof Error
           ? caught.message
@@ -91,33 +96,67 @@ export function App() {
     }
   }
 
+  function leaveHostKeyConfirmation() {
+    // Back abandons the confirmation, so drop the private key/passphrase
+    // reference before returning to the form instead of leaving it mounted
+    // until the next connection overwrites it (#81). JS strings can't be
+    // securely wiped in V8, but releasing the reference lets it be reclaimed.
+    setPendingHostKey(null);
+    setStep('connect');
+  }
+
+  function returnToConnectForm() {
+    setStep('connect');
+  }
+
+  return {
+    step,
+    error,
+    pendingHostKey,
+    transport,
+    terminalTitle,
+    handleAccess,
+    handleConnect,
+    handleTrustHostKey,
+    leaveHostKeyConfirmation,
+    returnToConnectForm,
+  };
+}
+
+export function App() {
+  const flow = useSshBrokerFlow();
+
   return (
     <main
       className={
-        step === 'terminal' ? 'app-shell app-shell--terminal' : 'app-shell'
+        flow.step === 'terminal' ? 'app-shell app-shell--terminal' : 'app-shell'
       }
     >
-      {step !== 'terminal' ? <MarketingChrome /> : null}
-      {error ? (
+      {flow.step !== 'terminal' ? <MarketingChrome /> : null}
+      {flow.error ? (
         <div className='global-error' role='alert'>
-          {error}
+          {flow.error}
         </div>
       ) : null}
-      {step === 'loading' ? <p className='loading'>Loading…</p> : null}
-      {step === 'access' ? <AccessGate onSubmit={handleAccess} /> : null}
-      {step === 'connect' ? <ConnectionGate onSubmit={handleConnect} /> : null}
-      {step === 'host-key' && pendingHostKey ? (
+      {flow.step === 'loading' ? <p className='loading'>Loading…</p> : null}
+      {flow.step === 'access' ? (
+        <AccessGate onSubmit={flow.handleAccess} />
+      ) : null}
+      {flow.step === 'connect' ? (
+        <ConnectionGate onSubmit={flow.handleConnect} />
+      ) : null}
+      {flow.step === 'host-key' && flow.pendingHostKey ? (
         <HostKeyGate
-          pending={pendingHostKey}
-          onBack={() => setStep('connect')}
-          onTrust={handleTrustHostKey}
+          pending={flow.pendingHostKey}
+          onBack={flow.leaveHostKeyConfirmation}
+          onTrust={flow.handleTrustHostKey}
         />
       ) : null}
-      {step === 'terminal' && transport ? (
+      {flow.step === 'terminal' && flow.transport ? (
         <TerminalEmulator
-          adapter={transport}
-          title={terminalTitle}
-          onDisconnect={() => setStep('connect')}
+          adapter={flow.transport}
+          title={flow.terminalTitle}
+          onDisconnect={flow.returnToConnectForm}
         />
       ) : null}
     </main>
