@@ -212,6 +212,9 @@ function ConnectionGate({
     username: '',
     privateKey: '',
   });
+  // Shoulder-surfing protection: the key is masked until the user opts in,
+  // including keys loaded from a file (the default stays masked) (#94).
+  const [privateKeyRevealed, setPrivateKeyRevealed] = useState(false);
   const setField = <K extends keyof SshConnectionDraft>(
     key: K,
     value: SshConnectionDraft[K],
@@ -220,6 +223,9 @@ function ConnectionGate({
   async function readKeyFile(file: File | undefined) {
     if (!file) return;
     setField('privateKey', await file.text());
+    // A freshly loaded key must never inherit a prior reveal; re-mask so
+    // file-loaded keys stay hidden by default even if the field was shown (#94).
+    setPrivateKeyRevealed(false);
   }
 
   return (
@@ -265,15 +271,35 @@ function ConnectionGate({
           required
         />
       </label>
-      <label>
-        <span>Private key</span>
+      <div className='private-key-field'>
+        <div className='private-key-header'>
+          <label htmlFor='private-key-input'>Private key</label>
+          <button
+            type='button'
+            className='reveal-toggle'
+            aria-pressed={privateKeyRevealed}
+            aria-controls='private-key-input'
+            aria-label={
+              privateKeyRevealed ? 'Hide private key' : 'Show private key'
+            }
+            onClick={() => setPrivateKeyRevealed(revealed => !revealed)}
+          >
+            {privateKeyRevealed ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {/* SSH keys are multiline, so this must be a <textarea>, which has no
+            native password masking. The value stays real (paste/edit/multiline
+            keep working); only the rendered glyphs are hidden via CSS keyed on
+            data-masked, so nothing is shoulder-surfed by default (#94). */}
         <textarea
+          id='private-key-input'
           value={profile.privateKey}
           onChange={event => setField('privateKey', event.target.value)}
           rows={7}
           required
+          data-masked={privateKeyRevealed ? 'false' : 'true'}
         />
-      </label>
+      </div>
       <label className='file-loader'>
         <span>Load private key file</span>
         <input
