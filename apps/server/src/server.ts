@@ -203,13 +203,15 @@ export async function createOmxtermServer(
   };
   // Reclaim expired entries (and the SSH key an unconsumed ticket holds) even
   // while the server is idle, instead of only on the next store read (#29). The
-  // rate limiters are keyed by per-login session ids, so their elapsed windows
-  // never get touched again and only the sweep reclaims them (#39).
+  // post-auth limiters are keyed by per-login session ids and the access limiter
+  // by client IP, so their elapsed windows never get touched again and only the
+  // sweep reclaims them (#39 for session keys, #78 for rotating client IPs).
   const stopExpirySweeper = startExpirySweeper(
     [
       stores.tickets,
       stores.sessions,
       stores.devices,
+      stores.accessRateLimiter,
       stores.hostKeyRateLimiter,
       stores.ticketRateLimiter,
     ],

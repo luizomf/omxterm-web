@@ -222,6 +222,13 @@ type FailureWindow = { count: number; windowStartedAt: number };
  * limiter it can be brute-forced unbounded (timingSafeEqual only blocks timing
  * side channels, not guessing). Successful logins reset the counter, so only
  * brute-force traffic — which never succeeds — accumulates toward the lockout.
+ *
+ * check()/recordFailure() only prune an elapsed window when the *same* client
+ * key is touched again, but the key is the client IP — rotating source/IPv6
+ * addresses never repeat, so elapsed windows would otherwise pile up unbounded
+ * across a long-lived public broker (#78, the same stale-window class as #39).
+ * sweepExpired() lets the active sweeper (#29) reclaim them on a cadence; it
+ * implements ExpiringStore so it joins startExpirySweeper.
  */
 export class InMemoryAccessRateLimiter {
   readonly #failuresByClient = new Map<string, FailureWindow>();
@@ -259,6 +266,22 @@ export class InMemoryAccessRateLimiter {
 
   reset(clientKey: string): void {
     this.#failuresByClient.delete(clientKey);
+  }
+
+  // Drops windows whose fixed window has fully elapsed — the same condition
+  // check() prunes lazily on a repeat hit — so active windows (still counting or
+  // blocked with retry-after) are left untouched. Returns how many were
+  // reclaimed, the only externally observable effect of the sweep.
+  sweepExpired(): number {
+    const now = this.clock.now();
+    let dropped = 0;
+    for (const [clientKey, record] of this.#failuresByClient) {
+      if (now - record.windowStartedAt >= this.windowMs) {
+        this.#failuresByClient.delete(clientKey);
+        dropped += 1;
+      }
+    }
+    return dropped;
   }
 }
 
