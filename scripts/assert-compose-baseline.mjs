@@ -31,6 +31,7 @@ if (mode === "baseline") {
   assertLoopbackOnlyPublish(broker);
   assertNoPreCreatedNetwork(networks);
   assertNoPinnedAddress(broker);
+  assertNoGlobalContainerName(broker);
 } else {
   assertReachableSharedNetwork(broker, networks);
 }
@@ -93,6 +94,21 @@ function assertNoPinnedAddress(service) {
           `(${attachment.ipv4_address ?? attachment.ipv6_address}); the portable baseline must not`,
       );
     }
+  }
+}
+
+// A fixed container_name is daemon-global: two projects that both set it cannot
+// run at once, so a fresh clone would collide with any other OMXTerm container
+// on the host and could not `docker compose up` alongside it. Unset, Compose
+// derives a project-scoped name and the service name stays a network alias, so
+// nothing needs a hardcoded name (issue #96).
+function assertNoGlobalContainerName(service) {
+  if (service.container_name) {
+    fail(
+      `omxterm pins a daemon-global container_name "${service.container_name}"; the portable ` +
+        "baseline must let Compose derive a project-scoped name so a fresh clone can run " +
+        "alongside another OMXTerm deployment instead of competing for one global name",
+    );
   }
 }
 

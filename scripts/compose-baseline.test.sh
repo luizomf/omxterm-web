@@ -71,7 +71,7 @@ check_config() {
 
 echo "portable baseline (compose.yml alone)"
 check_config \
-  "fresh-clone config resolves; publishes only to loopback; no external network or pinned address" \
+  "fresh-clone config resolves; publishes only to loopback; no external network, pinned address, or global container_name" \
   baseline \
   -f "${WORK}/compose.yml"
 

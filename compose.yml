@@ -19,7 +19,13 @@
 services:
   omxterm:
     build: .
-    container_name: omxterm
+    # Deliberately no container_name: a fixed name is daemon-global, so a fresh
+    # clone would collide with any other OMXTerm container already on the host
+    # (e.g. the maintainer's deployment) and could not `docker compose up`
+    # alongside it — defeating Compose's per-project isolation. Left unset,
+    # Compose derives a project-scoped name, and the service name `omxterm` stays
+    # a network alias, so an in-network proxy still reaches http://omxterm:3000
+    # (see compose.prod.yml and docs/deploy.md).
     restart: unless-stopped
     env_file: .env
     # Host side pinned to loopback so the broker is reachable only through a
