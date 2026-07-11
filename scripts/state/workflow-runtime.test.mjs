@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const START_CLAUDE = new URL('./start-claude.mjs', import.meta.url).pathname;
 const GUARDIAN = new URL('./workflow-guardian.py', import.meta.url).pathname;
+const WEBHOOK_PROMPT = new URL('./webhook-prompt.md', import.meta.url).pathname;
 
 function temporaryDirectory(prefix, testFunction) {
   const directory = mkdtempSync(join(tmpdir(), prefix));
@@ -127,6 +128,15 @@ print('ok')
   const result = spawnSync('python3', ['-c', script], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout.trim(), 'ok');
+});
+
+test('webhook prompt treats asynchronous review delegation as a completion barrier', () => {
+  const prompt = readFileSync(WEBHOOK_PROMPT, 'utf8');
+
+  assert.match(prompt, /After the tool returns `dispatched`[\s\S]*end that turn immediately/);
+  assert.match(prompt, /Do not record pass\/fail[\s\S]*merge[\s\S]*advance the queue/);
+  assert.match(prompt, /`ASYNC DELEGATION BATCH COMPLETE`[\s\S]*after every child finishes/);
+  assert.match(prompt, /re-read canonical state[\s\S]*revalidate the exact remote\s+SHA/);
 });
 
 test('guardian discovers workflows under XDG_STATE_HOME', () => {

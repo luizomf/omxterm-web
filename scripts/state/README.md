@@ -22,6 +22,14 @@ GitHub event → webhook → Hermes/Brien → review
 - A push emits `pull_request.synchronize`; that event starts a fresh review session.
 - The guardian wakes Brien when the expected GitHub event or runner completion never arrives.
 
+When Brien uses Hermes review subagents, `delegate_task` returns immediately
+with a delegation id and the current turn must stop without deciding the
+review. Hermes sends one consolidated `ASYNC DELEGATION BATCH COMPLETE` event
+after the whole batch finishes. That event resumes the same session, which
+revalidates canonical state and the remote SHA before aggregating findings and
+choosing correction or merge. The existing review claim remains the ownership
+barrier while the batch runs; duplicate webhook or guardian sessions no-op.
+
 ## State
 
 Each state records:
