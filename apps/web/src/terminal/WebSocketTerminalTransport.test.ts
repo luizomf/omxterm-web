@@ -36,14 +36,21 @@ function createTransport(): {
   transport: WebSocketTerminalTransport;
   socket: FakeSocket;
   statuses: TerminalStatus[];
+  errors: string[];
 } {
   const socket = new FakeSocket();
   const transport = new WebSocketTerminalTransport('ws://test/terminal/ws', {
     createSocket: () => socket,
   });
   const statuses: TerminalStatus[] = [];
+  const errors: string[] = [];
   transport.onStatusChange(status => statuses.push(status));
-  return { transport, socket, statuses };
+  transport.onError(message => errors.push(message));
+  return { transport, socket, statuses, errors };
+}
+
+function serverMessage(socket: FakeSocket, message: unknown): void {
+  socket.emit('message', { data: JSON.stringify(message) });
 }
 
 describe('WebSocketTerminalTransport.connect', () => {
@@ -85,5 +92,46 @@ describe('WebSocketTerminalTransport.connect', () => {
 
     socket.emit('close');
     expect(statuses).toContain('closed');
+  });
+});
+
+describe('WebSocketTerminalTransport server error handling', () => {
+  test('keeps the session connected when a resize is rejected', async () => {
+    const { transport, socket, statuses, errors } = createTransport();
+
+    const connecting = transport.connect();
+    socket.emit('open');
+    await connecting;
+    serverMessage(socket, { type: 'ready', sessionId: 's1' });
+
+    serverMessage(socket, {
+      type: 'error',
+      code: 'resize_out_of_bounds',
+      message: 'Resize dimensions are outside the allowed bounds.',
+    });
+
+    // A rejected resize is a scoped control error: the PTY keeps its last good
+    // size, so the transport must not fail the whole session (#80).
+    expect(statuses).not.toContain('error');
+    expect(statuses.at(-1)).toBe('connected');
+    // The rejection is still observable, not swallowed.
+    expect(errors).toContain('Resize dimensions are outside the allowed bounds.');
+  });
+
+  test('fails the transport on a non-resize server error', async () => {
+    const { transport, socket, statuses } = createTransport();
+
+    const connecting = transport.connect();
+    socket.emit('open');
+    await connecting;
+    serverMessage(socket, { type: 'ready', sessionId: 's1' });
+
+    serverMessage(socket, {
+      type: 'error',
+      code: 'ssh_error',
+      message: 'The SSH session failed.',
+    });
+
+    expect(statuses).toContain('error');
   });
 });

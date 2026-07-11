@@ -1,3 +1,4 @@
+import { clampTerminalSize } from '@omxterm/core/protocol';
 import { xtermTheme } from '@omxterm/core/theme';
 import type {
   TerminalStatus,
@@ -90,9 +91,17 @@ export function TerminalEmulator({
       terminal.open(container);
 
       // Keep both xterm's grid and the server PTY aligned with the rendered size.
+      // A very large container can fit past the shared resize bounds, so clamp
+      // the fitted size and force xterm back onto the clamped grid before
+      // sending it — otherwise the broker rejects the resize and xterm keeps
+      // rendering against a PTY that stays at its previous size (#80).
       const syncTerminalSize = () => {
         fitAddon.fit();
-        adapter.resize(terminal.cols, terminal.rows);
+        const { cols, rows } = clampTerminalSize(terminal.cols, terminal.rows);
+        if (cols !== terminal.cols || rows !== terminal.rows) {
+          terminal.resize(cols, rows);
+        }
+        adapter.resize(cols, rows);
       };
 
       // Cmd-only zoom: Ctrl is left to the terminal so we never shadow readline
