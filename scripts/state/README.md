@@ -22,6 +22,16 @@ GitHub event → webhook → Hermes/Brien → review
 - A push emits `pull_request.synchronize`; that event starts a fresh review session.
 - The guardian wakes Brien when the expected GitHub event or runner completion never arrives.
 
+When Brien uses Hermes review subagents, `delegate_task` returns immediately
+with a delegation id. Brien records it with `dispatch-review-batch`, then the
+current turn stops without deciding the review. The state machine rejects both
+`pass` and `dispatch-fix` while that batch is pending. Hermes sends one
+consolidated `ASYNC DELEGATION BATCH COMPLETE` event after the whole batch
+finishes. That event resumes the same session, which matches the event id with
+`complete-review-batch`, revalidates the remote SHA, aggregates findings, and
+chooses correction or merge. The existing review claim remains the ownership
+barrier while the batch runs; duplicate webhook or guardian sessions no-op.
+
 ## State
 
 Each state records:
@@ -79,6 +89,15 @@ node scripts/state/workflow.mjs claim-review \
 
 # Inspect from any session.
 node scripts/state/workflow.mjs show --pr 105
+
+# After delegate_task returns, persist the asynchronous review barrier and end the turn.
+node scripts/state/workflow.mjs dispatch-review-batch \
+  --pr 105 --sha def456 --delegation-id deleg_abc123 \
+  --deadline-at 2026-07-11T20:15:00.000Z
+
+# When ASYNC DELEGATION BATCH COMPLETE resumes the session, match and release the barrier.
+node scripts/state/workflow.mjs complete-review-batch \
+  --pr 105 --delegation-id deleg_abc123 --sha def456 --worker brien
 
 # Conclude a verified review.
 node scripts/state/workflow.mjs pass \

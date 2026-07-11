@@ -53,6 +53,15 @@ Claude uses Sonnet/high and only implements, tests, commits, and pushes. Its
 push emits `pull_request.synchronize`, which wakes a fresh Brien review. Claude
 must not review, merge, choose the next issue, or advance workflow state.
 
+Review delegation is an asynchronous barrier. If Brien dispatches a
+`delegate_task` batch, it must persist the returned id with
+`dispatch-review-batch`, then end that turn: it must not pass, fail, comment,
+merge, or advance the queue. Hermes later delivers one consolidated
+`ASYNC DELEGATION BATCH COMPLETE` event after every child finishes. Only that
+resumed turn may match the id with `complete-review-batch`, synthesize the
+results after revalidating the PR state and exact remote SHA, and continue the
+normal correction-or-merge transition.
+
 Expected concurrency is a no-op: duplicate delivery, duplicate claim, stale
 SHA, or an active runner must never become `blocked`. Before taking over work,
 prove the recorded runner is no longer active. Authentication, quota, startup,

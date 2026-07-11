@@ -187,6 +187,7 @@ function start(options, path, now) {
     },
     lease: null,
     runner: null,
+    reviewBatch: null,
     wakeup: { deadlineAt: options['deadline-at'] || null, lastTriggeredAt: null },
     stop: { requested: false, reason: null },
     createdAt: now,
@@ -234,6 +235,7 @@ function ingestEvent(options, path, now) {
       : { owner: 'brien', action: `Claim and review SHA ${sha}.` },
   };
   state.lease = null;
+  state.reviewBatch = null;
   state.wakeup = { deadlineAt, lastTriggeredAt: null };
   state.stop = { requested: false, reason: null };
   appendHistory(state, { event: 'github_event_ingested', from: currentStatus, status: 'queued', sha, action: options.action || null, runnerSuperseded: supersededRunner }, now);
@@ -292,10 +294,77 @@ function claimReview(options, path, now) {
     next: { owner: worker, action: next },
   };
   state.lease = { owner: worker, expiresAt: options['deadline-at'] || null };
+  state.reviewBatch = null;
   state.wakeup.deadlineAt = options['deadline-at'] || null;
   appendHistory(state, { event, from: status, status: 'reviewing', worker, sha, next }, now);
   writeState(path, state);
   return commandOutcome(state, 'claimed', `Review claimed for ${sha}.`);
+}
+
+function dispatchReviewBatch(options, path, now) {
+  const state = readState(path);
+  if (state.coordination.status !== 'reviewing') {
+    fail(`Review batch dispatch requires status "reviewing", found "${state.coordination.status}".`);
+  }
+  const sha = requireOption(options, 'sha');
+  if (sha !== state.coordination.headSha) {
+    fail(`Cannot dispatch review batch for stale SHA "${sha}"; current SHA is "${state.coordination.headSha}".`);
+  }
+  const delegationId = requireOption(options, 'delegation-id');
+  const deadlineAt = requireOption(options, 'deadline-at');
+  if (state.reviewBatch) {
+    if (state.reviewBatch.status === 'completed') {
+      const outcome = state.reviewBatch.delegationId === delegationId ? 'ignored_terminal' : 'ignored_stale_batch';
+      return commandOutcome(state, outcome, `Review batch ${state.reviewBatch.delegationId} already completed for this claim.`);
+    }
+    const outcome = state.reviewBatch.delegationId === delegationId ? 'ignored_duplicate' : 'ignored_worker_active';
+    return commandOutcome(state, outcome, `Review batch ${state.reviewBatch.delegationId} is still pending.`);
+  }
+  state.reviewBatch = { delegationId, status: 'pending', sha, dispatchedAt: now, completedAt: null };
+  state.coordination.next = { owner: 'brien', action: `Await consolidated review batch ${delegationId}.` };
+  state.wakeup = { deadlineAt, lastTriggeredAt: null };
+  appendHistory(state, { event: 'review_batch_dispatched', delegationId, sha }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'review_batch_dispatched', `Review batch ${delegationId} is pending.`);
+}
+
+function completeReviewBatch(options, path, now) {
+  const state = readState(path);
+  const delegationId = requireOption(options, 'delegation-id');
+  if (state.coordination.status !== 'reviewing') {
+    const duplicate = state.reviewBatch?.status === 'completed' && state.reviewBatch.delegationId === delegationId;
+    const outcome = duplicate ? 'ignored_duplicate' : 'ignored_stale_batch';
+    return commandOutcome(state, outcome, `Review batch ${delegationId} cannot change workflow status ${state.coordination.status}.`);
+  }
+  if (!state.reviewBatch) {
+    return commandOutcome(state, 'ignored_stale_batch', `Review batch ${delegationId} no longer belongs to this claim.`);
+  }
+  if (state.reviewBatch.status === 'completed') {
+    const outcome = state.reviewBatch.delegationId === delegationId ? 'ignored_duplicate' : 'ignored_stale_batch';
+    return commandOutcome(state, outcome, `Review batch ${state.reviewBatch.delegationId} already completed.`);
+  }
+  if (state.reviewBatch.delegationId !== delegationId) {
+    return commandOutcome(state, 'ignored_stale_batch', `Review batch ${delegationId} does not own pending batch ${state.reviewBatch.delegationId}.`);
+  }
+  const sha = requireOption(options, 'sha');
+  if (sha !== state.reviewBatch.sha || sha !== state.coordination.headSha) {
+    return commandOutcome(state, 'ignored_stale_sha', `Review batch ${delegationId} does not match current SHA ${state.coordination.headSha}.`);
+  }
+  const worker = requireOption(options, 'worker');
+  if (worker !== state.coordination.worker || worker !== state.lease?.owner) {
+    return commandOutcome(state, 'ignored_worker_active', `${worker} does not own review batch ${delegationId}.`);
+  }
+  state.reviewBatch = { ...state.reviewBatch, status: 'completed', completedAt: now };
+  state.coordination.next = { owner: 'brien', action: `Synthesize review batch ${delegationId}, revalidate remote SHA, then pass or dispatch correction.` };
+  appendHistory(state, { event: 'review_batch_completed', delegationId, sha: state.reviewBatch.sha }, now);
+  writeState(path, state);
+  return commandOutcome(state, 'review_batch_completed', `Review batch ${delegationId} completed.`);
+}
+
+function requireReviewBatchComplete(state, action) {
+  if (state.reviewBatch?.status === 'pending') {
+    fail(`Cannot ${action} while review batch "${state.reviewBatch.delegationId}" is pending.`);
+  }
 }
 
 function dispatchFix(options, path, now) {
@@ -303,6 +372,7 @@ function dispatchFix(options, path, now) {
   if (state.coordination.status !== 'reviewing') {
     fail(`Correction dispatch requires status "reviewing", found "${state.coordination.status}".`);
   }
+  requireReviewBatchComplete(state, 'dispatch correction');
   const sha = requireOption(options, 'sha');
   if (sha !== state.coordination.headSha) {
     fail(`Cannot dispatch correction for stale SHA "${sha}"; current SHA is "${state.coordination.headSha}".`);
@@ -441,6 +511,7 @@ function passReview(options, path, now) {
   if (state.coordination.status !== 'reviewing') {
     fail(`Passing requires status "reviewing", found "${state.coordination.status}".`);
   }
+  requireReviewBatchComplete(state, 'pass review');
   const sha = requireOption(options, 'sha');
   if (sha !== state.coordination.headSha) {
     fail(`Cannot pass stale SHA "${sha}"; current SHA is "${state.coordination.headSha}".`);
@@ -561,6 +632,7 @@ function stop(options, path, now) {
   if (TERMINAL_STATUSES.has(previousStatus)) {
     return commandOutcome(state, 'ignored_terminal', `Workflow is already ${previousStatus}.`);
   }
+  requireReviewBatchComplete(state, 'stop workflow');
   const status = options.status || 'stopped';
   if (!TERMINAL_STATUSES.has(status)) fail(`Unknown terminal status "${status}".`);
   const reason = requireOption(options, 'reason');
@@ -612,6 +684,8 @@ export function run(argv, now = new Date().toISOString()) {
     start,
     ingest: ingestEvent,
     'claim-review': claimReview,
+    'dispatch-review-batch': dispatchReviewBatch,
+    'complete-review-batch': completeReviewBatch,
     'dispatch-fix': dispatchFix,
     runner: updateRunner,
     'confirm-runner-stop': confirmRunnerStop,
@@ -626,7 +700,7 @@ export function run(argv, now = new Date().toISOString()) {
   };
   if (command === 'show') return readState(path);
   if (!operations[command]) {
-    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|claim-continuation|complete-continuation|resume|stop|wake [--name value ...]');
+    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-review-batch|complete-review-batch|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|claim-continuation|complete-continuation|resume|stop|wake [--name value ...]');
   }
   return mutate(path, () => operations[command](options, path, now));
 }

@@ -431,6 +431,104 @@ test('confirm-runner-stop requires the recorded runner id and a systemd-derived 
   });
 });
 
+test('blocks review decisions until the matching asynchronous review batch completes', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    const dispatched = run([
+      'dispatch-review-batch', '--pr', '103', '--sha', 'sha-a',
+      '--delegation-id', 'deleg-review-a', '--deadline-at', '2026-07-11T19:30:00.000Z',
+    ], '2026-07-11T18:05:00.000Z');
+
+    assert.equal(dispatched.reviewBatch.status, 'pending');
+    assert.equal(dispatched.reviewBatch.delegationId, 'deleg-review-a');
+    assert.throws(
+      () => run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Premature.']),
+      /Cannot pass review while review batch "deleg-review-a" is pending/,
+    );
+    assert.throws(
+      () => run([
+        'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+        '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T20:00:00.000Z',
+        '--reason', 'Premature finding.', '--next', 'Implement.',
+      ]),
+      /Cannot dispatch correction while review batch "deleg-review-a" is pending/,
+    );
+    assert.throws(
+      () => run(['stop', '--pr', '103', '--status', 'failed', '--reason', 'Premature.']),
+      /Cannot stop workflow while review batch "deleg-review-a" is pending/,
+    );
+    assert.equal(
+      run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-stale']).command.outcome,
+      'ignored_stale_batch',
+    );
+    assert.equal(run([
+      'complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a',
+      '--sha', 'sha-stale', '--worker', 'brien',
+    ]).command.outcome, 'ignored_stale_sha');
+    assert.equal(run([
+      'complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a',
+      '--sha', 'sha-a', '--worker', 'other-brien',
+    ]).command.outcome, 'ignored_worker_active');
+
+    const completed = run([
+      'complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a',
+      '--sha', 'sha-a', '--worker', 'brien',
+    ], '2026-07-11T18:06:00.000Z');
+    assert.equal(completed.reviewBatch.status, 'completed');
+    assert.equal(completed.reviewBatch.completedAt, '2026-07-11T18:06:00.000Z');
+    assert.equal(run([
+      'complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a',
+      '--sha', 'sha-a', '--worker', 'brien',
+    ]).command.outcome, 'ignored_duplicate');
+    assert.equal(run([
+      'dispatch-review-batch', '--pr', '103', '--sha', 'sha-a',
+      '--delegation-id', 'deleg-review-a', '--deadline-at', '2026-07-11T19:30:00.000Z',
+    ]).command.outcome, 'ignored_terminal');
+    assert.equal(run([
+      'dispatch-review-batch', '--pr', '103', '--sha', 'sha-a',
+      '--delegation-id', 'deleg-review-b', '--deadline-at', '2026-07-11T19:30:00.000Z',
+    ]).command.outcome, 'ignored_stale_batch');
+    assert.equal(run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'All reviewers passed.']).command.outcome, 'passed');
+    assert.equal(
+      run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a']).command.outcome,
+      'ignored_duplicate',
+    );
+  });
+});
+
+test('ignores late batch completion after a newer SHA owns the review', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    run([
+      'dispatch-review-batch', '--pr', '103', '--sha', 'sha-a',
+      '--delegation-id', 'deleg-review-a', '--deadline-at', '2026-07-11T19:30:00.000Z',
+    ]);
+    run([
+      'ingest', '--pr', '103', '--sha', 'sha-b', '--action', 'synchronize',
+      '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+
+    assert.equal(
+      run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a']).command.outcome,
+      'ignored_stale_batch',
+    );
+    run([
+      'claim-review', '--pr', '103', '--sha', 'sha-b', '--worker', 'brien',
+      '--next', 'Review SHA sha-b.', '--deadline-at', '2026-07-11T20:00:00.000Z',
+    ]);
+    run([
+      'dispatch-review-batch', '--pr', '103', '--sha', 'sha-b',
+      '--delegation-id', 'deleg-review-b', '--deadline-at', '2026-07-11T20:30:00.000Z',
+    ]);
+    assert.equal(
+      run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a']).command.outcome,
+      'ignored_stale_batch',
+    );
+  });
+});
+
 test('passes only the SHA currently under review and exposes the next issue', () => {
   withState(() => {
     run([...START.slice(0, -2), '--next-issue', '104']);

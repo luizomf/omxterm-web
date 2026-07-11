@@ -19,6 +19,19 @@ For `opened`, `ready_for_review`, `reopened`, or `synchronize`:
 5. With no findings: record `pass`, publish state with `publish-state.mjs`, post one concise marked review comment, squash-merge/delete branch when state authorizes completion, record `complete --merge-sha <sha>`, and publish completed state. If `nextIssue` exists, `complete` leaves `queue.continuation` `pending`; continue in this same session: run `claim-continuation`, validate the issue, determine its successor or explicit queue end, create or dispatch its durable implementation step, then record `complete-continuation --issue <n> --evidence "..."` naming what you verified exists. Publish state again. Only an explicit queue end or a recorded concrete blocker permits the session to stop.
 6. With findings: write one complete correction prompt containing every verified blocker found in the full review, dispatch the durable Claude runner using Sonnet/high, confirm its systemd unit or terminal runner result, publish state with `publish-state.mjs`, then stop. Do not wait or start another review.
 
+If review uses `delegate_task`, its background batch is a barrier, not an
+advisory side task. After the tool returns `dispatched`, record its id with
+`dispatch-review-batch`, retain the review claim, and end that turn immediately.
+Do not record pass/fail, publish a review, dispatch Claude, merge, or advance the
+queue. Hermes will resume this same session with one consolidated
+`ASYNC DELEGATION BATCH COMPLETE` event only after every child finishes. On that
+resumed turn, verify the event id matches canonical state, revalidate the exact
+remote SHA, then run `complete-review-batch` with that SHA and the current
+worker. Synthesize every returned result and continue at step 5 or 6. The state
+machine rejects pass, fix, or stop while a batch is pending. A guardian wakeup
+or duplicate webhook while the claimed review waits is a no-op, not permission
+to bypass the batch.
+
 Claude only implements, tests, commits, and pushes. Its push emits `pull_request.synchronize`, which creates the next Hermes review session. Claude must not update workflow state, review, merge, or choose the next issue.
 
 If Claude cannot start, lacks auth/quota, or dies, Brien takes over only after proving no Claude runner remains active. Brien may also repair the workflow implementation directly when a verified defect in the orchestration itself prevents the loop from advancing. Keep that repair scoped to the workflow, add regression coverage, run repository verification, commit and push the current PR branch, then return to normal review. Infrastructure and workflow recovery do not consume another code revision. Never run Brien implementation and Claude concurrently.
