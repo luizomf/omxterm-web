@@ -35,6 +35,13 @@ Each state records:
 
 Exactly one of `nextIssue` or `queue.end` must be set. Missing both is invalid; the loop may not silently forget what follows.
 
+`completed` is terminal for one PR, not necessarily for its queue. When
+`nextIssue` is present, the Brien session that records completion must validate
+that issue, select its successor or explicit queue end, and create or dispatch
+the next durable step before returning. It must verify the new branch, PR,
+workflow state, or runner actually exists. Merely publishing `Start issue #N`
+leaves the queue stalled and violates the protocol.
+
 Code revisions count reviewed implementations for observability. They never cap or stop the loop. Authentication, quota, startup, process, push, and webhook delivery failures are recovery events and do not consume another code revision. Only a concrete external condition that prevents OMXTerm code progress may set `blocked`.
 
 ## Commands
@@ -144,7 +151,7 @@ On `workflow_wakeup`, Brien reconciles evidence in this order:
    with `workflow.mjs confirm-runner-stop`.
 6. If Claude died, inspect worktree, commit, push state, and log.
 7. Recover partial work or take over with `workflow.mjs takeover` only after proving Claude stopped.
-8. If everything already completed, do nothing.
+8. If the PR completed with `nextIssue`, create or dispatch and verify that issue's next durable step before stopping. If it completed with an explicit queue end, do nothing.
 
 Runner startup/auth/quota failure causes Brien takeover. A code rejection causes another Claude correction without an arbitrary retry ceiling. A stale SHA aborts publication; the new SHA wins.
 
