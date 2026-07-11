@@ -71,7 +71,10 @@ The defaults target `localhost`. Any deploy reachable over an untrusted network
 must run behind HTTPS/WSS, because the auth cookies (`omxterm_session_*`,
 `omxterm_device_*`) **are** the authentication and would otherwise travel in
 cleartext. OMXTerm does not terminate TLS itself; put it behind a reverse proxy
-(e.g. Traefik, Caddy, nginx) that does.
+(e.g. Traefik, Caddy, nginx) that does. Application-level token and Origin
+controls do not replace edge rate limiting, firewall policy, or provider DDoS
+protection; read [`docs/public-exposure.md`](./docs/public-exposure.md) before
+making the broker public.
 
 Required for a non-loopback deploy:
 
