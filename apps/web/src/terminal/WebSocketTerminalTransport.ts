@@ -116,11 +116,19 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
 
     if (message.type === 'ready') this.#setStatus('connected');
     if (message.type === 'output') this.#outputHandlers.forEach((handler) => handler(message.data));
-    if (message.type === 'error') {
-      this.#setStatus('error');
-      this.#emitError(message.message);
-    }
+    if (message.type === 'error') this.#handleServerError(message);
     if (message.type === 'exit') this.#setStatus('closed');
+  }
+
+  // A rejected resize is a scoped control error: the PTY keeps its last good
+  // size and the session stays usable, so it must not push the whole transport
+  // to `error` the way a real SSH/transport failure does (#80). The frontend
+  // clamps to the shared bounds, so this only reaches a non-conforming client;
+  // the message is still surfaced (never swallowed), just without failing the
+  // session.
+  #handleServerError(message: Extract<ServerMessage, { type: 'error' }>): void {
+    if (message.code !== 'resize_out_of_bounds') this.#setStatus('error');
+    this.#emitError(message.message);
   }
 
   #setStatus(status: TerminalStatus): void {

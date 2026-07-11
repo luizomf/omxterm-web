@@ -20,10 +20,43 @@ export type TerminalProtocolCodec = {
 };
 
 const MAX_JSON_PAYLOAD_BYTES = 64 * 1024;
-const MIN_COLS = 20;
-const MAX_COLS = 240;
-const MIN_ROWS = 5;
-const MAX_ROWS = 100;
+
+// Shared resize contract for the terminal grid the broker accepts and the
+// frontend fits to. The old 240x100 cap rejected legitimate large layouts: at
+// the shipped font a 2560x2160 CSS viewport fits ~304x128 cells (#80). The
+// bounds below cover that and 4K panels with headroom, while still rejecting
+// absurd dimensions that would burden the PTY or the remote program. Both the
+// server (validation here) and the client (clampTerminalSize) import these, so
+// xterm's grid and the PTY can never drift onto different sizes.
+export const TERMINAL_SIZE_BOUNDS = {
+  minCols: 20,
+  maxCols: 512,
+  minRows: 5,
+  maxRows: 256,
+} as const;
+
+function clampToRange(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Clamps a fitted terminal grid into the shared {@link TERMINAL_SIZE_BOUNDS} so
+ * the frontend can keep xterm and the PTY on the same size instead of sending a
+ * dimension the broker would reject and leaving the two silently diverged (#80).
+ *
+ * @example
+ * clampTerminalSize(304, 128); // { cols: 304, rows: 128 }
+ * clampTerminalSize(9999, 9999); // { cols: 512, rows: 256 }
+ */
+export function clampTerminalSize(
+  cols: number,
+  rows: number,
+): { cols: number; rows: number } {
+  return {
+    cols: clampToRange(cols, TERMINAL_SIZE_BOUNDS.minCols, TERMINAL_SIZE_BOUNDS.maxCols),
+    rows: clampToRange(rows, TERMINAL_SIZE_BOUNDS.minRows, TERMINAL_SIZE_BOUNDS.maxRows),
+  };
+}
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -66,7 +99,12 @@ export function createJsonTerminalProtocolCodec(): TerminalProtocolCodec {
         if (!isFiniteInteger(parsed.cols) || !isFiniteInteger(parsed.rows)) {
           return { ok: false, code: 'invalid_message', message: 'Resize message must include integer cols and rows.' };
         }
-        if (parsed.cols < MIN_COLS || parsed.cols > MAX_COLS || parsed.rows < MIN_ROWS || parsed.rows > MAX_ROWS) {
+        if (
+          parsed.cols < TERMINAL_SIZE_BOUNDS.minCols ||
+          parsed.cols > TERMINAL_SIZE_BOUNDS.maxCols ||
+          parsed.rows < TERMINAL_SIZE_BOUNDS.minRows ||
+          parsed.rows > TERMINAL_SIZE_BOUNDS.maxRows
+        ) {
           return { ok: false, code: 'resize_out_of_bounds', message: 'Resize dimensions are outside the allowed bounds.' };
         }
         return { ok: true, message: { type: 'resize', cols: parsed.cols, rows: parsed.rows } };
