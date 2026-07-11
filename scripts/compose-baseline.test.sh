@@ -1,95 +1,90 @@
 #!/usr/bin/env bash
 
-# Regression guard for the reverse-proxy connectivity seam (PR #100).
+# Regression guard for the portable, safe-by-default Compose baseline (issue #96).
 #
-# docs/deploy.md tells operators that a separately-running reverse proxy reaches
-# the broker as `omxterm:3000` after attaching to a shared, stably-named network.
-# That only holds while compose.yml keeps the broker on such a network instead of
-# silently falling back to the project-default one (whose name is unstable and
-# which an outside proxy is not on). This asserts the merged Compose config still
-# exposes that seam, so the documented connectivity path cannot quietly become
-# impossible.
+# The tracked compose.yml must stay portable: a fresh clone with only a local
+# .env resolves without a pre-created external network or a fixed container
+# address, and it publishes ONLY to loopback so the broker is never exposed on
+# every interface by accident. The maintainer's app-scoped production rollout
+# layers compose.prod.yml on top to reach the broker over a shared, stably-named
+# Docker network — this asserts that override still merges and still exposes that
+# seam, so neither the portable path nor the production path can silently break.
 #
-# It also guards the bootstrap ordering: the fresh-install runbook runs
-# `docker compose create` to create the omxterm-edge network, reads its subnet
-# into OMXTERM_TRUST_PROXY, and only then starts the broker. That works only while
-# Compose itself creates the network — an `external: true` network would have to be
-# pre-created out of band, so the create-then-inspect step would find nothing.
+# Everything runs through `docker compose config` only: it resolves and validates
+# the descriptor without building images or starting containers, so it is safe to
+# run anywhere and never touches a real deployment.
 #
 # Skips (does not fail) when the docker CLI is unavailable, so the gate stays
 # green in docker-less environments.
 #
-# Run: bash scripts/compose-connectivity.test.sh
+# Run: bash scripts/compose-baseline.test.sh
 
 set -uo pipefail
 
 REPO_ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")"
+ASSERT="${REPO_ROOT}/scripts/assert-compose-baseline.mjs"
+
+pass=0
+fail=0
+
+fail_test() {
+  echo "  FAIL: $1"
+  fail=$((fail + 1))
+}
+
+pass_test() {
+  echo "  ok: $1"
+  pass=$((pass + 1))
+}
 
 if ! command -v docker >/dev/null 2>&1; then
-  echo "compose-connectivity.test.sh: docker not found, skipping"
+  echo "compose-baseline.test.sh: docker not found, skipping"
   exit 0
 fi
 
-# Resolve the config in a throwaway project dir with an empty .env so the check
-# never depends on a real local .env (compose.yml's `env_file: .env` must exist).
+# Resolve configs in a throwaway project dir with an EMPTY .env so the checks
+# never depend on a real local .env — compose.yml's `env_file: .env` only needs
+# the file to exist, not to hold valid values. This mirrors a fresh clone.
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 cp "${REPO_ROOT}/compose.yml" "${WORK}/compose.yml"
+cp "${REPO_ROOT}/compose.prod.yml" "${WORK}/compose.prod.yml"
 : >"${WORK}/.env"
 
-if ! config_json="$(docker compose -f "${WORK}/compose.yml" config --format json 2>"${WORK}/err")"; then
-  echo "  FAIL: docker compose config failed:"
-  cat "${WORK}/err"
-  echo
-  echo "compose-connectivity.test.sh: 0 passed, 1 failed"
-  exit 1
-fi
+# Resolve the merged config for the given -f list, then assert the named contract
+# against it. Reports the compose error verbatim if resolution itself fails.
+check_config() {
+  local label="$1" mode="$2"
+  shift 2
+  local config_json
+  if ! config_json="$(docker compose "$@" config --format json 2>"${WORK}/err")"; then
+    fail_test "docker compose config failed for ${label}:"
+    cat "${WORK}/err"
+    return
+  fi
+  if printf '%s' "${config_json}" | node "${ASSERT}" "${mode}"; then
+    pass_test "${label}"
+  else
+    fail=$((fail + 1))
+  fi
+}
 
-printf '%s' "${config_json}" | node -e '
-  const cfg = JSON.parse(require("fs").readFileSync(0, "utf8"));
-  const broker = cfg.services && cfg.services.omxterm;
-  if (!broker) {
-    console.error("  FAIL: no omxterm service in the compose config");
-    process.exit(1);
-  }
-  const attached = Object.keys(broker.networks || {});
-  if (attached.length === 0) {
-    console.error("  FAIL: omxterm is on no explicit network; a separate reverse proxy could not reach omxterm:3000");
-    process.exit(1);
-  }
-  for (const key of attached) {
-    const network = (cfg.networks || {})[key] || {};
-    const resolvedName = network.name;
-    // An external network is created out of band, not by `docker compose create`,
-    // so the runbook could not inspect its subnet before starting the broker.
-    if (network.external) {
-      console.error(
-        `  FAIL: omxterm network "${key}" is declared external; Compose would not create it, ` +
-        "so `docker compose create` + `docker network inspect omxterm-edge` could not bootstrap its subnet",
-      );
-      process.exit(1);
-    }
-    const isStableShared =
-      key !== "default" &&
-      typeof resolvedName === "string" &&
-      resolvedName.length > 0 &&
-      !resolvedName.endsWith("_default");
-    if (!isStableShared) {
-      console.error(
-        `  FAIL: omxterm network "${key}" has no stable shared name a proxy can attach to ` +
-        `(resolved: ${resolvedName || "<project default>"})`,
-      );
-      process.exit(1);
-    }
-  }
-  console.log("  ok: omxterm exposes a Compose-created, stably-named shared network for the reverse proxy");
-'
-status=$?
+echo "portable baseline (compose.yml alone)"
+check_config \
+  "fresh-clone config resolves; publishes only to loopback; no external network or pinned address" \
+  baseline \
+  -f "${WORK}/compose.yml"
+
+echo "production override (compose.yml + compose.prod.yml)"
+check_config \
+  "override merges and joins the broker to a Compose-created, stably-named shared network" \
+  prod \
+  -f "${WORK}/compose.yml" -f "${WORK}/compose.prod.yml"
 
 echo
-if [ "${status}" -eq 0 ]; then
-  echo "compose-connectivity.test.sh: 1 passed, 0 failed"
+if [ "${fail}" -eq 0 ]; then
+  echo "compose-baseline.test.sh: ${pass} passed, 0 failed"
 else
-  echo "compose-connectivity.test.sh: 0 passed, 1 failed"
+  echo "compose-baseline.test.sh: ${pass} passed, ${fail} failed"
 fi
-exit "${status}"
+[ "${fail}" -eq 0 ]
