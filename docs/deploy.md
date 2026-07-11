@@ -199,11 +199,10 @@ htpasswd -nB <user> | sudo tee -a /etc/omxterm/auth/omxterm-usersfile
 
 ## 5. Route it in the reverse proxy (Traefik example)
 
-The service URL is `http://127.0.0.1:3000` if the proxy runs on the host
-(step 3a), or `http://omxterm:3000` if it shares the `omxterm-edge` network
-(step 3b). With Traefik's file provider, add these entries to your dynamic
-configuration (merge into the existing `http.routers`, `http.services`, and
-`http.middlewares` maps — don't duplicate the top-level keys):
+With Traefik's file provider, add these entries to your dynamic configuration
+(merge into the existing `http.routers`, `http.services`, and `http.middlewares`
+maps — don't duplicate the top-level keys). The router and middleware are the
+same for both topologies from step 3; only the service URL differs:
 
 > ⚠️ If this config file is shared with other routes, a YAML typo is hot-reloaded
 > and can break them too. Back it up first and re-read it after saving.
@@ -221,19 +220,36 @@ http:
         - omxterm-auth
       service: omxterm
 
-  services:
-    omxterm:
-      loadBalancer:
-        servers:
-          # host-based proxy: http://127.0.0.1:3000
-          # own-stack proxy on omxterm-edge: http://omxterm:3000
-          - url: 'http://omxterm:3000'
-
   middlewares:
     omxterm-auth:
       basicAuth:
         usersFile: /auth/omxterm-usersfile
         realm: omxterm
+```
+
+Then add the `http.services` entry that matches the topology you started in
+step 3 — copy the one block, not both:
+
+**3a. Portable baseline — proxy on the host:**
+
+```yaml
+http:
+  services:
+    omxterm:
+      loadBalancer:
+        servers:
+          - url: 'http://127.0.0.1:3000'
+```
+
+**3b. Production override — proxy in its own stack, attached to `omxterm-edge`:**
+
+```yaml
+http:
+  services:
+    omxterm:
+      loadBalancer:
+        servers:
+          - url: 'http://omxterm:3000'
 ```
 
 The file provider applies the change on save (`watch=true`) — no proxy restart.
