@@ -147,6 +147,55 @@ describe('access rate limiter', () => {
     expect(limiter.check('1.2.3.4').allowed).toBe(false);
     expect(limiter.check('5.6.7.8').allowed).toBe(true);
   });
+
+  test('sweepExpired reclaims failure windows that have fully elapsed', () => {
+    const clock = createClock();
+    const limiter = new InMemoryAccessRateLimiter(clock, 1, 1_000);
+    // Distinct client keys (rotating IPs) each open a window and are never hit
+    // again — the #78 leak: check()/recordFailure() only prune on a repeat of
+    // the same key, so only the active sweep can reclaim these.
+    limiter.recordFailure('1.1.1.1');
+    limiter.recordFailure('2.2.2.2');
+    limiter.recordFailure('3.3.3.3');
+
+    clock.advance(1_000);
+    expect(limiter.sweepExpired()).toBe(3);
+    // A second sweep finds nothing: the entries were dropped, not just counted.
+    expect(limiter.sweepExpired()).toBe(0);
+  });
+
+  test('sweepExpired leaves an active window and its retry-after untouched', () => {
+    const clock = createClock();
+    const limiter = new InMemoryAccessRateLimiter(clock, 1, 1_000);
+    limiter.recordFailure('1.2.3.4');
+    clock.advance(400);
+    const before = limiter.check('1.2.3.4');
+
+    expect(limiter.sweepExpired()).toBe(0);
+
+    const after = limiter.check('1.2.3.4');
+    expect(before.allowed).toBe(false);
+    expect(after.allowed).toBe(false);
+    // Same clock reading before and after the sweep → identical retry-after.
+    if (!before.allowed && !after.allowed) {
+      expect(after.retryAfterMs).toBe(before.retryAfterMs);
+      expect(after.retryAfterMs).toBe(600);
+    }
+  });
+
+  test('sweepExpired keeps a still-open window counting toward the lockout', () => {
+    const clock = createClock();
+    const limiter = new InMemoryAccessRateLimiter(clock, 2, 1_000);
+    limiter.recordFailure('1.2.3.4'); // 1 of 2, still under the limit
+
+    clock.advance(400);
+    expect(limiter.sweepExpired()).toBe(0);
+
+    // The window survived the sweep, so the next failure trips the limit — a
+    // wiped window would reset the count and weaken the brute-force lockout.
+    limiter.recordFailure('1.2.3.4');
+    expect(limiter.check('1.2.3.4').allowed).toBe(false);
+  });
 });
 
 describe('fixed-window rate limiter', () => {
