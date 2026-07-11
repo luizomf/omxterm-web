@@ -103,8 +103,8 @@ test_clean_uptodate_deploys_app_only() {
   fi
   docker_ran || fail_test "expected docker compose to run"
   grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
-  if grep -qiE "traefik|read\.inprod\.cloud" "${DOCKER_LOG}"; then
-    fail_test "must not touch the shared Traefik edge stack"
+  if grep -qiE "traefik|nginx|caddy" "${DOCKER_LOG}"; then
+    fail_test "must not touch the reverse-proxy edge stack"
   fi
   if grep -q "down" "${DOCKER_LOG}"; then
     fail_test "must not run 'compose down' on any stack"

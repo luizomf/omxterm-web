@@ -1,7 +1,16 @@
-# Deploy descriptor for the VPS. The broker runs as a single container behind a
-# shared, pre-existing Traefik (file provider) on the external `read_inprod_web`
-# network. Routing/TLS/basicAuth live in that Traefik's dynamic.yml — see
-# docs/deploy.md. Secrets come from a local .env (not committed).
+# Compose descriptor for the OMXTerm broker. It runs as a single container that
+# you place behind a reverse proxy terminating TLS (see docs/deploy.md). Secrets
+# and origin come from a local .env (git-ignored, never committed).
+#
+# The broker joins the `omxterm-edge` network (a stable name, created by Compose
+# on `up`) instead of only the project-default network. A reverse proxy running
+# in its own stack can attach to it — `docker network connect omxterm-edge
+# <proxy>` — and then reach the broker as `omxterm:3000`. Without this shared,
+# stably-named seam a proxy outside this project has no route to the container.
+#
+# The full portable, safe-by-default baseline (loopback-bound publishing, a
+# reverse-proxy-agnostic topology) is tracked in #96; keep any further
+# deployment-specific address or edge wiring in a local override, not here.
 services:
   omxterm:
     build: .
@@ -9,13 +18,8 @@ services:
     restart: always
     env_file: .env
     networks:
-      # Pinned so the host firewall can allow-list this container's own
-      # address for SSH (self-target demo); a floating IP would silently
-      # drift on the next recreate and the allow rule would stop matching.
-      web:
-        ipv4_address: 172.16.1.2
+      - edge
 
 networks:
-  web:
-    name: read_inprod_web
-    external: true
+  edge:
+    name: omxterm-edge
