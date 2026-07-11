@@ -74,11 +74,28 @@ class FakeSshClient extends EventEmitter implements SshClientDriver {
   }
 }
 
-function fakeChannel(): ClientChannel {
-  const channel = new EventEmitter() as EventEmitter & { stderr: EventEmitter; close(): void };
+function fakeChannel(writeResult = true): ClientChannel {
+  const channel = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter;
+    close(): void;
+    write(data: string): boolean;
+  };
   channel.stderr = new EventEmitter();
   channel.close = () => channel.emit('close');
+  channel.write = () => writeResult;
   return channel as unknown as ClientChannel;
+}
+
+async function establishedSession(channel: ClientChannel): Promise<{
+  session: SshTerminalSession;
+  client: FakeSshClient;
+}> {
+  const { session, client } = createSession();
+  const connecting = session.connect(profile, { cols: 80, rows: 24 });
+  client.emit('ready');
+  client.openShell(channel);
+  await connecting;
+  return { session, client };
 }
 
 function createSession(overrides: { connectDeadlineMs?: number } = {}): {
@@ -184,5 +201,33 @@ describe('SshTerminalSession lifecycle', () => {
 
     await expect(connecting).rejects.toMatchObject({ reason: 'ssh_shell_open_failed' });
     expect(client.destroyCount).toBe(1);
+  });
+});
+
+describe('SshTerminalSession write backpressure (#77)', () => {
+  test('reports the channel accepted the input when write() returns true', async () => {
+    const { session } = await establishedSession(fakeChannel(true));
+    expect(session.write('ls\n')).toBe(true);
+  });
+
+  test('surfaces SSH write backpressure when the channel buffer is full', async () => {
+    const { session } = await establishedSession(fakeChannel(false));
+    expect(session.write('flood')).toBe(false);
+  });
+
+  test('emits drain when the channel drains so the broker can resume queued input', async () => {
+    const channel = fakeChannel(false);
+    const { session } = await establishedSession(channel);
+    const drains: number[] = [];
+    session.on('drain', () => drains.push(1));
+
+    (channel as unknown as EventEmitter).emit('drain');
+
+    expect(drains).toEqual([1]);
+  });
+
+  test('reports writable before a channel is attached so pre-ready input never stalls the queue', () => {
+    const { session } = createSession();
+    expect(session.write('typed before ready')).toBe(true);
   });
 });

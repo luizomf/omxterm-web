@@ -13,7 +13,8 @@ export type AuditEventName =
   | 'host_key_trusted'
   | 'host_key_probe_failed'
   | 'ssh_egress_blocked'
-  | 'resize';
+  | 'resize'
+  | 'terminal_flood';
 
 export type AuditEvent = {
   ts: string;
