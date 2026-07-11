@@ -295,7 +295,7 @@ function ConnectionGate({
           id='private-key-input'
           value={profile.privateKey}
           onChange={event => setField('privateKey', event.target.value)}
-          rows={7}
+          rows={2}
           required
           data-masked={privateKeyRevealed ? 'false' : 'true'}
         />
