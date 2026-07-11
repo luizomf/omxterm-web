@@ -26,10 +26,11 @@ Do not record pass/fail, publish a review, dispatch Claude, merge, or advance th
 queue. Hermes will resume this same session with one consolidated
 `ASYNC DELEGATION BATCH COMPLETE` event only after every child finishes. On that
 resumed turn, verify the event id matches canonical state, revalidate the exact
-remote SHA, then run `complete-review-batch`. Synthesize every returned result
-and continue at step 5 or 6. The state machine rejects pass/fix while a batch is
-pending. A guardian wakeup or duplicate webhook while the claimed review waits
-is a no-op, not permission to bypass the batch.
+remote SHA, then run `complete-review-batch` with that SHA and the current
+worker. Synthesize every returned result and continue at step 5 or 6. The state
+machine rejects pass, fix, or stop while a batch is pending. A guardian wakeup
+or duplicate webhook while the claimed review waits is a no-op, not permission
+to bypass the batch.
 
 Claude only implements, tests, commits, and pushes. Its push emits `pull_request.synchronize`, which creates the next Hermes review session. Claude must not update workflow state, review, merge, or choose the next issue.
 

@@ -97,7 +97,7 @@ node scripts/state/workflow.mjs dispatch-review-batch \
 
 # When ASYNC DELEGATION BATCH COMPLETE resumes the session, match and release the barrier.
 node scripts/state/workflow.mjs complete-review-batch \
-  --pr 105 --delegation-id deleg_abc123
+  --pr 105 --delegation-id deleg_abc123 --sha def456 --worker brien
 
 # Conclude a verified review.
 node scripts/state/workflow.mjs pass \

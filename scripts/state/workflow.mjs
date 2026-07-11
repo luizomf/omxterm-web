@@ -312,7 +312,11 @@ function dispatchReviewBatch(options, path, now) {
   }
   const delegationId = requireOption(options, 'delegation-id');
   const deadlineAt = requireOption(options, 'deadline-at');
-  if (state.reviewBatch?.status === 'pending') {
+  if (state.reviewBatch) {
+    if (state.reviewBatch.status === 'completed') {
+      const outcome = state.reviewBatch.delegationId === delegationId ? 'ignored_terminal' : 'ignored_stale_batch';
+      return commandOutcome(state, outcome, `Review batch ${state.reviewBatch.delegationId} already completed for this claim.`);
+    }
     const outcome = state.reviewBatch.delegationId === delegationId ? 'ignored_duplicate' : 'ignored_worker_active';
     return commandOutcome(state, outcome, `Review batch ${state.reviewBatch.delegationId} is still pending.`);
   }
@@ -330,14 +334,23 @@ function completeReviewBatch(options, path, now) {
     fail(`Review batch completion requires status "reviewing", found "${state.coordination.status}".`);
   }
   const delegationId = requireOption(options, 'delegation-id');
-  if (!state.reviewBatch || state.reviewBatch.status !== 'pending') {
-    fail('Workflow has no pending review batch to complete.');
+  if (!state.reviewBatch) {
+    return commandOutcome(state, 'ignored_stale_batch', `Review batch ${delegationId} no longer belongs to this claim.`);
+  }
+  if (state.reviewBatch.status === 'completed') {
+    const outcome = state.reviewBatch.delegationId === delegationId ? 'ignored_duplicate' : 'ignored_stale_batch';
+    return commandOutcome(state, outcome, `Review batch ${state.reviewBatch.delegationId} already completed.`);
   }
   if (state.reviewBatch.delegationId !== delegationId) {
-    fail(`--delegation-id must match pending review batch "${state.reviewBatch.delegationId}", received "${delegationId}".`);
+    return commandOutcome(state, 'ignored_stale_batch', `Review batch ${delegationId} does not own pending batch ${state.reviewBatch.delegationId}.`);
   }
-  if (state.reviewBatch.sha !== state.coordination.headSha) {
-    fail(`Review batch SHA "${state.reviewBatch.sha}" is stale; current SHA is "${state.coordination.headSha}".`);
+  const sha = requireOption(options, 'sha');
+  if (sha !== state.reviewBatch.sha || sha !== state.coordination.headSha) {
+    return commandOutcome(state, 'ignored_stale_sha', `Review batch ${delegationId} does not match current SHA ${state.coordination.headSha}.`);
+  }
+  const worker = requireOption(options, 'worker');
+  if (worker !== state.coordination.worker || worker !== state.lease?.owner) {
+    return commandOutcome(state, 'ignored_worker_active', `${worker} does not own review batch ${delegationId}.`);
   }
   state.reviewBatch = { ...state.reviewBatch, status: 'completed', completedAt: now };
   state.coordination.next = { owner: 'brien', action: `Synthesize review batch ${delegationId}, revalidate remote SHA, then pass or dispatch correction.` };
@@ -617,6 +630,7 @@ function stop(options, path, now) {
   if (TERMINAL_STATUSES.has(previousStatus)) {
     return commandOutcome(state, 'ignored_terminal', `Workflow is already ${previousStatus}.`);
   }
+  requireReviewBatchComplete(state, 'stop workflow');
   const status = options.status || 'stopped';
   if (!TERMINAL_STATUSES.has(status)) fail(`Unknown terminal status "${status}".`);
   const reason = requireOption(options, 'reason');
@@ -684,7 +698,7 @@ export function run(argv, now = new Date().toISOString()) {
   };
   if (command === 'show') return readState(path);
   if (!operations[command]) {
-    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|claim-continuation|complete-continuation|resume|stop|wake [--name value ...]');
+    fail('Usage: workflow.mjs show|start|ingest|claim-review|dispatch-review-batch|complete-review-batch|dispatch-fix|runner|confirm-runner-stop|takeover|pass|complete|claim-continuation|complete-continuation|resume|stop|wake [--name value ...]');
   }
   return mutate(path, () => operations[command](options, path, now));
 }
