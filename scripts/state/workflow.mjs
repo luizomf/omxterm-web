@@ -342,6 +342,12 @@ function resumeWorkflow(options, path, now) {
   if (state.coordination.status !== 'failed') {
     return commandOutcome(state, 'ignored_not_failed', `Workflow is ${state.coordination.status}, not failed.`);
   }
+  if (state.runner && ACTIVE_RUNNER_STATUSES.has(state.runner.status)) {
+    return commandOutcome(state, 'ignored_worker_active', `Runner ${state.runner.id} is still ${state.runner.status}; prove it stopped before resuming.`);
+  }
+  if (state.runner?.stopConfirmed === false) {
+    return commandOutcome(state, 'ignored_runner_stop_pending', `Runner ${state.runner.id} stop is not yet confirmed inactive; run confirm-runner-stop before resuming.`);
+  }
   const reason = requireOption(options, 'reason');
   state.coordination = {
     ...state.coordination,
