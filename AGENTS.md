@@ -63,6 +63,13 @@ Every workflow declares either a next issue or an explicit queue end. A
 periodic guardian wakes Hermes when a lease expires or an expected webhook is
 missing. Runtime state, prompts, runner logs, and locks stay outside Git.
 
+Completing one PR does not complete a queue that declares `nextIssue`. Before
+ending its webhook session, Brien must validate that issue, determine its own
+successor or explicit queue end, and create or dispatch the next durable step.
+It may stop only after proving that step exists, or after recording a concrete
+blocker. Saying "start issue #N" is not a transition and must never replace
+starting it.
+
 Since Git and GitHub are the main project context, be explicit, precise, and
 concise about every change. Always describe what matters for project
 understanding in commits, issues, PRs, and handoffs.
