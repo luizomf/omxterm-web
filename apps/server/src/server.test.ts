@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { createOmxtermServer, scrubSshConnectionSecrets } from "./server";
+import { JsonlAuditLogger } from "./audit-logger";
 import type { ServerConfig } from "./config";
 
 const baseConfig: ServerConfig = {
@@ -406,6 +407,59 @@ async function waitForAuditEvent(
     `Audit event "${event}" not found within ${timeoutMs}ms. Log:\n${lastContents}`,
   );
 }
+
+describe("audit sink failure isolation", () => {
+  test("fails fast at startup when the configured audit sink is not writable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "omxterm-audit-"));
+    // A regular file where a directory is expected makes the sink unwritable.
+    const occupied = join(dir, "occupied");
+    writeFileSync(occupied, "x");
+    const auditLogPath = join(occupied, "audit.jsonl");
+    try {
+      await expect(
+        createOmxtermServer({ ...baseConfig, auditLogPath }),
+      ).rejects.toThrow(/OMXTERM_AUDIT_LOG/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the broker alive when a runtime sink failure hits the raw upgrade boundary", async () => {
+    // The real logger over a sink that always throws models a disk that filled
+    // after boot; the failure must not escape the raw "upgrade" listener (#79).
+    const audit = new JsonlAuditLogger(
+      () => {
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      },
+      () => {},
+    );
+    const app = await createOmxtermServer(baseConfig, { audit });
+    try {
+      const port = await listenOnLoopback(app);
+      const response = await sendRawHttpRequest(
+        port,
+        [
+          "GET //example.com:99999/?ticket=secret-ticket HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          `Origin: ${baseConfig.allowedOrigins[0]}`,
+          "Cookie: session=secret-cookie",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+
+      expect(response).toMatch(/^HTTP\/1\.1 400 /);
+      const health = await app.inject({ method: "GET", url: "/health" });
+      expect(health.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+});
 
 describe("terminal session SSH dial failure", () => {
   test("audits a normalized connect-failure reason without leaking credentials", async () => {
