@@ -178,6 +178,34 @@ test('resumes a legacy failed workflow without resetting revision history', () =
   });
 });
 
+test('refuses to resume while the recorded Claude runner may still be active', () => {
+  for (const runnerStatus of ['starting', 'running']) {
+    withState(() => {
+      run(START);
+      run(CLAIM);
+      run([
+        'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+        '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T19:00:00.000Z',
+        '--reason', 'Review blocker.', '--next', 'Implement.',
+      ]);
+      if (runnerStatus === 'running') {
+        run(['runner', '--pr', '103', '--runner-id', 'omxterm-pr-103-a1', '--status', 'running']);
+      }
+      run(['stop', '--pr', '103', '--status', 'failed', '--reason', 'Legacy attempt ceiling.']);
+
+      const refused = run([
+        'resume', '--pr', '103', '--reason', 'Attempt count no longer stops code progress.',
+        '--deadline-at', '2026-07-11T20:00:00.000Z',
+      ]);
+
+      assert.equal(refused.command.outcome, 'ignored_worker_active', runnerStatus);
+      assert.equal(refused.coordination.status, 'failed', runnerStatus);
+      assert.equal(refused.runner.status, runnerStatus, runnerStatus);
+      assert.equal(refused.stop.requested, true, runnerStatus);
+    });
+  }
+});
+
 test('does not let Brien take over while Claude may still be running', () => {
   withState(() => {
     run(START);
