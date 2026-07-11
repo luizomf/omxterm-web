@@ -265,6 +265,18 @@ From here the broker bridges the small JSON terminal protocol
   bounds-checked, never fed to the shell as input), `ping`.
 - **Server → client:** `ready`, `output`, `error`, `exit`, `pong`.
 
+The broker also **bounds the inbound side** so an authenticated client cannot
+outrun the SSH target or the audit sink (#77). The 64 KB `maxPayload` only limits
+one frame; on top of it, each connection carries a fixed-window byte/message
+budget, a strictly bounded input queue that honors SSH write backpressure (it
+stops feeding stdin when `channel.write()` pushes back and resumes on `drain`),
+and coalesces bursty `resize` events into at most one PTY resize + audit write
+per event-loop turn — so a resize flood can't amplify into synchronous disk
+writes. A sustained flood — message rate, byte rate, or a backlog against a
+stalled channel — is closed with a `terminal_flood` audit event. Normal typing,
+paste within the payload limit, resize, and Ctrl-C are untouched
+([`apps/server/src/terminal-inbound-guard.ts`](../apps/server/src/terminal-inbound-guard.ts)).
+
 Output is UTF-8 decoded per stream so a multi-byte character split across two
 PTY chunks is reassembled instead of rendering as `�`
 ([`apps/server/src/terminal-output-decoder.ts`](../apps/server/src/terminal-output-decoder.ts),
@@ -302,8 +314,10 @@ as: `access_granted` / `access_rejected` (with a normalized reason like
 `rate_limited`), `ssh_egress_blocked` (with the blocked host/port and reason),
 `ticket_issued`, `ws_upgrade_rejected` (with reason, including
 `too_many_ws_connections` and `too_many_active_sessions` for the capacity caps),
-`ticket_consumed`, `session_started`, `resize`, and `session_ended` (with byte
-counts).
+`ticket_consumed`, `session_started`, `resize`, `terminal_flood` (a
+per-connection inbound flood was closed, with a normalized reason like
+`inbound_message_rate`, `inbound_byte_rate`, or `inbound_backlog`), and
+`session_ended` (with byte counts).
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
 keystroke or terminal output — the log is safe to share.

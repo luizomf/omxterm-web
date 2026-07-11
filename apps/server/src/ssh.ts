@@ -74,6 +74,9 @@ export type SshTerminalSessionEvents = {
   output: [data: string];
   close: [reason: string];
   error: [error: Error];
+  // Fires when a channel that pushed back on write() (returned false) has
+  // flushed its buffer, so the broker can resume draining queued input (#77).
+  drain: [];
 };
 
 // Normalized, credential-free reasons a connect attempt can fail with. They are
@@ -227,8 +230,13 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
     });
   }
 
-  write(data: string): void {
-    this.#channel?.write(data);
+  // Returns the channel's writable signal: false means ssh2's stdin buffer is
+  // full and the broker should stop feeding input until the next `drain` (#77).
+  // Reports writable (true) before a channel is attached — pre-ready input is
+  // dropped, exactly as before, but must never look like backpressure or the
+  // broker's bounded input queue would stall waiting for a drain that can't come.
+  write(data: string): boolean {
+    return this.#channel?.write(data) ?? true;
   }
 
   // Pause/resume only the readable side of the channel for backpressure (#19).
@@ -274,6 +282,7 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
     channel.stderr.on('data', (data: Buffer | string) => {
       this.emit('output', decodeStderr(data));
     });
+    channel.on('drain', () => this.emit('drain'));
     channel.on('close', () => this.emit('close', 'ssh_channel_closed'));
   }
 
