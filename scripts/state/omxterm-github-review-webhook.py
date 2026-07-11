@@ -16,7 +16,7 @@ EXPECTED_REPOSITORY = "luizomf/omxterm"
 MAINTAINER_LOGIN = "luizomf"
 PULL_REQUEST_ACTIONS = {"opened", "ready_for_review", "reopened", "synchronize"}
 COMMENT_ACTIONS = {"created", "edited"}
-COMMENT_TRIGGER = re.compile(r"(?:^|\s)(?:@brien|/brien|/review)(?=\s|$)", re.IGNORECASE)
+COMMENT_TRIGGER = re.compile(r"^\s*(?:@brien|/brien|/review)(?=\s|$)", re.IGNORECASE)
 AGENT_RESPONSE_MARKER = "<!-- brien-webhook-response -->"
 MAX_COMMENT_LENGTH = 2_000
 WORKFLOW = Path(os.environ.get("OMXTERM_WORKFLOW_CLI", Path(__file__).resolve().with_name("workflow.mjs")))
@@ -109,7 +109,7 @@ def normalize_comment(payload: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     body = text(comment.get("body"))
-    if AGENT_RESPONSE_MARKER in body or not COMMENT_TRIGGER.search(body):
+    if AGENT_RESPONSE_MARKER in body or not COMMENT_TRIGGER.match(body):
         return None
 
     pull_request = payload.get("pull_request")

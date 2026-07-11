@@ -79,3 +79,28 @@ test('ignores untrusted comments and the agent response marker', () => {
     assert.equal(runFilter({ ...base, sender: { login: 'luizomf' }, comment: { body: '/review <!-- brien-webhook-response -->' } }, statePath).output, null);
   });
 });
+
+test('normalizes a trusted maintainer comment beginning with /review', () => {
+  withState((statePath) => {
+    const result = runFilter({
+      action: 'created', repository: { full_name: 'luizomf/omxterm' },
+      sender: { login: 'luizomf' },
+      issue: { number: 103, pull_request: { url: 'https://example.test/pr/103' }, title: 'PR' },
+      comment: { id: 1, body: '/review this please' },
+    }, statePath);
+    assert.equal(result.output.event, 'issue_comment');
+    assert.equal(result.output.comment, '/review this please');
+  });
+});
+
+test('ignores a trusted maintainer comment mentioning @brien later in prose', () => {
+  withState((statePath) => {
+    const result = runFilter({
+      action: 'created', repository: { full_name: 'luizomf/omxterm' },
+      sender: { login: 'luizomf' },
+      issue: { number: 103, pull_request: { url: 'https://example.test/pr/103' }, title: 'PR' },
+      comment: { id: 1, body: 'context only @brien no action' },
+    }, statePath);
+    assert.equal(result.output, null);
+  });
+});
