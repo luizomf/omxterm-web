@@ -655,7 +655,7 @@ test('treats a duplicate or competing continuation claim as a clean no-op', () =
   });
 });
 
-test('reclaims an expired continuation only after its recorded runner is inactive', () => {
+test('reclaims an expired continuation from a different worker, while an unexpired claim stays protected', () => {
   withState(() => {
     run([...START.slice(0, -2), '--next-issue', '104']);
     run(CLAIM);
@@ -666,24 +666,25 @@ test('reclaims an expired continuation only after its recorded runner is inactiv
       '--deadline-at', '2026-07-11T20:30:00.000Z',
     ], '2026-07-11T20:05:00.000Z');
 
+    const protectedClaim = run([
+      'claim-continuation', '--pr', '103', '--worker', 'other-brien', '--next', 'Steal it.',
+      '--deadline-at', '2026-07-11T21:00:00.000Z',
+    ], '2026-07-11T20:10:00.000Z');
+    assert.equal(protectedClaim.command.outcome, 'ignored_worker_active');
+    assert.equal(protectedClaim.queue.continuation.claimedBy, 'first-brien');
+
     const reclaimed = run([
       'claim-continuation', '--pr', '103', '--worker', 'recovery-brien', '--next', 'Resume issue #104.',
       '--deadline-at', '2026-07-11T21:30:00.000Z',
     ], '2026-07-11T20:31:00.000Z');
     assert.equal(reclaimed.command.outcome, 'continuation_reclaimed');
     assert.equal(reclaimed.queue.continuation.claimedBy, 'recovery-brien');
-
-    reclaimed.runner = { id: 'omxterm-pr-103-a1', status: 'running' };
-    writeFileSync(process.env.OMXTERM_AGENT_STATE_PATH, JSON.stringify(reclaimed));
-    const protectedClaim = run([
-      'claim-continuation', '--pr', '103', '--worker', 'third-brien', '--next', 'Steal it.',
-      '--deadline-at', '2026-07-11T22:30:00.000Z',
-    ], '2026-07-11T21:31:00.000Z');
-    assert.equal(protectedClaim.command.outcome, 'ignored_worker_active');
+    assert.equal(reclaimed.history.at(-1).event, 'continuation_reclaimed');
+    assert.equal(reclaimed.history.at(-1).from, 'first-brien');
   });
 });
 
-test('rejects arbitrary continuation prose without matching active workflow evidence', () => {
+test('rejects unverifiable continuation evidence and accepts a validated workflow artifact', () => {
   withState((statePath) => {
     run([...START.slice(0, -2), '--next-issue', '104']);
     run(CLAIM);
@@ -695,16 +696,30 @@ test('rejects arbitrary continuation prose without matching active workflow evid
       () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence', 'x']),
       /Missing required option --evidence-pr/,
     );
+    assert.throws(
+      () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence-pr', '110', '--evidence', 'x']),
+      /Workflow state not found/,
+    );
     writeEvidenceState(statePath, 110, 999);
     assert.throws(
       () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence-pr', '110', '--evidence', 'x']),
       /does not match issue #104/,
     );
-    writeEvidenceState(statePath, 110, 104, 'completed');
+    writeEvidenceState(statePath, 110, 104, 'blocked');
     assert.throws(
       () => run(['complete-continuation', '--pr', '103', '--issue', '104', '--evidence-pr', '110', '--evidence', 'x']),
-      /is terminal, not a durable implementation step/,
+      /is "blocked", not a durable implementation step/,
     );
+
+    // A successor workflow that already merged is stronger evidence, not weaker; only
+    // dead/broken states (failed/blocked/stopped) are rejected (#113).
+    writeEvidenceState(statePath, 110, 104, 'completed');
+    const completed = run([
+      'complete-continuation', '--pr', '103', '--issue', '104',
+      '--evidence-pr', '110', '--evidence', 'PR #110 merged for issue #104.',
+    ]);
+    assert.equal(completed.command.outcome, 'continuation_completed');
+    assert.equal(completed.queue.continuation.evidencePullRequest, 110);
   });
 });
 

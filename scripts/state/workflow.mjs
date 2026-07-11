@@ -13,6 +13,9 @@ const ACTIVE_RUNNER_STATUSES = new Set(['starting', 'running']);
 // systemd never reports "active" or "activating" for a unit that has actually stopped, so
 // restricting this set is what keeps confirm-runner-stop from being satisfied by a lie.
 const CONFIRMED_INACTIVE_UNIT_STATUSES = new Set(['inactive', 'failed', 'not-found']);
+// A workflow in one of these states never produced usable durable work, so it cannot serve
+// as completion evidence; "passed"/"completed" remain valid (stronger, even) evidence.
+const UNRECOVERABLE_EVIDENCE_STATUSES = new Set(['failed', 'blocked', 'stopped']);
 
 function fail(message) {
   throw new Error(message);
@@ -571,16 +574,15 @@ function completeWorkflow(options, path, now) {
   return commandOutcome(state, 'completed', `Workflow completed at merge ${mergeSha}.`);
 }
 
+// A continuation owner is an orchestrator role (e.g. "brien"), not a systemd-tracked
+// process, so there is no unit to inspect the way confirm-runner-stop inspects a runner.
+// The recorded claim deadline (mirrored onto wakeup.deadlineAt while the continuation is
+// pending/claimed) is the only durable proof of inactivity available, matching how the
+// guardian already treats wakeup.deadlineAt as the recovery signal (#113).
 function continuationLeaseExpired(state, now) {
   const deadline = Date.parse(state.wakeup?.deadlineAt || '');
   const currentTime = Date.parse(now);
   return Number.isFinite(deadline) && Number.isFinite(currentTime) && deadline <= currentTime;
-}
-
-function continuationRunnerIsInactive(state) {
-  if (!state.runner) return true;
-  if (ACTIVE_RUNNER_STATUSES.has(state.runner.status)) return false;
-  return state.runner.status !== 'abandoned' || state.runner.stopConfirmed === true;
 }
 
 function claimContinuation(options, path, now) {
@@ -596,7 +598,7 @@ function claimContinuation(options, path, now) {
   }
   const worker = requireOption(options, 'worker');
   if (state.queue.continuation.status === 'claimed') {
-    if (!continuationLeaseExpired(state, now) || !continuationRunnerIsInactive(state)) {
+    if (!continuationLeaseExpired(state, now)) {
       const outcome = state.queue.continuation.claimedBy === worker ? 'ignored_duplicate' : 'ignored_worker_active';
       return commandOutcome(state, outcome, `${state.queue.continuation.claimedBy} already claimed issue #${state.queue.continuation.issue} continuation.`);
     }
@@ -622,6 +624,10 @@ function claimContinuation(options, path, now) {
   return commandOutcome(state, 'continuation_claimed', `${worker} claimed issue #${state.queue.continuation.issue} continuation.`);
 }
 
+// Validates the concrete durable artifact the caller declares (a sibling workflow state
+// file, e.g. one written by `start --pr <evidence-pr>`) instead of trusting free-text
+// prose (#113): the evidence PR must exist, target this continuation's issue and
+// repository, and not be a dead/broken workflow.
 function evidenceStateFor(options, path, state) {
   const evidencePullRequest = optionalNumber(options, 'evidence-pr');
   if (!evidencePullRequest) fail('Missing required option --evidence-pr.');
@@ -632,8 +638,9 @@ function evidenceStateFor(options, path, state) {
     || evidenceState.task?.repository !== state.task.repository) {
     fail(`Evidence workflow PR #${evidencePullRequest} does not match issue #${state.queue.continuation.issue} in ${state.task.repository}.`);
   }
-  if (TERMINAL_STATUSES.has(evidenceState.coordination?.status)) {
-    fail(`Evidence workflow PR #${evidencePullRequest} is terminal, not a durable implementation step.`);
+  const evidenceStatus = evidenceState.coordination?.status;
+  if (UNRECOVERABLE_EVIDENCE_STATUSES.has(evidenceStatus)) {
+    fail(`Evidence workflow PR #${evidencePullRequest} is "${evidenceStatus}", not a durable implementation step.`);
   }
   return evidencePullRequest;
 }

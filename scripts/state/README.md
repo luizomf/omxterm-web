@@ -57,11 +57,26 @@ continuation is not treated as terminal for wakeup purposes.
 The same Brien session that records completion should continue immediately:
 claim the continuation with `claim-continuation`, then create or dispatch the
 next durable step (branch, issue, PR, workflow state, or runner), and finally
-call `complete-continuation` with `--evidence` naming what it verified exists.
-`evidence` is required text, not a formality — publishing `Start issue #N` and
-returning is not a transition. If that session dies first, a later
-`workflow_wakeup` finds the continuation still `pending` (or `claimed` but
-never completed) and must finish it the same way.
+call `complete-continuation` with `--evidence-pr <n>` naming the sibling
+workflow state (e.g. one written by `start --pr <n>`) that proves the step
+exists, plus `--evidence` free text for the human-facing audit trail.
+`complete-continuation` reads `<n>.json` from the same state directory and
+refuses to finish unless it targets this continuation's issue and repository
+and is not in a dead/broken state (`failed`, `blocked`, `stopped`); arbitrary
+prose alone can no longer mark the queue step done. If that session dies
+first, a later `workflow_wakeup` finds the continuation still `pending` (or
+`claimed` but never completed) and must finish it the same way.
+
+A `claimed` continuation protects its owner (`ignored_worker_active`) only
+until its own deadline: `claim-continuation` mirrors `--deadline-at` onto
+`wakeup.deadlineAt` the same way a review lease does, and once that deadline
+has passed a different worker's `claim-continuation` reclaims it (outcome
+`continuation_reclaimed`) instead of being refused forever. A continuation
+owner is an orchestrator role, not a systemd-tracked process, so the recorded
+deadline — not a unit check — is the only available proof it went away. The
+original owner may also re-claim past its own deadline; that renews the lease
+under the same outcome. A claim inside its deadline, by any other worker, is
+still refused.
 
 Code revisions count reviewed implementations for observability. They never cap or stop the loop. Authentication, quota, startup, process, push, and webhook delivery failures are recovery events and do not consume another code revision. Only a concrete external condition that prevents OMXTerm code progress may set `blocked`.
 
@@ -115,13 +130,13 @@ node scripts/state/workflow.mjs claim-continuation \
   --pr 105 --worker brien --next "Create branch and issue draft for #106." \
   --deadline-at 2026-07-11T21:30:00.000Z
 
-# A claimed continuation remains protected until its deadline. After expiry, another worker
-# may reclaim it only when the recorded runner is absent/inactive (an abandoned runner must
-# already have stopConfirmed=true); active runners remain an ownership barrier.
+# A claimed continuation remains protected until its deadline (outcome ignored_worker_active
+# for any other worker). After the deadline passes, claim-continuation from a different
+# worker reclaims it instead (outcome continuation_reclaimed).
 
 # After proving the next durable step exists (new branch/PR/workflow state/runner), close the
-# continuation. --evidence-pr must name a non-terminal sibling workflow state for the
-# declared issue; --evidence records the operator-readable verification detail.
+# continuation. --evidence-pr must name a sibling workflow state for the declared issue that
+# is not failed/blocked/stopped; --evidence records the operator-readable verification detail.
 node scripts/state/workflow.mjs complete-continuation \
   --pr 105 --issue 106 --evidence-pr 110 \
   --evidence "Validated workflow state for open PR #110 on branch fix/106-x."
@@ -200,10 +215,11 @@ On `workflow_wakeup`, Brien reconciles evidence in this order:
 6. If Claude died, inspect worktree, commit, push state, and log.
 7. Recover partial work or take over with `workflow.mjs takeover` only after proving Claude stopped.
 8. If the PR is `completed` with `queue.continuation.status` still `pending` or `claimed`,
-   claim (or reclaim) it with `claim-continuation`, create or dispatch that issue's next
-   durable step, and record `complete-continuation --evidence "..."` before stopping. If it
-   completed with an explicit queue end (`queue.continuation` is `null`), or the continuation
-   is already `done`, do nothing.
+   claim (or reclaim, once its deadline has passed) it with `claim-continuation`, create or
+   dispatch that issue's next durable step, and record
+   `complete-continuation --evidence-pr <n> --evidence "..."` before stopping. If it completed
+   with an explicit queue end (`queue.continuation` is `null`), or the continuation is already
+   `done`, do nothing.
 
 Runner startup/auth/quota failure causes Brien takeover. A code rejection causes another Claude correction without an arbitrary retry ceiling. A stale SHA aborts publication; the new SHA wins.
 

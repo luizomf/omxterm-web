@@ -38,7 +38,7 @@ If Claude cannot start, lacks auth/quota, or dies, Brien takes over only after p
 
 Code revision count is diagnostic only. Findings never exhaust the loop: review, correct, and review again until the current OMXTerm change passes. Use `blocked` only for a concrete external condition that prevents code progress and cannot be recovered by Claude or Brien. Never stop because a revision count reached an arbitrary limit.
 
-A final message is not a workflow transition. Never report `Start issue #N`, `next issue #N`, or `queue continued` and then end without recording `claim-continuation` and `complete-continuation --evidence "..."`. A completed PR whose `queue.continuation` is not `done` still has pending queue work.
+A final message is not a workflow transition. Never report `Start issue #N`, `next issue #N`, or `queue continued` and then end without recording `claim-continuation` and `complete-continuation --evidence-pr <pr> --evidence "..."`. A completed PR whose `queue.continuation` is not `done` still has pending queue work. A `claimed` continuation may be reclaimed with `claim-continuation` once its own deadline has passed; an unexpired claim by another worker stays refused.
 
 ## Workflow wakeup
 
@@ -49,7 +49,7 @@ For `workflow_wakeup`, reconcile instead of blindly reviewing:
 - runner stopped with partial work: inspect and resume safely;
 - runner stopped with commit but no push: validate and push;
 - Claude unavailable: record failed runner, take over, complete, test, commit, and push;
-- workflow `completed` with `queue.continuation.status` `pending` or `claimed`: `claim-continuation`, perform the next durable queue step, then `complete-continuation --evidence-pr <pr> --evidence "..."` with the active sibling workflow state it verified;
+- workflow `completed` with `queue.continuation.status` `pending` or `claimed` (reclaim it once its deadline has passed): `claim-continuation`, perform the next durable queue step, then `complete-continuation --evidence-pr <pr> --evidence "..."` naming the sibling workflow state it verified;
 - workflow completed with explicit queue end (`queue.continuation` is `null`), or continuation already `done`: no-op.
 
 Use process manager identity and state, not PID alone. Do not delete a lock until its recorded runner is proven inactive.
