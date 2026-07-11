@@ -1,6 +1,7 @@
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
+import type { AuditLogger } from "@omxterm/core/audit";
 import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
 import {
   InMemoryAccessRateLimiter,
@@ -29,7 +30,7 @@ import {
   SESSION_TOKEN_COOKIE,
   setAuthCookies,
 } from "./cookies";
-import { JsonlAuditLogger } from "./audit-logger";
+import { createAuditSink, JsonlAuditLogger } from "./audit-logger";
 import { probeSshHostKey, SshConnectError, SshTerminalSession } from "./ssh";
 import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
@@ -178,9 +179,21 @@ export function scrubSshConnectionSecrets(profile: SshConnectionProfile): void {
   if (profile.passphrase !== undefined) profile.passphrase = "";
 }
 
+export type ServerDependencies = {
+  // Injected so tests can drive a runtime sink failure through the real
+  // handlers; production builds the configured file/stdout audit logger.
+  audit?: AuditLogger;
+};
+
 export async function createOmxtermServer(
   config: ServerConfig,
+  deps: ServerDependencies = {},
 ): Promise<FastifyInstance> {
+  // Build the audit sink first so an unwritable configured path fails fast here
+  // — before any timer or store is allocated — instead of throwing out of a
+  // request/upgrade handler at runtime (#79).
+  const audit =
+    deps.audit ?? new JsonlAuditLogger(createAuditSink(config.auditLogPath));
   const stores: Stores = {
     sessions: new InMemoryAccessSessionStore(),
     devices: new InMemoryDeviceTokenStore(),
@@ -217,7 +230,6 @@ export async function createOmxtermServer(
     ],
     EXPIRY_SWEEP_INTERVAL_MS,
   );
-  const audit = new JsonlAuditLogger(config.auditLogPath);
   const codec = createJsonTerminalProtocolCodec();
   // trustProxy lets Fastify read X-Forwarded-* behind a reverse proxy (Traefik),
   // so request.ip is the real client (the access rate limiter keys on it) and
