@@ -20,15 +20,16 @@ For `opened`, `ready_for_review`, `reopened`, or `synchronize`:
 6. With findings: write one complete correction prompt containing every verified blocker found in the full review, dispatch the durable Claude runner using Sonnet/high, confirm its systemd unit or terminal runner result, publish state with `publish-state.mjs`, then stop. Do not wait or start another review.
 
 If review uses `delegate_task`, its background batch is a barrier, not an
-advisory side task. After the tool returns `dispatched`, retain the review claim
-and end that turn immediately. Do not record pass/fail, publish a review,
-dispatch Claude, merge, or advance the queue. Hermes will resume this same
-session with one consolidated `ASYNC DELEGATION BATCH COMPLETE` event only
-after every child finishes. On that resumed turn, verify the event's delegation
-id belongs to this review, re-read canonical state, revalidate the exact remote
-SHA, synthesize every returned result, then continue at step 5 or 6. A guardian
-wakeup or duplicate webhook while the claimed review waits is a no-op, not
-permission to bypass the batch.
+advisory side task. After the tool returns `dispatched`, record its id with
+`dispatch-review-batch`, retain the review claim, and end that turn immediately.
+Do not record pass/fail, publish a review, dispatch Claude, merge, or advance the
+queue. Hermes will resume this same session with one consolidated
+`ASYNC DELEGATION BATCH COMPLETE` event only after every child finishes. On that
+resumed turn, verify the event id matches canonical state, revalidate the exact
+remote SHA, then run `complete-review-batch`. Synthesize every returned result
+and continue at step 5 or 6. The state machine rejects pass/fix while a batch is
+pending. A guardian wakeup or duplicate webhook while the claimed review waits
+is a no-op, not permission to bypass the batch.
 
 Claude only implements, tests, commits, and pushes. Its push emits `pull_request.synchronize`, which creates the next Hermes review session. Claude must not update workflow state, review, merge, or choose the next issue.
 

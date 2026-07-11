@@ -431,6 +431,43 @@ test('confirm-runner-stop requires the recorded runner id and a systemd-derived 
   });
 });
 
+test('blocks review decisions until the matching asynchronous review batch completes', () => {
+  withState(() => {
+    run(START);
+    run(CLAIM);
+    const dispatched = run([
+      'dispatch-review-batch', '--pr', '103', '--sha', 'sha-a',
+      '--delegation-id', 'deleg-review-a', '--deadline-at', '2026-07-11T19:30:00.000Z',
+    ], '2026-07-11T18:05:00.000Z');
+
+    assert.equal(dispatched.reviewBatch.status, 'pending');
+    assert.equal(dispatched.reviewBatch.delegationId, 'deleg-review-a');
+    assert.throws(
+      () => run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'Premature.']),
+      /Cannot pass review while review batch "deleg-review-a" is pending/,
+    );
+    assert.throws(
+      () => run([
+        'dispatch-fix', '--pr', '103', '--sha', 'sha-a', '--worker', 'claude',
+        '--runner-id', 'omxterm-pr-103-a1', '--deadline-at', '2026-07-11T20:00:00.000Z',
+        '--reason', 'Premature finding.', '--next', 'Implement.',
+      ]),
+      /Cannot dispatch correction while review batch "deleg-review-a" is pending/,
+    );
+    assert.throws(
+      () => run(['complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-stale']),
+      /must match pending review batch "deleg-review-a"/,
+    );
+
+    const completed = run([
+      'complete-review-batch', '--pr', '103', '--delegation-id', 'deleg-review-a',
+    ], '2026-07-11T18:06:00.000Z');
+    assert.equal(completed.reviewBatch.status, 'completed');
+    assert.equal(completed.reviewBatch.completedAt, '2026-07-11T18:06:00.000Z');
+    assert.equal(run(['pass', '--pr', '103', '--sha', 'sha-a', '--reason', 'All reviewers passed.']).command.outcome, 'passed');
+  });
+});
+
 test('passes only the SHA currently under review and exposes the next issue', () => {
   withState(() => {
     run([...START.slice(0, -2), '--next-issue', '104']);
