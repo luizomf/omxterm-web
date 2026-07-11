@@ -1,25 +1,46 @@
-# Compose descriptor for the OMXTerm broker. It runs as a single container that
-# you place behind a reverse proxy terminating TLS (see docs/deploy.md). Secrets
-# and origin come from a local .env (git-ignored, never committed).
+# Portable, safe-by-default Compose baseline for self-hosters (issue #96).
 #
-# The broker joins the `omxterm-edge` network (a stable name, created by Compose
-# on `up`) instead of only the project-default network. A reverse proxy running
-# in its own stack can attach to it — `docker network connect omxterm-edge
-# <proxy>` — and then reach the broker as `omxterm:3000`. Without this shared,
-# stably-named seam a proxy outside this project has no route to the container.
+# A fresh clone with a valid local .env starts with a single command:
 #
-# The full portable, safe-by-default baseline (loopback-bound publishing, a
-# reverse-proxy-agnostic topology) is tracked in #96; keep any further
-# deployment-specific address or edge wiring in a local override, not here.
+#     docker compose up -d --build
+#
+# It needs no pre-created network, no fixed container address, and no specific
+# reverse-proxy product, domain, or host path. The broker publishes ONLY to
+# loopback (127.0.0.1:3000 on the host), so it is never exposed on every
+# interface by accident. Put any HTTPS reverse proxy you like in front of it and
+# forward to http://127.0.0.1:3000 — see docs/deploy.md.
+#
+# Secrets and origin come from a local .env (git-ignored, never committed).
+#
+# The maintainer's app-scoped production rollout (a reverse proxy in its own
+# stack, reached over a shared Docker network) layers compose.prod.yml on top:
+#
+#     docker compose -f compose.yml -f compose.prod.yml up -d --build
 services:
   omxterm:
     build: .
-    container_name: omxterm
-    restart: always
+    # Deliberately no container_name: a fixed name is daemon-global, so a fresh
+    # clone would collide with any other OMXTerm container already on the host
+    # (e.g. the maintainer's deployment) and could not `docker compose up`
+    # alongside it — defeating Compose's per-project isolation. Left unset,
+    # Compose derives a project-scoped name, and the service name `omxterm` stays
+    # a network alias, so an in-network proxy still reaches http://omxterm:3000
+    # (see compose.prod.yml and docs/deploy.md).
+    restart: unless-stopped
     env_file: .env
-    networks:
-      - edge
-
-networks:
-  edge:
-    name: omxterm-edge
+    # `environment:` here wins over `env_file:` for the same key (Compose
+    # precedence), so this pins the container's bind address regardless of what
+    # OMXTERM_SERVER_HOST is set to in .env. .env.example ships
+    # OMXTERM_SERVER_HOST=127.0.0.1 (the right default for local `npm run dev`,
+    # which runs the broker directly on the host), and a fresh clone's .env is
+    # typically copied straight from it — without this override, that value
+    # would leak into the container via env_file and make the broker bind its
+    # own loopback, unreachable from Docker's published port or an in-network
+    # proxy even though ports below still publish correctly.
+    environment:
+      OMXTERM_SERVER_HOST: "0.0.0.0"
+    # Host side pinned to loopback so the broker is reachable only through a
+    # reverse proxy you deliberately place in front of it, not on the LAN or the
+    # public internet.
+    ports:
+      - "127.0.0.1:3000:3000"

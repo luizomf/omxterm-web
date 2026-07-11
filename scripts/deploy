@@ -24,6 +24,16 @@ OMXTERM_DIR="${OMXTERM_DIR:-${OMXTERM_CODE_DIR}/omxterm}"
 DEPLOY_BRANCH="${OMXTERM_DEPLOY_BRANCH:-main}"
 OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm}"
 
+# The maintainer rollout layers the production edge topology (compose.prod.yml)
+# on top of the portable, safe-by-default baseline (compose.yml), so a
+# separate-stack reverse proxy keeps its route to the broker after an update.
+# Both are overridable; clear OMXTERM_COMPOSE_OVERRIDE to deploy the plain
+# baseline instead.
+OMXTERM_COMPOSE_FILE="${OMXTERM_COMPOSE_FILE:-compose.yml}"
+# No colon: an explicitly empty OMXTERM_COMPOSE_OVERRIDE means "no override"
+# (deploy the plain baseline), while leaving it unset applies the default.
+OMXTERM_COMPOSE_OVERRIDE="${OMXTERM_COMPOSE_OVERRIDE-compose.prod.yml}"
+
 cd "${OMXTERM_DIR}"
 
 # Refuse to run against a dirty checkout. Tracked or untracked changes stop the
@@ -71,6 +81,12 @@ if [ "${local_sha}" != "${remote_sha}" ]; then
 fi
 
 # Rebuild and recreate only the OMXTerm service. The reverse proxy is left
-# untouched so unrelated routes stay up.
-docker compose --project-directory "${OMXTERM_DIR}" \
+# untouched so unrelated routes stay up. -f paths resolve against the checkout
+# we cd'd into above.
+compose_files=(-f "${OMXTERM_COMPOSE_FILE}")
+if [ -n "${OMXTERM_COMPOSE_OVERRIDE}" ]; then
+  compose_files+=(-f "${OMXTERM_COMPOSE_OVERRIDE}")
+fi
+
+docker compose --project-directory "${OMXTERM_DIR}" "${compose_files[@]}" \
   up -d --build --force-recreate --remove-orphans "${OMXTERM_SERVICE}"

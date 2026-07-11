@@ -98,7 +98,18 @@ Security headers (CSP and friends) are applied via `@fastify/helmet`. See
 `.env.example` for every variable and `docs/how-it-works.md` for the security
 model.
 
-For a step-by-step container rollout behind a reverse proxy (Docker, compose,
+The tracked `compose.yml` is a portable, safe-by-default baseline: a fresh clone
+with a valid local `.env` runs with `docker compose up -d --build`, needs no
+pre-created network, and publishes the broker only on `127.0.0.1:3000` so you
+place any HTTPS reverse proxy in front of it deliberately. The maintainer's
+app-scoped rollout (reverse proxy in its own stack, reached over a shared Docker
+network) layers `compose.prod.yml` on top:
+
+```bash
+docker compose -f compose.yml -f compose.prod.yml up -d --build
+```
+
+For a step-by-step container rollout behind a reverse proxy (Docker, Compose,
 Traefik, basic auth), see `docs/deploy.md`.
 
 ## Architecture notes
