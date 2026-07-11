@@ -221,6 +221,31 @@ a {
   grid-template-columns: 1fr 12rem;
   gap: 1.6rem;
 }
+.private-key-field {
+  display: grid;
+  gap: 1rem;
+}
+.private-key-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.reveal-toggle {
+  padding: 0.4rem 0.9rem;
+  font-size: var(--font-size-small);
+  font-weight: 400;
+  color: var(--clr-cyan);
+  background: transparent;
+  border: 0.1rem solid var(--clr-gray05);
+}
+/* SSH keys are multiline, so the field is a <textarea>, which has no native
+ * password type. Mask the rendered glyphs (not the value) so paste and
+ * multiline editing keep working while the key is hidden (#94). Supported in
+ * modern Chromium, Safari, and Firefox 118+. */
+textarea[data-masked='true'] {
+  -webkit-text-security: disc;
+}
 .file-loader input {
   padding: 1rem;
 }
