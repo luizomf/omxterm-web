@@ -42,18 +42,26 @@ accurate as part of the workflow.
 
 ### Local agent workflow state
 
-When an implementation/review loop is coordinated through
-`scripts/state/workflow.json`, every participating agent must read
-[`scripts/state/README.md`](./scripts/state/README.md) and inspect the current
-state before acting. Update the state before handing work to another agent.
+Automated PR loops are event-driven. GitHub wakes Hermes through the webhook;
+the receiving Brien session is the orchestrator. Read
+[`scripts/state/README.md`](./scripts/state/README.md) and the per-PR state under
+`${XDG_STATE_HOME:-$HOME/.local/state}/omxterm-agent/pr/` before acting.
 
-The state records the active task, PR/SHA, current worker, attempt, next action,
-and stop conditions. Treat terminal states (`passed`, `failed`, `blocked`, or
-`stopped`) as a hard stop. Reviewers review; correction work must be assigned
-through the state instead of being implemented silently by the reviewer.
+Brien reviews and owns transitions. If correction is required, Brien records
+the attempt, launches one durable Claude runner, confirms it started, and ends.
+Claude uses Sonnet/high and only implements, tests, commits, and pushes. Its
+push emits `pull_request.synchronize`, which wakes a fresh Brien review. Claude
+must not review, merge, choose the next issue, or advance workflow state.
 
-Runtime state, locks, and temporary files are local and ignored by Git while
-the protocol is being validated. Do not commit them.
+Expected concurrency is a no-op: duplicate delivery, duplicate claim, stale
+SHA, or an active runner must never become `blocked`. Before taking over work,
+prove the recorded runner is no longer active. Authentication, quota, startup,
+process, push, and webhook failures are recoveries and do not consume a code
+attempt; Brien may resume the work after proving Claude stopped.
+
+Every workflow declares either a next issue or an explicit queue end. A
+periodic guardian wakes Hermes when a lease expires or an expected webhook is
+missing. Runtime state, prompts, runner logs, and locks stay outside Git.
 
 Since Git and GitHub are the main project context, be explicit, precise, and
 concise about every change. Always describe what matters for project

@@ -1,33 +1,49 @@
 {
-  "version": 1,
+  "version": 2,
   "task": {
-    "description": "Fix issue #102",
-    "issue": 102,
-    "pullRequest": 103,
+    "description": "Fix issue #104",
+    "issue": 104,
+    "pullRequest": 105,
     "repository": "luizomf/omxterm"
   },
+  "queue": {
+    "nextIssue": 106,
+    "end": false,
+    "continueOnFailure": false
+  },
   "coordination": {
-    "status": "reviewing",
-    "attempt": 1,
-    "maxAttempts": 3,
-    "worker": "brien",
+    "status": "fixing",
+    "codeAttempt": 1,
+    "maxCodeAttempts": 3,
+    "worker": "claude",
     "headSha": "abc123",
+    "expectedEvent": "pull_request.synchronize",
     "next": {
-      "owner": "brien",
-      "action": "Publish one final review."
+      "owner": "claude",
+      "action": "Implement, test, commit, and push."
     }
+  },
+  "lease": {
+    "owner": "omxterm-pr-105-a1",
+    "expiresAt": "2026-07-11T20:30:00.000Z"
+  },
+  "runner": {
+    "id": "omxterm-pr-105-a1",
+    "type": "claude",
+    "status": "running",
+    "baseSha": "abc123",
+    "startedAt": "2026-07-11T20:00:00.000Z",
+    "updatedAt": "2026-07-11T20:00:05.000Z"
+  },
+  "wakeup": {
+    "deadlineAt": "2026-07-11T20:30:00.000Z",
+    "lastTriggeredAt": null
   },
   "stop": {
     "requested": false,
-    "reason": null,
-    "conditions": [
-      "review passed",
-      "3 attempts exhausted",
-      "blocked",
-      "explicit stop"
-    ]
+    "reason": null
   },
-  "createdAt": "2026-07-11T18:00:00.000Z",
-  "updatedAt": "2026-07-11T18:05:00.000Z",
+  "createdAt": "2026-07-11T19:50:00.000Z",
+  "updatedAt": "2026-07-11T20:00:05.000Z",
   "history": []
 }
