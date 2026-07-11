@@ -70,6 +70,15 @@ type Stores = {
 // Sessions/devices (12h TTL) ride the same sweep cheaply.
 const EXPIRY_SWEEP_INTERVAL_MS = 10 * 1000;
 
+// Access-gate abuse policy (#97): how many failed access-token attempts one
+// client may make before POST /api/access starts answering 429, and how long
+// that lockout window lasts. Named and exported (instead of leaning on
+// InMemoryAccessRateLimiter's constructor defaults) so the policy is
+// discoverable in server code and HTTP-boundary tests assert against the real
+// values instead of duplicating magic numbers.
+export const ACCESS_GATE_MAX_FAILURES = 10;
+export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
+
 // Per-session and global caps for authenticated traffic (#30). The access rate
 // limiter only guards the login gate; without these a single authenticated
 // session could flood outbound SSH probes/tickets or open unbounded
@@ -198,7 +207,11 @@ export async function createOmxtermServer(
     sessions: new InMemoryAccessSessionStore(),
     devices: new InMemoryDeviceTokenStore(),
     tickets: new InMemoryTerminalTicketStore(),
-    accessRateLimiter: new InMemoryAccessRateLimiter(),
+    accessRateLimiter: new InMemoryAccessRateLimiter(
+      systemClock,
+      ACCESS_GATE_MAX_FAILURES,
+      ACCESS_GATE_WINDOW_MS,
+    ),
     hostKeyRateLimiter: new InMemoryFixedWindowRateLimiter(
       systemClock,
       MAX_HOST_KEY_PROBES_PER_WINDOW,
