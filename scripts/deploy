@@ -13,9 +13,14 @@
 
 set -euo pipefail
 
-PROJECTS_DIR="${PROJECTS_DIR:-/projects}"
-CODE_DIR="${CODE_DIR:-${PROJECTS_DIR}/code}"
-OMXTERM_DIR="${OMXTERM_DIR:-${CODE_DIR}/omxterm}"
+# Resolve the checkout from OMXTerm-namespaced env only. Do NOT read the generic
+# PROJECTS_DIR/CODE_DIR: unrelated tooling may already export them (e.g.
+# PROJECTS_DIR=/projects/code), and the old chain turned that into a wrong path
+# like /projects/code/code/omxterm, aborting the deploy before Docker (issue #85).
+# OMXTERM_CODE_DIR is the code root; OMXTERM_DIR the full checkout the sandbox
+# suite points at throwaway repos.
+OMXTERM_CODE_DIR="${OMXTERM_CODE_DIR:-/projects/code}"
+OMXTERM_DIR="${OMXTERM_DIR:-${OMXTERM_CODE_DIR}/omxterm}"
 DEPLOY_BRANCH="${OMXTERM_DEPLOY_BRANCH:-main}"
 OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm}"
 

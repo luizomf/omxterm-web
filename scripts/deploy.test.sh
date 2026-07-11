@@ -205,6 +205,28 @@ test_unexpected_upstream_fails() {
   pass_test "refused unexpected upstream"
 }
 
+# Regression for issue #85: unrelated tooling may already export generic
+# PROJECTS_DIR/CODE_DIR. The deploy must ignore them and resolve the checkout
+# only from the OMXTerm-namespaced env. Here OMXTERM_DIR is left unset so
+# resolution goes through the default path derived from OMXTERM_CODE_DIR; the
+# generic vars point at bogus dirs that would break resolution if still read.
+test_ignores_generic_project_dirs() {
+  echo "ignores generic PROJECTS_DIR/CODE_DIR, resolves via OMXTerm-namespaced env"
+  setup_sandbox
+
+  if ! PATH="${FAKEBIN}:${PATH}" \
+       PROJECTS_DIR="${SANDBOX}/inherited-projects" \
+       CODE_DIR="${SANDBOX}/inherited-code" \
+       OMXTERM_CODE_DIR="${SANDBOX}" \
+       bash "${DEPLOY}" >"${OUT_LOG}" 2>&1; then
+    fail_test "expected exit 0 resolving via OMXTERM_CODE_DIR while generic vars are set"
+    return
+  fi
+  docker_ran || fail_test "expected docker compose to run against the namespaced checkout"
+  grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
+  pass_test "resolved via OMXTERM_CODE_DIR, generic PROJECTS_DIR/CODE_DIR ignored"
+}
+
 test_clean_uptodate_deploys_app_only
 test_behind_remote_fast_forwards
 test_diverged_branch_fails_without_touching_anything
@@ -212,6 +234,7 @@ test_dirty_tracked_file_stops_before_docker
 test_untracked_file_stops_before_docker
 test_wrong_branch_fails
 test_unexpected_upstream_fails
+test_ignores_generic_project_dirs
 
 echo
 echo "deploy.test.sh: ${pass} passed, ${fail} failed"
