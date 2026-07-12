@@ -25,7 +25,7 @@ defends each of those with one specific mechanism:
 | Another site opens the socket for you | **Exact Origin check** on every SSH call and on the WebSocket upgrade                                                                                    |
 | The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
 | You connect to an impostor server     | **Host-key fingerprint** shown first, then re-verified at connect time                                                                                   |
-| One session exhausts the broker       | **Post-auth limits** — per-session rate caps on probes/tickets and per-session/global connection caps (429/409)                                          |
+| One client exhausts the broker        | **Post-auth limits** — per-session + per-client rate caps on probes/tickets and per-session/global connection caps (429/409)                             |
 | The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed                                                                       |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript                                                                                    |
 
@@ -160,10 +160,11 @@ still validate — the UI uses it to skip the gate on reload.
 Before trusting a server, you should look at its fingerprint. The browser sends
 `{ host, port }`; the server first runs the **Origin check** (`isOriginAllowed`
 — an exact match against the `OMXTERM_ALLOWED_ORIGIN` allowlist) and the cookie
-auth check. An authenticated probe is then **rate-limited per session**
-(`InMemoryFixedWindowRateLimiter`, 30 probes/minute); over the cap returns `429`
-with `Retry-After` and a `host_key_rejected` audit event, so one session can't
-drive unbounded outbound handshakes. It then runs the **SSH egress check**
+auth check. An authenticated probe is then **rate-limited per session and
+per client IP** (`InMemoryFixedWindowRateLimiter`, 30 probes/minute for each
+bucket); over the cap returns `429` with `Retry-After` and a
+`host_key_rejected` audit event, so rotating sessions cannot drive unbounded
+outbound handshakes. It then runs the **SSH egress check**
 (`checkSshEgress` — resolves the host and rejects with `403` plus an
 `ssh_egress_blocked` audit event when an allowlist is configured and the target
 falls outside it), and only then probes the target. When the target is allowed,
@@ -189,9 +190,10 @@ Now the browser sends the full connection profile: `host`, `port`, `username`,
 `privateKey`, optional `passphrase`, and the `acceptedHostFingerprint` from
 step 2. This is the **only** request that carries the private key.
 
-After the same Origin + auth checks, the same **per-session rate limit** (30
-tickets/minute — over the cap returns `429` with `Retry-After` and a
-`ticket_rejected` audit event), and the same **SSH egress check** (so a ticket
+After the same Origin + auth checks, the same **per-session and per-client IP
+rate limit** (30 tickets/minute for each bucket — over the cap returns `429`
+with `Retry-After` and a `ticket_rejected` audit event), and the same **SSH
+egress check** (so a ticket
 is never issued for a target outside the allowlist — the validated IP is pinned
 into the stored profile so the WebSocket connect dials exactly what was checked,
 #26), `InMemoryTerminalTicketStore.issue` mints a **terminal ticket**

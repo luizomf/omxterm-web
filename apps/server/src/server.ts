@@ -79,20 +79,23 @@ const EXPIRY_SWEEP_INTERVAL_MS = 10 * 1000;
 export const ACCESS_GATE_MAX_FAILURES = 10;
 export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
 
-// Per-session and global caps for authenticated traffic (#30). The access rate
+// Per-session, per-client, and global caps for authenticated traffic (#30,
+// #126). The access rate
 // limiter only guards the login gate; without these a single authenticated
 // session could flood outbound SSH probes/tickets or open unbounded
 // sockets/sessions, exhausting the broker's FDs, CPU, or memory. Conservative
 // MVP defaults — the threat needs an already-authenticated, misbehaving session.
-const POST_AUTH_RATE_WINDOW_MS = 60 * 1000;
-const MAX_HOST_KEY_PROBES_PER_WINDOW = 30;
-const MAX_TICKETS_PER_WINDOW = 30;
+export const POST_AUTH_RATE_WINDOW_MS = 60 * 1000;
+export const MAX_HOST_KEY_PROBES_PER_WINDOW = 30;
+export const MAX_TICKETS_PER_WINDOW = 30;
 const MAX_ACTIVE_SESSIONS_PER_CLIENT = 5;
 const MAX_ACTIVE_WS_CONNECTIONS = 50;
 
 // A device token is created 1:1 with its access session, so the access session
-// id keys "per session/device" concurrency. All live WebSocket connections share
-// one global counter under this constant key.
+// id keys "per session/device" concurrency. Probe/ticket rate windows use both
+// prefixed session ids and request IPs so logging in again cannot reset the
+// budget. All live WebSocket connections share one global counter under this
+// constant key.
 const GLOBAL_WS_KEY = "global";
 
 // Backpressure marks for the PTY->WS output stream (#19). Without them a flood
@@ -150,6 +153,16 @@ function normalizeOriginHeader(
 
 function requestOrigin(request: FastifyRequest): string | undefined {
   return normalizeOriginHeader(request.headers.origin);
+}
+
+function consumePostAuthBudget(
+  limiter: InMemoryFixedWindowRateLimiter,
+  sessionId: string,
+  clientIp: string,
+) {
+  const sessionRate = limiter.tryConsume(`session:${sessionId}`);
+  if (!sessionRate.allowed) return sessionRate;
+  return limiter.tryConsume(`client:${clientIp}`);
 }
 
 function authenticateFastifyRequest(
@@ -391,7 +404,11 @@ export async function createOmxtermServer(
     if (!auth)
       return reply.code(401).send({ ok: false, message: "Unauthorized." });
 
-    const rate = stores.hostKeyRateLimiter.tryConsume(auth.session.id);
+    const rate = consumePostAuthBudget(
+      stores.hostKeyRateLimiter,
+      auth.session.id,
+      request.ip,
+    );
     if (!rate.allowed) {
       audit.write({
         event: "host_key_rejected",
@@ -465,7 +482,11 @@ export async function createOmxtermServer(
     if (!auth)
       return reply.code(401).send({ ok: false, message: "Unauthorized." });
 
-    const rate = stores.ticketRateLimiter.tryConsume(auth.session.id);
+    const rate = consumePostAuthBudget(
+      stores.ticketRateLimiter,
+      auth.session.id,
+      request.ip,
+    );
     if (!rate.allowed) {
       audit.write({
         event: "ticket_rejected",
