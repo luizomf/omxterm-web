@@ -17,6 +17,6 @@
     "test:run": "vitest run"
   },
   "devDependencies": {
-    "@types/node": "latest"
+    "@types/node": "26.0.1"
   }
 }
