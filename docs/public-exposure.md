@@ -26,10 +26,11 @@ full request flow; this is the abuse-control summary:
   the limit returns `429` with `Retry-After`
   (`apps/server/src/server.ts`, `ACCESS_GATE_MAX_FAILURES` /
   `ACCESS_GATE_WINDOW_MS`).
-- **Post-auth per-session rate limits**: once a browser has a valid session,
-  host-key probes and terminal-ticket issuance are each capped at 30 per
-  minute per session. Over the limit returns `429` with `Retry-After` and an
-  audit event (`host_key_rejected` / `ticket_rejected`).
+- **Post-auth per-session and per-client rate limits**: once a browser has a
+  valid session, host-key probes and terminal-ticket issuance are each capped
+  at 30 per minute for both the session and `request.ip`. A new login cannot
+  reset the client budget. Over the limit returns `429` with `Retry-After` and
+  an audit event (`host_key_rejected` / `ticket_rejected`).
 - **Concurrency caps**: 5 active SSH sessions per browser session, and 50
   active WebSocket connections globally. Exceeding either returns `409`
   before the single-use ticket is consumed, with a `ws_upgrade_rejected`
