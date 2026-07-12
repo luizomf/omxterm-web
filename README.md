@@ -73,6 +73,16 @@ must run behind HTTPS/WSS, because the auth cookies (`omxterm_session_*`,
 cleartext. OMXTerm does not terminate TLS itself; put it behind a reverse proxy
 (e.g. Traefik, Caddy, nginx) that does.
 
+**Before exposing OMXTerm on a public hostname**, know the difference
+between what the broker rate-limits itself (access-gate brute force,
+post-auth probe/ticket abuse, concurrent sessions/connections) and what it
+does not defend against (botnets, volumetric/distributed DoS, TLS). OMXTerm
+makes no DDoS-resistance claim — application limits complement edge rate
+limiting, firewalling, your provider's DDoS protection, and a WAF where
+appropriate; they do not replace them. See
+[`docs/public-exposure.md`](./docs/public-exposure.md) for the full model,
+`OMXTERM_TRUST_PROXY` failure modes, and an optional edge rate-limit recipe.
+
 Required for a non-loopback deploy:
 
 - `OMXTERM_SECURE_COOKIES=true` — marks the auth cookies `Secure` so they are
