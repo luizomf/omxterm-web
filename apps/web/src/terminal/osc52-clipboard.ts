@@ -7,9 +7,18 @@
 /** Writes decoded text into the host clipboard. Injected at the boundary. */
 export type HostClipboardWriter = (text: string) => void;
 
+// Large remote-controlled clipboard writes are surprising and needlessly hold
+// decoded attacker input in memory. 64 KiB covers normal editor/tmux yanks.
+const MAX_CLIPBOARD_WRITE_BYTES = 64 * 1024;
+const MAX_BASE64_PAYLOAD_CHARS = Math.ceil(MAX_CLIPBOARD_WRITE_BYTES / 3) * 4;
+
 function decodeBase64Utf8(encoded: string): string | null {
+  if (encoded.length > MAX_BASE64_PAYLOAD_CHARS) return null;
+
   try {
     const binary = atob(encoded);
+    if (binary.length > MAX_CLIPBOARD_WRITE_BYTES) return null;
+
     const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
     return new TextDecoder().decode(bytes);
   } catch {
@@ -22,8 +31,9 @@ function decodeBase64Utf8(encoded: string): string | null {
 /**
  * Handles an OSC 52 payload (`Pc ; Pd`, e.g. `c;SGVsbG8=`). Decodes the base64
  * write payload and forwards it to the clipboard. Read requests (`Pd === '?'`)
- * and empty payloads are ignored so the host can never read or clear the
- * clipboard. Always returns true to mark the sequence as fully handled.
+ * empty payloads, and writes larger than 64 KiB are ignored so the host can
+ * never read, clear, or flood the clipboard. Always returns true to mark the
+ * sequence as fully handled.
  *
  * @example
  * handleOsc52('c;SGVsbG8=', writeClipboard); // writes "Hello", returns true

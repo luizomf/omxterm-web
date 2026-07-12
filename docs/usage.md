@@ -107,8 +107,9 @@ Once connected, the terminal is a full xterm.js surface with a few extras:
 - **Copy to your clipboard (OSC 52)** — when a program inside the session copies
   text via OSC 52 (for example a `tmux` or `nvim` yank), it lands in your local
   clipboard. This is **write-only**: the remote host can copy *into* your
-  clipboard but can never *read* it back. It needs a secure context, so it works
-  on `localhost` and over HTTPS, but not over plain HTTP on a remote deploy.
+  clipboard but can never *read* it back. Writes larger than 64 KiB are ignored.
+  It needs a secure context, so it works on `localhost` and over HTTPS, but not
+  over plain HTTP on a remote deploy.
 - **Scrollback** — the terminal keeps the last 2000 lines.
 - **Key bar** — a row of buttons below the terminal (`Esc`, `Tab`, `Ctrl`, arrow
   keys, `Ctrl-C`) for combos that are awkward on touch or remote keyboards.
