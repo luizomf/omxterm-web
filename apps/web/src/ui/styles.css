@@ -337,6 +337,16 @@ textarea[data-masked='true'] {
   z-index: 1001;
 }
 
+.show-key-bar {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-small);
+  font-size: var(--font-size-xxsmall);
+  z-index: 1001;
+}
+
 .terminal-stage {
   width: 100%;
   /* Fill the app-shell instead of a hardcoded `calc(100dvh - padding)`: the calc
@@ -439,6 +449,12 @@ textarea[data-masked='true'] {
 
 .terminal-key-bar button:hover {
   filter: brightness(1.15);
+}
+
+.terminal-key-bar .key-bar-hide {
+  margin-left: auto;
+  color: hsla(from var(--clr-gray06) h s 80% / 1);
+  border-style: dashed;
 }
 
 /* Sticky Ctrl modifier is armed for the next keystroke; aria-pressed doubles

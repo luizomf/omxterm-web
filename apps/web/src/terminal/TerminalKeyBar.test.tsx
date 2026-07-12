@@ -15,6 +15,7 @@ function renderKeyBar(overrides: Partial<TerminalKeyBarProps> = {}) {
     onFontSizeDecrease: vi.fn(),
     onFontSizeReset: vi.fn(),
     onFontSizeIncrease: vi.fn(),
+    onHide: vi.fn(),
     ...overrides,
   };
   return { ...render(<TerminalKeyBar {...props} />), props };
@@ -63,6 +64,7 @@ describe('TerminalKeyBar', () => {
         onFontSizeDecrease={vi.fn()}
         onFontSizeReset={vi.fn()}
         onFontSizeIncrease={vi.fn()}
+        onHide={vi.fn()}
       />,
     );
     expect(screen.getByText('Ctrl')).toHaveAttribute('aria-pressed', 'true');
@@ -82,6 +84,15 @@ describe('TerminalKeyBar', () => {
     expect(onFontSizeIncrease).toHaveBeenCalledTimes(1);
   });
 
+  test('offers a control to hide the keyboard tools', () => {
+    const {
+      props: { onHide },
+    } = renderKeyBar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide tools' }));
+    expect(onHide).toHaveBeenCalledOnce();
+  });
+
   test('does not steal focus from an already-focused element on mousedown', () => {
     render(<input aria-label='terminal proxy input' />);
     renderKeyBar();
@@ -92,6 +103,7 @@ describe('TerminalKeyBar', () => {
 
     fireEvent.mouseDown(screen.getByText('Esc'));
     fireEvent.mouseDown(screen.getByLabelText('Increase font size'));
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Hide tools' }));
 
     expect(document.activeElement).toBe(focusedInput);
   });
