@@ -27,4 +27,8 @@ ENV OMXTERM_SERVER_PORT=3000
 
 EXPOSE 3000
 
+# The broker opens outbound SSH connections and parses untrusted terminal data;
+# it does not need root privileges at runtime. The base image provides this user.
+USER node
+
 CMD ["npm", "run", "start", "--workspace", "@omxterm/server"]

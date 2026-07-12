@@ -115,6 +115,11 @@ ENV
 - `OMXTERM_TRUST_PROXY` — left for step 3 because its correct value depends on
   the topology. Leaving it unset is a valid boot state (the broker starts fine),
   so there is no placeholder to crash on — you set it and re-run `up`.
+- `OMXTERM_AUDIT_LOG` — when you opt into a file sink inside the container,
+  mount its parent directory and make it writable by the image's non-root
+  `node` user. Check the runtime UID with
+  `docker compose run --rm omxterm id -u`; the broker fails fast at boot if the
+  path is not writable. Leaving it unset writes metadata-only events to stdout.
 - `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked into
   the image; don't set them here. In particular, do **not** set
   `OMXTERM_SERVER_HOST` to a loopback value — the container must keep binding
