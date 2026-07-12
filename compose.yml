@@ -26,6 +26,9 @@ services:
     # Compose derives a project-scoped name, and the service name `omxterm` stays
     # a network alias, so an in-network proxy still reaches http://omxterm:3000
     # (see compose.prod.yml and docs/deploy.md).
+    # `unless-stopped` (not `always`) so a self-hoster's deliberate `docker stop`
+    # sticks across daemon restarts/reboots. The maintainer's production rollout
+    # overrides this to `always` in compose.prod.yml (issue #108).
     restart: unless-stopped
     env_file: .env
     # `environment:` here wins over `env_file:` for the same key (Compose

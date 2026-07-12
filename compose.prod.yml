@@ -12,6 +12,11 @@
 # product, domain, or address. See docs/deploy.md.
 services:
   omxterm:
+    # Production keeps the pre-#101 `always` policy (commit 4744e08): the broker
+    # must come back after daemon restarts/reboots even if it was manually
+    # stopped before them. The portable baseline stays `unless-stopped` so a
+    # self-hoster's deliberate `docker stop` sticks across reboots (issue #108).
+    restart: always
     # Join a neutral, stably-named network a separate-stack reverse proxy can
     # attach to (`docker network connect omxterm-edge <proxy>`) and then reach
     # the broker as http://omxterm:3000. Created by Compose on `up`, so nothing

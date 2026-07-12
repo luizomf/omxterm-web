@@ -34,8 +34,10 @@ if (mode === "baseline") {
   assertNoPreCreatedNetwork(networks);
   assertNoPinnedAddress(broker);
   assertNoGlobalContainerName(broker);
+  assertRestartPolicy(broker, "unless-stopped");
 } else {
   assertReachableSharedNetwork(broker, networks);
+  assertRestartPolicy(broker, "always");
 }
 
 process.exit(0);
@@ -128,6 +130,20 @@ function assertNoGlobalContainerName(service) {
       `omxterm pins a daemon-global container_name "${service.container_name}"; the portable ` +
         "baseline must let Compose derive a project-scoped name so a fresh clone can run " +
         "alongside another OMXTerm deployment instead of competing for one global name",
+    );
+  }
+}
+
+// The two paths deliberately diverge (issue #108): the portable baseline uses
+// `unless-stopped` so a self-hoster's manual `docker stop` sticks across
+// reboots, while the production override restores the pre-#101 `always` policy
+// (commit 4744e08) so the maintainer's broker always comes back after a reboot.
+function assertRestartPolicy(service, expected) {
+  const actual = service.restart;
+  if (actual !== expected) {
+    fail(
+      `omxterm resolves restart policy "${actual ?? "<unset>"}"; expected "${expected}" ` +
+        "(baseline: unless-stopped so a manual stop sticks; prod override: always)",
     );
   }
 }
