@@ -6,9 +6,19 @@ Read this before doing anything.
 
 ## Repository Context
 
-OMXTerm is a TypeScript web terminal project. The MVP is a browser-based SSH terminal: a Vite/React/xterm.js frontend talks to a Node/Fastify/WebSocket backend, which uses SSH to connect to a user-provided target. The product's security boundary is safe brokering: access gate, device token, short-lived single-use terminal tickets, exact Origin validation, SSH host-key fingerprint confirmation, no saved private keys, no raw terminal transcripts, and metadata-only audit logs.
+OMXTerm is a TypeScript web terminal project. The MVP is a browser-based SSH
+terminal: a Vite/React/xterm.js frontend talks to a Node/Fastify/WebSocket
+backend, which uses SSH to connect to a user-provided target. The product's
+security boundary is safe brokering: access gate, device token, short-lived
+single-use terminal tickets, exact Origin validation, SSH host-key fingerprint
+confirmation, no saved private keys, no raw terminal transcripts, and
+metadata-only audit logs.
 
-This is a weekend-sized MVP for a video/demo, not a production SaaS. Keep scope small and follow `docs/prd-mvp-web-ssh-terminal.md`. Do not add saved profiles, OAuth, persistent known_hosts, replay/transcripts, Redis/SQLite/Postgres, reconnect/resume, collaboration, WebTransport, Socket.IO, container sandboxing, or Hermes CLI adapter unless the PRD is explicitly updated first.
+This is a weekend-sized MVP for a video/demo, not a production SaaS. Keep scope
+small and follow `docs/prd-mvp-web-ssh-terminal.md`. Do not add saved profiles,
+OAuth, persistent known_hosts, replay/transcripts, Redis/SQLite/Postgres,
+reconnect/resume, collaboration, WebTransport, Socket.IO, container sandboxing,
+or Hermes CLI adapter unless the PRD is explicitly updated first.
 
 ---
 
@@ -44,11 +54,11 @@ accurate as part of the workflow.
 
 Automated PR loops are event-driven. GitHub wakes Hermes through the webhook;
 the receiving Brien session is the orchestrator. Read
-[`scripts/state/README.md`](./scripts/state/README.md) and the per-PR state under
-`${XDG_STATE_HOME:-$HOME/.local/state}/omxterm-agent/pr/` before acting.
+[`scripts/state/README.md`](./scripts/state/README.md) and the per-PR state
+under `${XDG_STATE_HOME:-$HOME/.local/state}/omxterm-agent/pr/` before acting.
 
-Brien reviews and owns transitions. If correction is required, Brien records
-the attempt, launches one durable Claude runner, confirms it started, and ends.
+Brien reviews and owns transitions. If correction is required, Brien records the
+attempt, launches one durable Claude runner, confirms it started, and ends.
 Claude uses Sonnet/high and only implements, tests, commits, and pushes. Its
 push emits `pull_request.synchronize`, which wakes a fresh Brien review. Claude
 must not review, merge, choose the next issue, or advance workflow state.
@@ -62,15 +72,15 @@ resumed turn may match the id with `complete-review-batch`, synthesize the
 results after revalidating the PR state and exact remote SHA, and continue the
 normal correction-or-merge transition.
 
-Expected concurrency is a no-op: duplicate delivery, duplicate claim, stale
-SHA, or an active runner must never become `blocked`. Before taking over work,
-prove the recorded runner is no longer active. Authentication, quota, startup,
+Expected concurrency is a no-op: duplicate delivery, duplicate claim, stale SHA,
+or an active runner must never become `blocked`. Before taking over work, prove
+the recorded runner is no longer active. Authentication, quota, startup,
 process, push, and webhook failures are recoveries and do not consume a code
 attempt; Brien may resume the work after proving Claude stopped.
 
-Every workflow declares either a next issue or an explicit queue end. A
-periodic guardian wakes Hermes when a lease expires or an expected webhook is
-missing. Runtime state, prompts, runner logs, and locks stay outside Git.
+Every workflow declares either a next issue or an explicit queue end. A periodic
+guardian wakes Hermes when a lease expires or an expected webhook is missing.
+Runtime state, prompts, runner logs, and locks stay outside Git.
 
 Completing one PR does not complete a queue that declares `nextIssue`. Before
 ending its webhook session, Brien must validate that issue, determine its own
