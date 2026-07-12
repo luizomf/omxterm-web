@@ -378,6 +378,11 @@ Being honest about the boundary is part of the point:
 - It is **single-process and in-memory** (no Redis/SQLite/Postgres), so sessions
   and tickets do not survive a restart and do not span instances.
 - It does **not** reconnect or resume a dropped session.
+- It does **not** provide DDoS resistance. Its rate limits and concurrency
+  caps stop a single misbehaving client; a public deploy still needs
+  HTTPS and edge-level protection (rate limiting, firewalling, your
+  provider's DDoS controls, a WAF where appropriate). See
+  [`docs/public-exposure.md`](./public-exposure.md).
 
 These are deliberate MVP scope choices, documented in
 [`docs/prd-mvp-web-ssh-terminal.md`](./prd-mvp-web-ssh-terminal.md). A
