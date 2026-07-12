@@ -110,6 +110,11 @@ Once connected, the terminal is a full xterm.js surface with a few extras:
   clipboard but can never *read* it back. It needs a secure context, so it works
   on `localhost` and over HTTPS, but not over plain HTTP on a remote deploy.
 - **Scrollback** — the terminal keeps the last 2000 lines.
+- **Key bar** — a row of buttons below the terminal (`Esc`, `Tab`, `Ctrl`, arrow
+  keys, `Ctrl-C`) for combos that are awkward on touch or remote keyboards.
+  `Ctrl` is a one-shot modifier: tap it, then tap a letter, to send that
+  control character (e.g. `Ctrl` then `d` sends `Ctrl-D`). Typing on mobile also
+  disables autocorrect/autocapitalize so keystrokes reach the shell unmodified.
 
 ---
 
