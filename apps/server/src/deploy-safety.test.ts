@@ -47,6 +47,7 @@ describe("isLoopbackHost", () => {
     expect(isLoopbackHost("10.100.0.2")).toBe(false);
     expect(isLoopbackHost("192.168.0.10")).toBe(false);
     expect(isLoopbackHost("example.com")).toBe(false);
+    expect(isLoopbackHost("127.example.com")).toBe(false);
   });
 });
 
