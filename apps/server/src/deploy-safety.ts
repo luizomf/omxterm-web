@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 // Deploy-safety guards for running the broker outside localhost (#5). The auth
 // cookies ARE the authentication, so two things must hold behind a reverse
 // proxy: Fastify must trust the proxy (so request.ip is the real client and
@@ -33,7 +35,9 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 // cases the cookie guard exists to catch.
 export function isLoopbackHost(host: string): boolean {
   const value = host.trim().toLowerCase();
-  return LOOPBACK_HOSTS.has(value) || value.startsWith("127.");
+  return (
+    LOOPBACK_HOSTS.has(value) || (isIP(value) === 4 && value.startsWith("127."))
+  );
 }
 
 // Refuse to boot when auth cookies would travel in cleartext: secure cookies
