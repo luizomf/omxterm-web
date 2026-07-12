@@ -201,6 +201,11 @@ htpasswd -nB <user> | sudo tee -a /etc/omxterm/auth/omxterm-usersfile
 (`htpasswd` is in `apache2-utils`. Do not pass the password with
 `-b '<password>'`: that exposes it to shell history and process listings.)
 
+Before you route a public hostname to it in step 5, read
+[`docs/public-exposure.md`](./public-exposure.md): what OMXTerm's own rate
+limits and concurrency caps do and don't protect against, `OMXTERM_TRUST_PROXY`
+pitfalls, and an optional edge rate-limit recipe for whichever proxy you use.
+
 ## 5. Route it in the reverse proxy (Traefik example)
 
 With Traefik's file provider, add these entries to your dynamic configuration
