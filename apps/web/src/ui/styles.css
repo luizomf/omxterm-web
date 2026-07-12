@@ -412,6 +412,50 @@ textarea[data-masked='true'] {
   padding: 0 1rem;
 }
 
+.terminal-key-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+  padding: 0.6rem 1rem;
+  overflow-x: auto;
+  border-top: 0.1rem solid var(--clr-gray04);
+  background: var(--clr-gray01);
+}
+
+.terminal-key-bar button {
+  flex: 0 0 auto;
+  min-width: 3.6rem;
+  padding: 0.5rem 0.9rem;
+  color: hsla(from var(--clr-gray06) h s 80% / 1);
+  background: hsla(from var(--clr-gray06) h s 40% / 0.25);
+  border: 0.1rem solid hsla(from var(--clr-gray06) h s 40% / 1);
+  font-size: var(--font-size-xsmall);
+  font-weight: 400;
+}
+
+.terminal-key-bar button:hover {
+  filter: brightness(1.15);
+}
+
+/* Sticky Ctrl modifier is armed for the next keystroke; aria-pressed doubles
+ * as the visual "armed" state so screen readers and sighted users agree. */
+.key-bar-ctrl[aria-pressed='true'] {
+  color: var(--clr-black);
+  background: var(--clr-cyan);
+  border-color: var(--clr-cyan);
+}
+
+@media (pointer: coarse) {
+  /* ~44px touch targets (4.4rem at the 10px root the app sets via
+   * html { font-size: 62.5% }) so the bar stays usable on phones (#21). */
+  .terminal-key-bar button {
+    min-width: 4.4rem;
+    min-height: 4.4rem;
+    padding: 0.8rem;
+  }
+}
+
 @media (max-width: 700px) {
   .field-grid {
     grid-template-columns: 1fr;
