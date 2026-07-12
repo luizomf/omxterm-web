@@ -35,6 +35,7 @@ import { probeSshHostKey, SshConnectError, SshTerminalSession } from "./ssh";
 import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
 import { createTerminalInboundGuard } from "./terminal-inbound-guard";
+import { startWebSocketHeartbeat } from "./websocket-heartbeat";
 
 const accessSchema = z.object({ accessToken: z.string().min(1).max(4096) });
 const hostKeySchema = z.object({
@@ -205,6 +206,11 @@ export type ServerDependencies = {
   // Injected so tests can drive a runtime sink failure through the real
   // handlers; production builds the configured file/stdout audit logger.
   audit?: AuditLogger;
+  // Test seams for proving slot reclamation without waiting for the production
+  // heartbeat or opening all 50 production slots.
+  websocketHeartbeatIntervalMs?: number;
+  maxActiveWsConnections?: number;
+  maxActiveSessionsPerClient?: number;
 };
 
 export async function createOmxtermServer(
@@ -236,9 +242,11 @@ export async function createOmxtermServer(
       POST_AUTH_RATE_WINDOW_MS,
     ),
     sessionConcurrency: new InMemoryConcurrencyLimiter(
-      MAX_ACTIVE_SESSIONS_PER_CLIENT,
+      deps.maxActiveSessionsPerClient ?? MAX_ACTIVE_SESSIONS_PER_CLIENT,
     ),
-    wsConcurrency: new InMemoryConcurrencyLimiter(MAX_ACTIVE_WS_CONNECTIONS),
+    wsConcurrency: new InMemoryConcurrencyLimiter(
+      deps.maxActiveWsConnections ?? MAX_ACTIVE_WS_CONNECTIONS,
+    ),
   };
   // Reclaim expired entries (and the SSH key an unconsumed ticket holds) even
   // while the server is idle, instead of only on the next store read (#29). The
@@ -708,6 +716,7 @@ export async function createOmxtermServer(
       let bytesIn = 0;
       let bytesOut = 0;
       let closed = false;
+      let stopHeartbeat = () => {};
 
       // Pause the SSH channel when the socket's send buffer backs up, resume when
       // it drains, so a flood can't outrun the client and freeze the tab (#19).
@@ -775,11 +784,15 @@ export async function createOmxtermServer(
       });
 
       const closeTerminalSession = (
-        reason: "websocket_closed" | "websocket_error",
+        reason:
+          | "websocket_closed"
+          | "websocket_error"
+          | "websocket_heartbeat_timeout",
         severity: "info" | "warn",
       ) => {
         if (closed) return;
         closed = true;
+        stopHeartbeat();
         inbound.dispose();
         // terminal.close() aborts a still-pending SSH dial; scrub here too so
         // the key/passphrase are cleared on cancellation even when the socket
@@ -817,6 +830,17 @@ export async function createOmxtermServer(
         const text = Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw);
         bytesIn += Buffer.byteLength(text);
         inbound.handleFrame(text);
+      });
+
+      stopHeartbeat = startWebSocketHeartbeat({
+        socket: ws,
+        ...(deps.websocketHeartbeatIntervalMs === undefined
+          ? {}
+          : { intervalMs: deps.websocketHeartbeatIntervalMs }),
+        onTimeout: () => {
+          closeTerminalSession("websocket_heartbeat_timeout", "warn");
+          ws.terminate();
+        },
       });
 
       ws.on("error", () => {

@@ -35,6 +35,9 @@ full request flow; this is the abuse-control summary:
   active WebSocket connections globally. Exceeding either returns `409`
   before the single-use ticket is consumed, with a `ws_upgrade_rejected`
   audit event (`too_many_active_sessions` / `too_many_ws_connections`).
+- **WebSocket heartbeat**: the broker sends a protocol-level ping every 30
+  seconds and terminates a connection that misses the next pong, so a dead or
+  half-open peer cannot retain a global slot indefinitely.
 - **Inbound flood guard**: once a terminal WebSocket is open, an
   authenticated client is still bounded — 512 messages/second, 2 MB/second,
   and at most 1 MB of input queued against a backpressured SSH channel. A

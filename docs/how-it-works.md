@@ -239,6 +239,11 @@ the raw socket without ever creating a WebSocket
    device-token hash match what the ticket was issued for. On success it stamps
    `usedAt` and **deletes the ticket immediately** — a replay finds nothing.
 
+After the upgrade, the broker sends a WebSocket control-frame ping every 30
+seconds. A peer that has not answered before the next heartbeat is terminated;
+the raw socket close path then releases both capacity slots. This heartbeat is
+separate from the JSON terminal protocol's application-level `ping`/`pong`.
+
 Only then does the upgrade complete and a `connection` open, carrying the grant
 (with its in-memory profile) into the terminal bridge.
 
