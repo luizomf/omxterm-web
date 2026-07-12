@@ -16,8 +16,10 @@ import { TerminalKeyBar } from './TerminalKeyBar';
 import { applyStickyCtrlModifier } from './terminal-key-sequences';
 import {
   BASE_TERMINAL_FONT_SIZE,
+  clampTerminalFontSize,
   nextTerminalFontSize,
 } from './terminal-font-zoom';
+import { attachTerminalPinchZoom } from './terminal-pinch-zoom';
 
 // Best-effort host clipboard write for OSC 52. navigator.clipboard is only
 // defined in a secure context (localhost and the https deploy qualify) and can
@@ -69,6 +71,12 @@ export function TerminalEmulator({
     setCtrlArmed(ctrlArmedRef.current);
   };
   const sendKeyBarSequence = (sequence: string) => adapter.sendInput(sequence);
+  // The key bar's zoom buttons live outside the effect that owns the terminal,
+  // so the controls created in openTerminal are handed out through a ref (#120).
+  const fontZoomRef = useRef<{
+    adjustBy(delta: number): void;
+    reset(): void;
+  } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -121,24 +129,42 @@ export function TerminalEmulator({
         adapter.resize(cols, rows);
       };
 
+      // Every zoom entry point (keyboard, pinch, key bar buttons) funnels
+      // through the same clamp + resize flow so the grid and PTY never drift.
+      const currentFontSize = () =>
+        terminal.options.fontSize ?? BASE_TERMINAL_FONT_SIZE;
+      const applyFontSize = (next: number) => {
+        if (next === currentFontSize()) return;
+        terminal.options.fontSize = next;
+        requestAnimationFrame(syncTerminalSize);
+      };
+
       // Cmd-only zoom: Ctrl is left to the terminal so we never shadow readline
       // shortcuts (e.g. Ctrl+_ undo). preventDefault stops the browser page zoom.
       terminal.attachCustomKeyEventHandler(event => {
         if (event.type !== 'keydown') return true;
-        const fontSize = nextTerminalFontSize(
-          terminal.options.fontSize ?? BASE_TERMINAL_FONT_SIZE,
-          {
-            withZoomModifier: event.metaKey,
-            key: event.key,
-          },
-        );
+        const fontSize = nextTerminalFontSize(currentFontSize(), {
+          withZoomModifier: event.metaKey,
+          key: event.key,
+        });
         if (fontSize === null) return true;
 
         event.preventDefault();
-        terminal.options.fontSize = fontSize;
-        requestAnimationFrame(syncTerminalSize);
+        applyFontSize(fontSize);
         return false;
       });
+
+      // Touch devices have no Cmd modifier, so pinch and the key bar's
+      // A− / A / A+ buttons cover zoom there (#120).
+      const detachPinchZoom = attachTerminalPinchZoom(container, {
+        currentFontSize,
+        applyFontSize,
+      });
+      fontZoomRef.current = {
+        adjustBy: delta =>
+          applyFontSize(clampTerminalFontSize(currentFontSize() + delta)),
+        reset: () => applyFontSize(BASE_TERMINAL_FONT_SIZE),
+      };
 
       const disposables = [
         adapter.onOutput(data => terminal.write(data)),
@@ -178,6 +204,8 @@ export function TerminalEmulator({
       });
 
       return () => {
+        fontZoomRef.current = null;
+        detachPinchZoom();
         resizeObserver.disconnect();
         inputDisposable.dispose();
         osc52Disposable.dispose();
@@ -246,6 +274,9 @@ export function TerminalEmulator({
         ctrlArmed={ctrlArmed}
         onToggleCtrl={armCtrl}
         onSendSequence={sendKeyBarSequence}
+        onFontSizeDecrease={() => fontZoomRef.current?.adjustBy(-1)}
+        onFontSizeReset={() => fontZoomRef.current?.reset()}
+        onFontSizeIncrease={() => fontZoomRef.current?.adjustBy(1)}
       />
     </section>
   );

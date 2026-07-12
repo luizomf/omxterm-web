@@ -14,6 +14,10 @@ export type TerminalKeyBarProps = {
   ctrlArmed: boolean;
   onToggleCtrl(): void;
   onSendSequence(sequence: string): void;
+  /** Font zoom for touch devices with no Cmd/Ctrl modifier (#120). */
+  onFontSizeDecrease(): void;
+  onFontSizeReset(): void;
+  onFontSizeIncrease(): void;
 };
 
 // Tapping a bar button must not move focus off the terminal's hidden input —
@@ -28,6 +32,9 @@ export function TerminalKeyBar({
   ctrlArmed,
   onToggleCtrl,
   onSendSequence,
+  onFontSizeDecrease,
+  onFontSizeReset,
+  onFontSizeIncrease,
 }: TerminalKeyBarProps) {
   return (
     <div
@@ -96,6 +103,30 @@ export function TerminalKeyBar({
         onClick={() => onSendSequence(CTRL_C_SEQUENCE)}
       >
         Ctrl-C
+      </button>
+      <button
+        type='button'
+        aria-label='Decrease font size'
+        onMouseDown={keepTerminalFocused}
+        onClick={onFontSizeDecrease}
+      >
+        A&minus;
+      </button>
+      <button
+        type='button'
+        aria-label='Reset font size'
+        onMouseDown={keepTerminalFocused}
+        onClick={onFontSizeReset}
+      >
+        A
+      </button>
+      <button
+        type='button'
+        aria-label='Increase font size'
+        onMouseDown={keepTerminalFocused}
+        onClick={onFontSizeIncrease}
+      >
+        A+
       </button>
     </div>
   );
