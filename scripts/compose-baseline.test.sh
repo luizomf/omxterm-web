@@ -75,13 +75,13 @@ check_config() {
 
 echo "portable baseline (compose.yml alone)"
 check_config \
-  "fresh-clone config resolves against .env.example; publishes only to loopback; pins the container to OMXTERM_SERVER_HOST=0.0.0.0 despite .env.example's 127.0.0.1; no external network, pinned address, or global container_name" \
+  "fresh-clone config resolves against .env.example; publishes only to loopback; pins the container to OMXTERM_SERVER_HOST=0.0.0.0 despite .env.example's 127.0.0.1; restart unless-stopped; no external network, pinned address, or global container_name" \
   baseline \
   -f "${WORK}/compose.yml"
 
 echo "production override (compose.yml + compose.prod.yml)"
 check_config \
-  "override merges and joins the broker to a Compose-created, stably-named shared network" \
+  "override merges, joins the broker to a Compose-created, stably-named shared network, and restores the production restart: always policy" \
   prod \
   -f "${WORK}/compose.yml" -f "${WORK}/compose.prod.yml"
 

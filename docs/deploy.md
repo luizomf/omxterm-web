@@ -132,10 +132,12 @@ docker compose up -d --build
 docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
-`compose.yml` publishes the broker on `127.0.0.1:3000` only, so nothing outside
-the host can reach it directly — your reverse proxy (on the host) forwards to
-`http://127.0.0.1:3000`. Because the port is loopback-only, the sole client that
-can reach it is your trusted proxy, so it is safe to set:
+`compose.yml` publishes the broker on `127.0.0.1:3000` only, so no other machine
+can reach it directly — your reverse proxy (on the host) forwards to
+`http://127.0.0.1:3000`. Note what loopback does and does not buy you: it blocks
+**remote** clients, but any process or user already on the host can still connect
+to the port. On a single-admin host where everything local is as trusted as the
+proxy itself, it is reasonable to set:
 
 ```bash
 # Add to .env, then `docker compose up -d` again to apply.
@@ -143,8 +145,10 @@ OMXTERM_TRUST_PROXY=true
 ```
 
 `OMXTERM_TRUST_PROXY` makes `request.ip` the real client (rate limiting) and lets
-HTTPS be detected from `X-Forwarded-Proto`. If you prefer to be strict, set it to
-the Docker network's subnet instead of `true`:
+HTTPS be detected from `X-Forwarded-Proto`. With `true`, any local process that
+can reach the port could also spoof `X-Forwarded-*` headers, so on a shared or
+multi-tenant host be strict instead: set it to the Docker network's subnet, which
+covers the host-side bridge address the proxy connects from:
 
 ```bash
 docker network inspect omxterm_default -f '{{(index .IPAM.Config 0).Subnet}}'
@@ -260,6 +264,17 @@ Watch the proxy logs for parse errors after saving.
 > another site would break the app.
 
 ## 6. Verify
+
+To rehearse the whole portable path first — on any machine, without touching a
+real deployment — run the opt-in integration check. It builds and boots the
+baseline in an isolated Compose project on an ephemeral loopback port, waits for
+`/health`, and tears containers, networks, and the built image down:
+
+```bash
+npm run test:compose:integration
+```
+
+Then verify the live deploy itself:
 
 ```bash
 # TLS + basic auth challenge
