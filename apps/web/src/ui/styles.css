@@ -402,6 +402,9 @@ textarea[data-masked='true'] {
   background: var(--clr-bg);
   display: flex;
   flex-direction: column;
+  /* Allow one-finger panning but opt out of browser pinch zoom: the pinch
+   * adjusts the terminal fontSize instead of blurring the whole page (#120). */
+  touch-action: pan-x pan-y;
 }
 .terminal-surface .xterm {
   /* Fill the surface via flex (not height:100%) so the grid sits right under the

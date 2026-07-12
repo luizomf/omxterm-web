@@ -1,21 +1,30 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import type { TerminalKeyBarProps } from './TerminalKeyBar';
 import { TerminalKeyBar } from './TerminalKeyBar';
 
 afterEach(() => {
   cleanup();
 });
 
+function renderKeyBar(overrides: Partial<TerminalKeyBarProps> = {}) {
+  const props: TerminalKeyBarProps = {
+    ctrlArmed: false,
+    onToggleCtrl: vi.fn(),
+    onSendSequence: vi.fn(),
+    onFontSizeDecrease: vi.fn(),
+    onFontSizeReset: vi.fn(),
+    onFontSizeIncrease: vi.fn(),
+    ...overrides,
+  };
+  return { ...render(<TerminalKeyBar {...props} />), props };
+}
+
 describe('TerminalKeyBar', () => {
   test('sends the Esc, Tab, and arrow sequences for their buttons', () => {
-    const onSendSequence = vi.fn();
-    render(
-      <TerminalKeyBar
-        ctrlArmed={false}
-        onToggleCtrl={vi.fn()}
-        onSendSequence={onSendSequence}
-      />,
-    );
+    const {
+      props: { onSendSequence },
+    } = renderKeyBar();
 
     fireEvent.click(screen.getByText('Esc'));
     fireEvent.click(screen.getByText('Tab'));
@@ -35,14 +44,10 @@ describe('TerminalKeyBar', () => {
   });
 
   test('toggles the sticky Ctrl modifier and reflects armed state via aria-pressed', () => {
-    const onToggleCtrl = vi.fn();
-    const { rerender } = render(
-      <TerminalKeyBar
-        ctrlArmed={false}
-        onToggleCtrl={onToggleCtrl}
-        onSendSequence={vi.fn()}
-      />,
-    );
+    const {
+      rerender,
+      props: { onToggleCtrl },
+    } = renderKeyBar();
 
     const ctrlButton = screen.getByText('Ctrl');
     expect(ctrlButton).toHaveAttribute('aria-pressed', 'false');
@@ -55,28 +60,38 @@ describe('TerminalKeyBar', () => {
         ctrlArmed={true}
         onToggleCtrl={onToggleCtrl}
         onSendSequence={vi.fn()}
+        onFontSizeDecrease={vi.fn()}
+        onFontSizeReset={vi.fn()}
+        onFontSizeIncrease={vi.fn()}
       />,
     );
     expect(screen.getByText('Ctrl')).toHaveAttribute('aria-pressed', 'true');
   });
 
+  test('fires the decrease, reset, and increase font-size callbacks', () => {
+    const {
+      props: { onFontSizeDecrease, onFontSizeReset, onFontSizeIncrease },
+    } = renderKeyBar();
+
+    fireEvent.click(screen.getByLabelText('Decrease font size'));
+    fireEvent.click(screen.getByLabelText('Reset font size'));
+    fireEvent.click(screen.getByLabelText('Increase font size'));
+
+    expect(onFontSizeDecrease).toHaveBeenCalledTimes(1);
+    expect(onFontSizeReset).toHaveBeenCalledTimes(1);
+    expect(onFontSizeIncrease).toHaveBeenCalledTimes(1);
+  });
+
   test('does not steal focus from an already-focused element on mousedown', () => {
-    render(
-      <>
-        <input aria-label='terminal proxy input' />
-        <TerminalKeyBar
-          ctrlArmed={false}
-          onToggleCtrl={vi.fn()}
-          onSendSequence={vi.fn()}
-        />
-      </>,
-    );
+    render(<input aria-label='terminal proxy input' />);
+    renderKeyBar();
 
     const focusedInput = screen.getByLabelText('terminal proxy input');
     focusedInput.focus();
     expect(document.activeElement).toBe(focusedInput);
 
     fireEvent.mouseDown(screen.getByText('Esc'));
+    fireEvent.mouseDown(screen.getByLabelText('Increase font size'));
 
     expect(document.activeElement).toBe(focusedInput);
   });
