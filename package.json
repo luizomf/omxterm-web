@@ -19,9 +19,9 @@
     "test:compose:integration": "bash scripts/compose-baseline.integration.test.sh"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "typescript": "latest",
-    "vitest": "latest"
+    "@types/node": "26.0.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.9"
   },
   "allowScripts": {
     "cpu-features@0.0.10": true,
