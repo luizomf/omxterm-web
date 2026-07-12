@@ -44,4 +44,20 @@ describe('handleOsc52', () => {
     expect(handleOsc52('c;not base64!!', writeClipboard)).toBe(true);
     expect(writeClipboard).not.toHaveBeenCalled();
   });
+
+  test('drops decoded clipboard writes larger than 64 KiB', () => {
+    const writeClipboard = vi.fn();
+    const oversizedPayload = btoa('a'.repeat(64 * 1024 + 1));
+
+    expect(handleOsc52(`c;${oversizedPayload}`, writeClipboard)).toBe(true);
+    expect(writeClipboard).not.toHaveBeenCalled();
+  });
+
+  test('allows a clipboard write at the 64 KiB boundary', () => {
+    const writeClipboard = vi.fn();
+    const boundaryPayload = btoa('a'.repeat(64 * 1024));
+
+    handleOsc52(`c;${boundaryPayload}`, writeClipboard);
+    expect(writeClipboard).toHaveBeenCalledOnce();
+  });
 });
