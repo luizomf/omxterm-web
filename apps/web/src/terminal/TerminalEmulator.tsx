@@ -12,7 +12,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
 import { hardenTerminalInputForMobile } from './harden-terminal-input-for-mobile';
 import { handleOsc52 } from './osc52-clipboard';
-import { TerminalKeyBar } from './TerminalKeyBar';
+import { keepTerminalFocused, TerminalKeyBar } from './TerminalKeyBar';
 import { applyStickyCtrlModifier } from './terminal-key-sequences';
 import {
   BASE_TERMINAL_FONT_SIZE,
@@ -61,6 +61,7 @@ export function TerminalEmulator({
   const [status, setStatus] = useState<TerminalStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [topbarVisible, setTopbarVisible] = useState(true);
+  const [keyBarVisible, setKeyBarVisible] = useState(true);
   const [ctrlArmed, setCtrlArmed] = useState(false);
   // terminal.onData is wired once per adapter (see the effect below), so it
   // needs a ref rather than the `ctrlArmed` state value to see the latest
@@ -270,14 +271,27 @@ export function TerminalEmulator({
         </div>
       ) : null}
       <div ref={containerRef} className='terminal-surface' />
-      <TerminalKeyBar
-        ctrlArmed={ctrlArmed}
-        onToggleCtrl={armCtrl}
-        onSendSequence={sendKeyBarSequence}
-        onFontSizeDecrease={() => fontZoomRef.current?.adjustBy(-1)}
-        onFontSizeReset={() => fontZoomRef.current?.reset()}
-        onFontSizeIncrease={() => fontZoomRef.current?.adjustBy(1)}
-      />
+      {keyBarVisible ? (
+        <TerminalKeyBar
+          ctrlArmed={ctrlArmed}
+          onToggleCtrl={armCtrl}
+          onSendSequence={sendKeyBarSequence}
+          onFontSizeDecrease={() => fontZoomRef.current?.adjustBy(-1)}
+          onFontSizeReset={() => fontZoomRef.current?.reset()}
+          onFontSizeIncrease={() => fontZoomRef.current?.adjustBy(1)}
+          onHide={() => setKeyBarVisible(false)}
+        />
+      ) : (
+        <button
+          type='button'
+          className='ghost-button show-key-bar'
+          onMouseDown={keepTerminalFocused}
+          onClick={() => setKeyBarVisible(true)}
+          aria-label='Show keyboard tools (+)'
+        >
+          +
+        </button>
+      )}
     </section>
   );
 }

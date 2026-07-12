@@ -18,13 +18,14 @@ export type TerminalKeyBarProps = {
   onFontSizeDecrease(): void;
   onFontSizeReset(): void;
   onFontSizeIncrease(): void;
+  onHide(): void;
 };
 
 // Tapping a bar button must not move focus off the terminal's hidden input —
 // on mobile that closes the soft keyboard and stops typing mid-session (#21).
 // preventDefault on mousedown blocks the browser's default focus-shift while
 // still letting the subsequent click fire normally.
-function keepTerminalFocused(event: MouseEvent<HTMLButtonElement>): void {
+export function keepTerminalFocused(event: MouseEvent<HTMLButtonElement>): void {
   event.preventDefault();
 }
 
@@ -35,6 +36,7 @@ export function TerminalKeyBar({
   onFontSizeDecrease,
   onFontSizeReset,
   onFontSizeIncrease,
+  onHide,
 }: TerminalKeyBarProps) {
   return (
     <div
@@ -127,6 +129,14 @@ export function TerminalKeyBar({
         onClick={onFontSizeIncrease}
       >
         A+
+      </button>
+      <button
+        type='button'
+        className='key-bar-hide'
+        onMouseDown={keepTerminalFocused}
+        onClick={onHide}
+      >
+        Hide tools
       </button>
     </div>
   );
