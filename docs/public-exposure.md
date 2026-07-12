@@ -40,8 +40,10 @@ full request flow; this is the abuse-control summary:
   sustained flood closes the socket with WebSocket close code `1008` and a
   `terminal_flood` audit event. Normal typing, paste, resize, and Ctrl-C are
   unaffected.
-- **Exact Origin allowlist** (`OMXTERM_ALLOWED_ORIGIN`) on every authenticated
-  HTTP call and on the WebSocket upgrade.
+- **Exact Origin allowlist** (`OMXTERM_ALLOWED_ORIGIN`) on state-changing
+  authenticated HTTP calls and on the WebSocket upgrade. The read-only
+  `/api/me` boot probe permits a missing Origin but rejects an explicitly bad
+  one.
 
 All of this is real protection against a misbehaving or malicious
 **browser client** that has (or is trying to get) a session. It is not
@@ -140,11 +142,13 @@ for both Compose topologies.
 ## Origin validation is a browser boundary, not bot authentication
 
 `OMXTERM_ALLOWED_ORIGIN` is an exact-match allowlist enforced on every
-authenticated HTTP call and on the WebSocket upgrade. It is real, load-bearing
-protection against **cross-site browser attacks**: another website cannot
-open a hidden request or WebSocket to your OMXTerm broker using a
-logged-in visitor's cookies, because browsers attach the real page Origin and
-cannot be told to lie about it.
+state-changing authenticated HTTP call and on the WebSocket upgrade. The
+read-only `/api/me` boot probe permits a missing Origin because same-origin GET
+requests commonly omit it, but still rejects an explicitly bad Origin. This is
+real, load-bearing protection against **cross-site browser attacks**: another
+website cannot open a hidden request or WebSocket to your OMXTerm broker using
+a logged-in visitor's cookies, because browsers attach the real page Origin
+and cannot be told to lie about it.
 
 It is not authentication against a script, curl, or a bot. Nothing stops a
 non-browser client from sending any Origin header it likes — Origin is a
