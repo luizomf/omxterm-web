@@ -118,6 +118,23 @@ case "${body}" in
     ;;
 esac
 
+echo "verifying non-root runtime user"
+if ! runtime_uid="$("${COMPOSE[@]}" exec -T omxterm id -u)"; then
+  echo "  FAIL: could not read the broker runtime UID"
+  exit 1
+fi
+case "${runtime_uid}" in
+  ''|*[!0-9]*)
+    echo "  FAIL: broker runtime UID is not numeric: ${runtime_uid}"
+    exit 1
+    ;;
+esac
+if [ "${runtime_uid}" = "0" ]; then
+  echo "  FAIL: broker process runs as root (UID 0)"
+  exit 1
+fi
+echo "  ok: broker process runs as UID ${runtime_uid}"
+
 echo "teardown"
 if ! "${COMPOSE[@]}" down --volumes --remove-orphans --rmi local >"${WORK}/down.log" 2>&1; then
   echo "  FAIL: docker compose down failed:"
