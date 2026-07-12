@@ -10,7 +10,10 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
+import { hardenTerminalInputForMobile } from './harden-terminal-input-for-mobile';
 import { handleOsc52 } from './osc52-clipboard';
+import { TerminalKeyBar } from './TerminalKeyBar';
+import { applyStickyCtrlModifier } from './terminal-key-sequences';
 import {
   BASE_TERMINAL_FONT_SIZE,
   nextTerminalFontSize,
@@ -56,6 +59,16 @@ export function TerminalEmulator({
   const [status, setStatus] = useState<TerminalStatus>('idle');
   const [error, setError] = useState<string | null>(null);
   const [topbarVisible, setTopbarVisible] = useState(true);
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+  // terminal.onData is wired once per adapter (see the effect below), so it
+  // needs a ref rather than the `ctrlArmed` state value to see the latest
+  // armed state without re-subscribing on every toggle.
+  const ctrlArmedRef = useRef(false);
+  const armCtrl = () => {
+    ctrlArmedRef.current = !ctrlArmedRef.current;
+    setCtrlArmed(ctrlArmedRef.current);
+  };
+  const sendKeyBarSequence = (sequence: string) => adapter.sendInput(sequence);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -89,6 +102,10 @@ export function TerminalEmulator({
       );
 
       terminal.open(container);
+      // Mobile browsers apply autocorrect/spellcheck to xterm's hidden input
+      // textarea as if it were a normal text field, corrupting shell input
+      // (#21) — the helper textarea only exists once open() has run.
+      hardenTerminalInputForMobile(container);
 
       // Keep both xterm's grid and the server PTY aligned with the rendered size.
       // A very large container can fit past the shared resize bounds, so clamp
@@ -134,7 +151,18 @@ export function TerminalEmulator({
         }),
         adapter.onError(setError),
       ];
-      const inputDisposable = terminal.onData(data => adapter.sendInput(data));
+      // The key bar's sticky Ctrl modifier arms here rather than in
+      // attachCustomKeyEventHandler because it must also catch letters typed
+      // on a mobile soft keyboard, which never dispatch real KeyboardEvents.
+      const inputDisposable = terminal.onData(data => {
+        const wasArmed = ctrlArmedRef.current;
+        const { armed, output } = applyStickyCtrlModifier(data, wasArmed);
+        ctrlArmedRef.current = armed;
+        // Only touch React state on the disarm transition — every other
+        // keystroke would otherwise force a re-render for no visible change.
+        if (wasArmed) setCtrlArmed(armed);
+        adapter.sendInput(output);
+      });
       const resizeObserver = new ResizeObserver(() => syncTerminalSize());
       resizeObserver.observe(container);
 
@@ -214,6 +242,11 @@ export function TerminalEmulator({
         </div>
       ) : null}
       <div ref={containerRef} className='terminal-surface' />
+      <TerminalKeyBar
+        ctrlArmed={ctrlArmed}
+        onToggleCtrl={armCtrl}
+        onSendSequence={sendKeyBarSequence}
+      />
     </section>
   );
 }
