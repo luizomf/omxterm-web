@@ -218,6 +218,11 @@ With Traefik's file provider, add these entries to your dynamic configuration
 maps — don't duplicate the top-level keys). The router and middleware are the
 same for both topologies from step 3; only the service URL differs:
 
+The example includes the optional preview BasicAuth from step 4. If you skipped
+that step and want OMXTerm's own access gate to be the public login, omit both
+the router's `middlewares` block and the `omxterm-auth` middleware definition.
+Do not leave a router reference to a middleware you did not create.
+
 > ⚠️ If this config file is shared with other routes, a YAML typo is hot-reloaded
 > and can break them too. Back it up first and re-read it after saving.
 
@@ -287,20 +292,23 @@ npm run test:compose:integration
 Then verify the live deploy itself:
 
 ```bash
-# TLS + basic auth challenge
+# With the optional preview BasicAuth from step 4:
 curl -sI https://omxterm.example.com | head -n 1   # 401 (basic auth)
 
 # Pass only the username; curl PROMPTS for the password, keeping it out of argv
 # and shell history.
 curl -sI -u <user> https://omxterm.example.com | head -n 1   # 200
+
+# Without the optional BasicAuth, OMXTerm's access-gate page is public:
+curl -sI https://omxterm.example.com | head -n 1   # 200
 ```
 
 If your proxy fronts other routes, confirm the OMXTerm rollout did not disturb
 them — the proxy container and the other routes should be unchanged.
 
-Then in a browser: clear the basic-auth prompt → the OMXTerm access gate → enter
-the access token → fill the SSH form for an allowed host → confirm the host-key
-fingerprint → use the terminal. The full walkthrough is in
+Then in a browser: clear the basic-auth prompt, if configured → the OMXTerm
+access gate → enter the access token → fill the SSH form for an allowed host →
+confirm the host-key fingerprint → use the terminal. The full walkthrough is in
 [`usage.md`](./usage.md).
 
 If the SSH step fails to reach a host inside `OMXTERM_SSH_ALLOWED_CIDR`, confirm

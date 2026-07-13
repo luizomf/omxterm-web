@@ -219,6 +219,9 @@ http:
       service: omxterm
 ```
 
+If you are not using the optional private-preview BasicAuth, remove
+`omxterm-auth` from the router's middleware list; keep `omxterm-ratelimit`.
+
 Tune `average`/`burst` to your expected traffic; the values above are a
 starting point, not a recommendation. This complements, and does not
 replace, OMXTerm's own per-client limiters and any DDoS protection your
