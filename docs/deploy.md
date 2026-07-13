@@ -306,9 +306,9 @@ curl -sI https://omxterm.example.com | head -n 1   # 200
 If your proxy fronts other routes, confirm the OMXTerm rollout did not disturb
 them — the proxy container and the other routes should be unchanged.
 
-Then in a browser: clear the basic-auth prompt → the OMXTerm access gate → enter
-the access token → fill the SSH form for an allowed host → confirm the host-key
-fingerprint → use the terminal. The full walkthrough is in
+Then in a browser: clear the basic-auth prompt, if configured → the OMXTerm
+access gate → enter the access token → fill the SSH form for an allowed host →
+confirm the host-key fingerprint → use the terminal. The full walkthrough is in
 [`usage.md`](./usage.md).
 
 If the SSH step fails to reach a host inside `OMXTERM_SSH_ALLOWED_CIDR`, confirm
