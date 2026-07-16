@@ -68,79 +68,148 @@ export function safeEqualHash(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export class InMemoryAccessSessionStore {
+export type IssuedAccessCredentials = {
+  rawSessionToken: string;
+  rawDeviceToken: string;
+  session: AccessSession;
+  device: DeviceToken;
+  evictedSessionId?: string;
+};
+
+export type LiveAccessCredentialState = {
+  clients: number;
+  sessions: number;
+  devices: number;
+  ownerships: number;
+};
+
+/**
+ * Owns access sessions and device tokens as one bounded credential pair.
+ *
+ * A successful login may always mint a fresh pair. Once one client's capacity
+ * is full, the oldest pair is revoked before the new pair is published. Keeping
+ * both hashes and the client ownership index behind this interface prevents an
+ * eviction or expiry sweep from leaving one half authorized by mistake.
+ */
+export class InMemoryAccessCredentialStore {
   readonly #sessions = new Map<string, AccessSession>();
+  readonly #devices = new Map<string, DeviceToken>();
+  readonly #clientBySessionId = new Map<string, string>();
+  readonly #sessionIdsByClient = new Map<string, Set<string>>();
 
   constructor(
     private readonly clock: Clock = systemClock,
-    private readonly sessionTtlMs = 12 * 60 * 60 * 1000,
-  ) {}
+    private readonly credentialTtlMs = 12 * 60 * 60 * 1000,
+    private readonly maxSessionsPerClient = 5,
+  ) {
+    if (!Number.isInteger(maxSessionsPerClient) || maxSessionsPerClient <= 0) {
+      throw new Error(
+        `Access credential capacity must be a positive integer. Received ${maxSessionsPerClient}.`,
+      );
+    }
+  }
 
-  create(): { rawSessionToken: string; session: AccessSession } {
-    const rawSessionToken = createOpaqueSecret();
+  create(clientKey: string): IssuedAccessCredentials {
     const now = this.clock.now();
+    this.#sweepExpiredForClient(clientKey, now);
+
+    const rawSessionToken = createOpaqueSecret();
+    const rawDeviceToken = createOpaqueSecret();
     const session: AccessSession = {
       id: randomUUID(),
       tokenHash: hashSecret(rawSessionToken),
       createdAt: now,
-      expiresAt: now + this.sessionTtlMs,
+      expiresAt: now + this.credentialTtlMs,
     };
+    const device: DeviceToken = {
+      hash: hashSecret(rawDeviceToken),
+      createdAt: now,
+      expiresAt: now + this.credentialTtlMs,
+    };
+
+    const oldestSessionId = this.#oldestSessionIdAtCapacity(clientKey);
+    if (oldestSessionId) this.#revoke(oldestSessionId);
+
+    const clientSessions = this.#sessionIdsByClient.get(clientKey) ?? new Set<string>();
+    clientSessions.add(session.id);
+    this.#sessionIdsByClient.set(clientKey, clientSessions);
     this.#sessions.set(session.id, session);
-    return { rawSessionToken, session };
+    this.#devices.set(session.id, device);
+    this.#clientBySessionId.set(session.id, clientKey);
+
+    return {
+      rawSessionToken,
+      rawDeviceToken,
+      session,
+      device,
+      ...(oldestSessionId ? { evictedSessionId: oldestSessionId } : {}),
+    };
   }
 
-  validate(sessionId: string | undefined, rawSessionToken: string | undefined): AccessSession | null {
-    if (!sessionId || !rawSessionToken) return null;
+  validate(
+    sessionId: string | undefined,
+    rawSessionToken: string | undefined,
+    rawDeviceToken: string | undefined,
+  ): AccessSession | null {
+    if (!sessionId || !rawSessionToken || !rawDeviceToken) return null;
     const session = this.#sessions.get(sessionId);
-    if (!session || session.expiresAt <= this.clock.now()) return null;
+    const device = this.#devices.get(sessionId);
+    const now = this.clock.now();
+    if (!session || !device || session.expiresAt <= now || device.expiresAt <= now) {
+      return null;
+    }
     if (!safeEqualHash(session.tokenHash, hashSecret(rawSessionToken))) return null;
+    if (!safeEqualHash(device.hash, hashSecret(rawDeviceToken))) return null;
     return session;
   }
 
-  // Active expiry (#29): sessions only hold a token hash (no raw secret), but a
-  // long-lived process would otherwise accumulate expired entries forever, since
-  // validate() never deletes.
-  sweepExpired(): void {
+  sweepExpired(): number {
     const now = this.clock.now();
-    for (const [sessionId, session] of this.#sessions.entries()) {
-      if (session.expiresAt <= now) this.#sessions.delete(sessionId);
+    let revoked = 0;
+    for (const [sessionId, session] of this.#sessions) {
+      const device = this.#devices.get(sessionId);
+      if (session.expiresAt > now && device && device.expiresAt > now) continue;
+      this.#revoke(sessionId);
+      revoked += 1;
+    }
+    return revoked;
+  }
+
+  getLiveCredentialCounts(): LiveAccessCredentialState {
+    return {
+      clients: this.#sessionIdsByClient.size,
+      sessions: this.#sessions.size,
+      devices: this.#devices.size,
+      ownerships: this.#clientBySessionId.size,
+    };
+  }
+
+  #oldestSessionIdAtCapacity(clientKey: string): string | undefined {
+    const clientSessions = this.#sessionIdsByClient.get(clientKey);
+    if (!clientSessions || clientSessions.size < this.maxSessionsPerClient) return undefined;
+    return clientSessions.values().next().value;
+  }
+
+  #sweepExpiredForClient(clientKey: string, now: number): void {
+    const clientSessions = this.#sessionIdsByClient.get(clientKey);
+    if (!clientSessions) return;
+    for (const sessionId of [...clientSessions]) {
+      const session = this.#sessions.get(sessionId);
+      const device = this.#devices.get(sessionId);
+      if (session && device && session.expiresAt > now && device.expiresAt > now) continue;
+      this.#revoke(sessionId);
     }
   }
-}
 
-export class InMemoryDeviceTokenStore {
-  readonly #devices = new Map<string, DeviceToken>();
-
-  constructor(
-    private readonly clock: Clock = systemClock,
-    private readonly deviceTtlMs = 12 * 60 * 60 * 1000,
-  ) {}
-
-  create(sessionId: string): { rawDeviceToken: string; device: DeviceToken } {
-    const rawDeviceToken = createOpaqueSecret();
-    const now = this.clock.now();
-    const device: DeviceToken = { hash: hashSecret(rawDeviceToken), createdAt: now, expiresAt: now + this.deviceTtlMs };
-    this.#devices.set(sessionId, device);
-    return { rawDeviceToken, device };
-  }
-
-  validate(sessionId: string | undefined, rawDeviceToken: string | undefined): DeviceToken | null {
-    if (!sessionId || !rawDeviceToken) return null;
-    const device = this.#devices.get(sessionId);
-    if (!device || device.expiresAt <= this.clock.now()) return null;
-    if (!safeEqualHash(device.hash, hashSecret(rawDeviceToken))) return null;
-    return device;
-  }
-
-  // Active expiry (#29): device tokens only hold a hash (#34 — the raw is handed
-  // out once at create() and never stored), like access sessions, but a
-  // long-lived process would otherwise accumulate expired entries forever, since
-  // validate() never deletes.
-  sweepExpired(): void {
-    const now = this.clock.now();
-    for (const [sessionId, device] of this.#devices.entries()) {
-      if (device.expiresAt <= now) this.#devices.delete(sessionId);
-    }
+  #revoke(sessionId: string): void {
+    const clientKey = this.#clientBySessionId.get(sessionId);
+    this.#sessions.delete(sessionId);
+    this.#devices.delete(sessionId);
+    this.#clientBySessionId.delete(sessionId);
+    if (!clientKey) return;
+    const clientSessions = this.#sessionIdsByClient.get(clientKey);
+    clientSessions?.delete(sessionId);
+    if (clientSessions?.size === 0) this.#sessionIdsByClient.delete(clientKey);
   }
 }
 

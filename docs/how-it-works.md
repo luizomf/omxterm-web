@@ -25,7 +25,7 @@ defends each of those with one specific mechanism:
 | Another site opens the socket for you | **Exact Origin check** on every SSH call and on the WebSocket upgrade                                                                                    |
 | The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
 | You connect to an impostor server     | **Host-key fingerprint** shown first, then re-verified at connect time                                                                                   |
-| One client exhausts the broker        | **Post-auth limits** — per-session + per-client rate caps on probes/tickets and per-session/global connection caps (429/409)                             |
+| One client exhausts the broker        | **Bounded live state + post-auth limits** — five access credential pairs per client, probe/ticket rate caps, and connection caps                       |
 | The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed                                                                       |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript                                                                                    |
 
@@ -45,7 +45,7 @@ broker is the only one that ever speaks SSH; the browser never does.
 Browser                          Broker (Fastify + ws)                 SSH target
   |                                    |                                    |
   | 1. POST /api/access {token} ------>| check token, rate-limit            |
-  |    set cookies: session+device <---| create session + device token      |
+  |    set cookies: session+device <---| create bounded credential pair     |
   |                                    |                                    |
   | 2. POST /api/ssh/host-key -------->| Origin + auth check                |
   |                                    |---- probe host key (no login) ---->|
@@ -133,16 +133,27 @@ The server, in order
    ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)). The token
    is the single gate in front of an SSH proxy, so it has to resist brute force
    — a timing-safe compare blocks timing leaks, not guessing. Over the limit →
-   HTTP 429 with `Retry-After`.
+   HTTP 429 with `Retry-After`. This client identity is `request.ip`: the direct
+   socket peer by default, or the forwarded real client only when
+   `OMXTERM_TRUST_PROXY` explicitly trusts the proxy.
 3. **Compares the token in constant time.** `safeEqualText` uses
    `timingSafeEqual`, so a wrong token takes the same time whether the first
    byte or the last byte is wrong. Wrong token → records a failure and
    returns 401.
-4. **On success**, resets the limiter and mints two secrets:
-   - an **access session** (`InMemoryAccessSessionStore`) — random opaque token,
-     stored server-side as a SHA-256 hash, 12-hour TTL;
-   - a **device token** (`InMemoryDeviceTokenStore`) — a second random
-     per-browser secret bound to that session, also stored hashed, 12-hour TTL.
+4. **On success**, resets the failed-login limiter and atomically mints an
+   access session plus its bound device token in
+   `InMemoryAccessCredentialStore`. Both are random opaque secrets stored
+   server-side only as SHA-256 hashes with a 12-hour TTL. The store retains at
+   most **five live pairs per `request.ip`**. A sixth valid login still returns
+   `200` with fresh cookies so a lost-cookie/re-login flow remains usable, but
+   it revokes the oldest session and device together before publishing the new
+   pair. The evicted cookies then report `authenticated: false` at `/api/me`
+   and cannot call protected HTTP routes or authorize a future WebSocket.
+
+The rolling replacement does not retroactively kill a terminal WebSocket that
+already passed all checks and opened SSH; that connection remains covered by
+the existing connection caps, heartbeat, and destroy-on-disconnect lifecycle.
+It does revoke the evicted credential pair for every new HTTP request or upgrade.
 
 Both raw values, plus the session id, are written as three cookies
 ([`apps/server/src/cookies.ts`](../apps/server/src/cookies.ts)):
@@ -362,15 +373,26 @@ reverse proxy, all connections from that proxy intentionally share the four
 conservative audit budgets, while the failed-token limiter still uses the
 configured real `request.ip`.
 
-Every request beyond an audit budget keeps the same fail-closed response: 403
-for bad Origin, 429 with unchanged `Retry-After` for a blocked access client,
-401 for a WebSocket upgrade without auth or a ticket, and 400 for a malformed
-upgrade target. Only the persistent write is suppressed. Audit-limiter keys
-contain the direct socket peer and one of the four fixed reasons. Bounded events
-contain only the timestamp, endpoint-specific event name, severity, and
-normalized reason; Origin, request target, forwarded addresses, cookies, and
-tickets enter neither the keys nor the persisted event. The limiter's elapsed
-windows are reclaimed by the active expiry sweeper.
+Successful rotation has a separate `access_granted` budget: at most 10 records
+per direct TCP peer in each 60-second fixed window. A valid login beyond that
+budget still returns `200`, rotates the bounded credential pair normally, and
+resets the failed-login limiter; only its durable audit write is omitted. The
+key deliberately uses the direct peer instead of `request.ip`, so rotating
+forwarded client headers through one trusted proxy cannot multiply file writes.
+As with rejection budgets, legitimate clients behind one proxy share this
+conservative persistence budget. Recorded grant events contain only the event,
+severity, generated session id, and allowed Origin — never access tokens,
+cookies, forwarded addresses, or device tokens.
+
+Every rejected request beyond an audit budget keeps the same fail-closed
+response: 403 for bad Origin, 429 with unchanged `Retry-After` for a blocked
+access client, 401 for a WebSocket upgrade without auth or a ticket, and 400 for
+a malformed upgrade target. Only the persistent write is suppressed. Rejection
+audit-limiter keys contain the direct socket peer and one of the four fixed
+reasons. Bounded rejection events contain only the timestamp, endpoint-specific
+event name, severity, and normalized reason; Origin, request target, forwarded
+addresses, cookies, and tickets enter neither the keys nor the persisted event.
+The limiters' elapsed windows are reclaimed by the active expiry sweeper.
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
 keystroke or terminal output.

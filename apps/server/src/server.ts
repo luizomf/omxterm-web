@@ -4,10 +4,9 @@ import fastifyStatic from "@fastify/static";
 import type { AuditLogger } from "@omxterm/core/audit";
 import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
 import {
+  InMemoryAccessCredentialStore,
   InMemoryAccessRateLimiter,
-  InMemoryAccessSessionStore,
   InMemoryConcurrencyLimiter,
-  InMemoryDeviceTokenStore,
   InMemoryFixedWindowRateLimiter,
   InMemoryTerminalTicketStore,
   systemClock,
@@ -55,9 +54,9 @@ const terminalTicketSchema = z.object({
 });
 
 type Stores = {
-  sessions: InMemoryAccessSessionStore;
-  devices: InMemoryDeviceTokenStore;
+  accessCredentials: InMemoryAccessCredentialStore;
   tickets: InMemoryTerminalTicketStore;
+  accessGrantAuditLimiter: InMemoryFixedWindowRateLimiter;
   unauthenticatedRejectionAuditLimiter: InMemoryFixedWindowRateLimiter;
   accessRateLimiter: InMemoryAccessRateLimiter;
   hostKeyRateLimiter: InMemoryFixedWindowRateLimiter;
@@ -90,6 +89,14 @@ export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
 export const MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
 export const UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS = 60 * 1000;
 
+// Successful access requests remain usable under rotation, but only this many
+// access_granted records are persisted per direct TCP peer in one fixed window.
+// Using the peer rather than request.ip prevents a trusted-proxy header from
+// multiplying durable writes; the event remains metadata-only and the response
+// is unchanged when its audit budget is exhausted (#145).
+export const MAX_ACCESS_GRANT_AUDITS_PER_DIRECT_PEER_PER_WINDOW = 10;
+export const ACCESS_GRANT_AUDIT_WINDOW_MS = 60 * 1000;
+
 type BoundedUnauthenticatedRejectionReason =
   | "bad_origin"
   | "rate_limited"
@@ -105,6 +112,7 @@ type BoundedUnauthenticatedRejectionReason =
 export const POST_AUTH_RATE_WINDOW_MS = 60 * 1000;
 export const MAX_HOST_KEY_PROBES_PER_WINDOW = 30;
 export const MAX_TICKETS_PER_WINDOW = 30;
+export const MAX_ACCESS_SESSIONS_PER_CLIENT = 5;
 const MAX_ACTIVE_SESSIONS_PER_CLIENT = 5;
 const MAX_ACTIVE_WS_CONNECTIONS = 50;
 
@@ -187,13 +195,12 @@ function authenticateFastifyRequest(
   stores: Stores,
 ): AuthenticatedRequest | null {
   const cookies = readAuthCookies(request);
-  const session = stores.sessions.validate(
+  const session = stores.accessCredentials.validate(
     cookies.sessionId,
     cookies.sessionToken,
+    cookies.deviceToken,
   );
   if (!session) return null;
-  const device = stores.devices.validate(session.id, cookies.deviceToken);
-  if (!device) return null;
   return { session, deviceToken: cookies.deviceToken ?? "" };
 }
 
@@ -222,6 +229,9 @@ export type ServerDependencies = {
   // Injected so tests can drive a runtime sink failure through the real
   // handlers; production builds the configured file/stdout audit logger.
   audit?: AuditLogger;
+  // Injected state lets HTTP-boundary tests assert the live session/device
+  // cardinality after adversarial successful-login rotation.
+  accessCredentials?: InMemoryAccessCredentialStore;
   // Test seams for proving slot reclamation without waiting for the production
   // heartbeat or opening all 50 production slots.
   websocketHeartbeatIntervalMs?: number;
@@ -239,9 +249,19 @@ export async function createOmxtermServer(
   const audit =
     deps.audit ?? new JsonlAuditLogger(createAuditSink(config.auditLogPath));
   const stores: Stores = {
-    sessions: new InMemoryAccessSessionStore(),
-    devices: new InMemoryDeviceTokenStore(),
+    accessCredentials:
+      deps.accessCredentials ??
+      new InMemoryAccessCredentialStore(
+        systemClock,
+        12 * 60 * 60 * 1000,
+        MAX_ACCESS_SESSIONS_PER_CLIENT,
+      ),
     tickets: new InMemoryTerminalTicketStore(),
+    accessGrantAuditLimiter: new InMemoryFixedWindowRateLimiter(
+      systemClock,
+      MAX_ACCESS_GRANT_AUDITS_PER_DIRECT_PEER_PER_WINDOW,
+      ACCESS_GRANT_AUDIT_WINDOW_MS,
+    ),
     unauthenticatedRejectionAuditLimiter: new InMemoryFixedWindowRateLimiter(
       systemClock,
       MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
@@ -277,8 +297,8 @@ export async function createOmxtermServer(
   const stopExpirySweeper = startExpirySweeper(
     [
       stores.tickets,
-      stores.sessions,
-      stores.devices,
+      stores.accessCredentials,
+      stores.accessGrantAuditLimiter,
       stores.unauthenticatedRejectionAuditLimiter,
       stores.accessRateLimiter,
       stores.hostKeyRateLimiter,
@@ -406,8 +426,8 @@ export async function createOmxtermServer(
     }
 
     stores.accessRateLimiter.reset(clientKey);
-    const { rawSessionToken, session } = stores.sessions.create();
-    const { rawDeviceToken } = stores.devices.create(session.id);
+    const { rawSessionToken, rawDeviceToken, session } =
+      stores.accessCredentials.create(clientKey);
     setAuthCookies(
       reply,
       {
@@ -417,12 +437,15 @@ export async function createOmxtermServer(
       },
       { secure: config.secureCookies },
     );
-    audit.write({
-      event: "access_granted",
-      severity: "info",
-      sessionId: session.id,
-      origin,
-    });
+    const directPeer = request.socket.remoteAddress ?? "unknown";
+    if (stores.accessGrantAuditLimiter.tryConsume(directPeer).allowed) {
+      audit.write({
+        event: "access_granted",
+        severity: "info",
+        sessionId: session.id,
+        origin,
+      });
+    }
     return { ok: true };
   });
 
@@ -632,14 +655,14 @@ export async function createOmxtermServer(
       }
 
       const cookies = parseCookieHeader(req.headers.cookie);
-      const session = stores.sessions.validate(
+      const deviceToken = cookies[DEVICE_TOKEN_COOKIE];
+      const session = stores.accessCredentials.validate(
         cookies[SESSION_ID_COOKIE],
         cookies[SESSION_TOKEN_COOKIE],
+        deviceToken,
       );
-      const deviceToken = cookies[DEVICE_TOKEN_COOKIE];
-      const device = stores.devices.validate(session?.id, deviceToken);
       const rawTicket = url.searchParams.get("ticket");
-      if (!session || !device || !deviceToken || !rawTicket) {
+      if (!session || !deviceToken || !rawTicket) {
         auditBoundedUnauthenticatedRejection(
           "ws_upgrade_rejected",
           req.socket.remoteAddress ?? "unknown",

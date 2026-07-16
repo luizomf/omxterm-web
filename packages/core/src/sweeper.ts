@@ -27,7 +27,7 @@ export const systemIntervalScheduler: IntervalScheduler = (onTick, intervalMs) =
  * @returns a stop() function that cancels the schedule (call it on shutdown).
  *
  * @example
- * const stop = startExpirySweeper([tickets, sessions, devices], 10_000);
+ * const stop = startExpirySweeper([tickets, accessCredentials], 10_000);
  * // ...later, on server close:
  * stop();
  */
