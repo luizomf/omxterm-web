@@ -355,7 +355,10 @@ export async function createOmxtermServer(
   app.post("/api/access", async (request, reply) => {
     const origin = requestOrigin(request);
     if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      auditOriginRejection("access_rejected", request.ip);
+      auditOriginRejection(
+        "access_rejected",
+        request.socket.remoteAddress ?? "unknown",
+      );
       return reply.code(403).send({ ok: false, message: "Bad Origin." });
     }
 
