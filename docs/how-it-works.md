@@ -367,10 +367,10 @@ for bad Origin, 429 with unchanged `Retry-After` for a blocked access client,
 401 for a WebSocket upgrade without auth or a ticket, and 400 for a malformed
 upgrade target. Only the persistent write is suppressed. Audit-limiter keys
 contain the direct socket peer and one of the four fixed reasons. Bounded events
-contain only the endpoint-specific event name, severity, and normalized reason;
-Origin, request target, forwarded addresses, cookies, and tickets enter neither
-the keys nor the persisted event. The limiter's elapsed windows are reclaimed
-by the active expiry sweeper.
+contain only the timestamp, endpoint-specific event name, severity, and
+normalized reason; Origin, request target, forwarded addresses, cookies, and
+tickets enter neither the keys nor the persisted event. The limiter's elapsed
+windows are reclaimed by the active expiry sweeper.
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
 keystroke or terminal output.
