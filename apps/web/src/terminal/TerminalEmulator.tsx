@@ -60,8 +60,8 @@ export function TerminalEmulator({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<TerminalStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [topbarVisible, setTopbarVisible] = useState(true);
-  const [keyBarVisible, setKeyBarVisible] = useState(true);
+  const [topbarVisible, setTopbarVisible] = useState(false);
+  const [keyBarVisible, setKeyBarVisible] = useState(false);
   const [ctrlArmed, setCtrlArmed] = useState(false);
   // terminal.onData is wired once per adapter (see the effect below), so it
   // needs a ref rather than the `ctrlArmed` state value to see the latest
