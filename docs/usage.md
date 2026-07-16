@@ -101,7 +101,10 @@ Once connected, the terminal is a full xterm.js surface with a few extras:
 - **Font zoom** — `Cmd` + `=` / `+` grows the font, `Cmd` + `-` / `_` shrinks it,
   and `Cmd` + `0` resets to the default size. Zoom uses `Cmd` (not `Ctrl`) so it
   never shadows terminal shortcuts like `Ctrl` + `_`.
-- **Clickable links** — URLs in the output are clickable and open in a new tab.
+- **Clickable links** — visible `http://` and `https://` URLs in the output are
+  clickable and open in a new tab. Remote OSC 8 semantic hyperlinks are
+  intentionally ignored so an SSH target cannot retain attacker-sized hidden
+  URIs in browser memory.
 - **Emoji and wide characters** — emoji and CJK glyphs are measured at their real
   width, so they no longer push the grid out of alignment.
 - **Copy to your clipboard (OSC 52)** — when a program inside the session copies

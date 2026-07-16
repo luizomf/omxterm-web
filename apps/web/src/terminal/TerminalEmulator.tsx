@@ -11,8 +11,8 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef, useState } from 'react';
 import { hardenTerminalInputForMobile } from './harden-terminal-input-for-mobile';
-import { handleOsc52 } from './osc52-clipboard';
 import { keepTerminalFocused, TerminalKeyBar } from './TerminalKeyBar';
+import { registerTerminalControlSequenceHandlers } from './terminal-control-sequences';
 import { applyStickyCtrlModifier } from './terminal-key-sequences';
 import {
   BASE_TERMINAL_FONT_SIZE,
@@ -104,10 +104,9 @@ export function TerminalEmulator({
       terminal.loadAddon(new Unicode11Addon());
       terminal.unicode.activeVersion = '11';
 
-      // xterm has no built-in OSC 52, so tmux/nvim yanks reach the host
-      // clipboard only if we register it. Write-only by design — see handleOsc52.
-      const osc52Disposable = terminal.parser.registerOscHandler(52, payload =>
-        handleOsc52(payload, writeHostClipboard),
+      const controlSequenceHandlers = registerTerminalControlSequenceHandlers(
+        terminal,
+        writeHostClipboard,
       );
 
       terminal.open(container);
@@ -209,7 +208,7 @@ export function TerminalEmulator({
         detachPinchZoom();
         resizeObserver.disconnect();
         inputDisposable.dispose();
-        osc52Disposable.dispose();
+        controlSequenceHandlers.dispose();
         disposables.forEach(dispose => dispose());
         adapter.close();
         terminal.dispose();
