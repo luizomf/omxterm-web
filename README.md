@@ -96,6 +96,11 @@ material. A ten-minute deadline terminates a hung build, Docker wait, browser
 installation, or browser test together with its child process group, then starts
 bounded teardown. Contributors diagnosing a slow local daemon can override it
 with a positive `OMXTERM_E2E_TIMEOUT_SECONDS` value.
+Prerequisite checks and local credential/subnet preparation happen before any
+Docker resource exists and are not included in that runtime deadline. Docker
+and Compose operations after startup begins, including isolation inspection,
+log capture, and teardown, are bounded; teardown has a separate one-minute
+aggregate deadline so it can still run after the main deadline expires.
 
 Troubleshooting:
 

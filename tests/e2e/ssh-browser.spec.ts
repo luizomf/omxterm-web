@@ -24,6 +24,22 @@ function captureTerminalOutput(socket: WebSocket, chunks: string[]): void {
   });
 }
 
+export function sentinelProtocol(): { command: string; output: string } {
+  return {
+    command: "printf 'OMXTERM_E2E_%s\\n' 'PTY_OK'",
+    output: 'OMXTERM_E2E_PTY_OK',
+  };
+}
+
+test('sentinel cannot pass from terminal command echo alone', () => {
+  const sentinel = sentinelProtocol();
+  expect(sentinel.command).not.toContain(sentinel.output);
+  expect(`${sentinel.command}\r\n`).not.toContain(sentinel.output);
+  expect(`${sentinel.command}\r\n${sentinel.output}\r\n`).toContain(
+    sentinel.output,
+  );
+});
+
 test('brokers a disposable SSH PTY and independently reopens both terminal bars', async ({
   page,
 }) => {
@@ -34,7 +50,7 @@ test('brokers a disposable SSH PTY and independently reopens both terminal bars'
     'OMXTERM_E2E_HOST_FINGERPRINT',
   );
   const fixtureAddress = requiredEnvironment('OMXTERM_E2E_SSH_ADDRESS');
-  const sentinel = 'OMXTERM_E2E_PTY_OK';
+  const sentinel = sentinelProtocol();
   const terminalOutput: string[] = [];
 
   page.on('websocket', socket => captureTerminalOutput(socket, terminalOutput));
@@ -94,9 +110,9 @@ test('brokers a disposable SSH PTY and independently reopens both terminal bars'
     ).toBeVisible();
 
     await page.locator('.xterm-helper-textarea').focus();
-    await page.keyboard.type(`printf '${sentinel}\\n'`);
+    await page.keyboard.type(sentinel.command);
     await page.keyboard.press('Enter');
-    await expect.poll(() => terminalOutput.join('')).toContain(sentinel);
+    await expect.poll(() => terminalOutput.join('')).toContain(sentinel.output);
 
     await page.getByRole('button', { name: 'End session' }).click();
     await expect(

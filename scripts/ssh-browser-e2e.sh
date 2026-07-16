@@ -16,18 +16,8 @@ COMPOSE_STARTED=0
 E2E_TIMEOUT_SECONDS="${OMXTERM_E2E_TIMEOUT_SECONDS:-600}"
 TEARDOWN_TIMEOUT_SECONDS=60
 RUN_DEADLINE=0
-
-run_before_deadline() {
-  local remaining=$((RUN_DEADLINE - SECONDS))
-  if [ "${remaining}" -lt 1 ]; then return 124; fi
-  "${RUN_BOUNDED[@]}" "${remaining}" "$@"
-}
-
-run_during_cleanup() {
-  local remaining=$((CLEANUP_DEADLINE - SECONDS))
-  if [ "${remaining}" -lt 1 ]; then return 124; fi
-  "${RUN_BOUNDED[@]}" "${remaining}" "$@"
-}
+# shellcheck source=scripts/ssh-browser-e2e-lib.sh
+source "${REPO_ROOT}/scripts/ssh-browser-e2e-lib.sh"
 
 # Traps are installed before credentials are generated or any container starts.
 cleanup() {
@@ -114,37 +104,13 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 trap 'exit 124' USR1
 
-verify_runtime_isolation() {
-  local broker_id fixture_id gateway_id isolated_network
-  broker_id="$("${COMPOSE[@]}" ps --quiet omxterm)"
-  fixture_id="$("${COMPOSE[@]}" ps --quiet ssh-fixture)"
-  gateway_id="$("${COMPOSE[@]}" ps --quiet loopback-gateway)"
-  isolated_network="${PROJECT}_isolated"
-
-  if [ "$(docker inspect --format '{{len .NetworkSettings.Networks}}' "${broker_id}")" != '1' ] \
-    || [ "$(docker inspect --format '{{len .NetworkSettings.Networks}}' "${fixture_id}")" != '1' ] \
-    || [ "$(docker inspect --format '{{len .NetworkSettings.Networks}}' "${gateway_id}")" != '2' ] \
-    || [ "$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${broker_id}")" != '{}' ] \
-    || [ "$(docker inspect --format '{{json .HostConfig.PortBindings}}' "${fixture_id}")" != '{}' ] \
-    || [ "$(docker inspect --format '{{.Config.User}}' "${gateway_id}")" != 'nobody' ] \
-    || [ "$(docker network inspect --format '{{.Internal}}' "${isolated_network}")" != 'true' ]; then
-    echo "ssh-browser-e2e.sh: runtime network isolation contract failed" >&2
-    return 1
-  fi
-
-  local published_address
-  published_address="$("${COMPOSE[@]}" port loopback-gateway 3000)"
-  if [ "${published_address}" != "127.0.0.1:${OMXTERM_E2E_BROWSER_PORT}" ]; then
-    echo "ssh-browser-e2e.sh: browser gateway is not bound to the selected loopback port" >&2
-    return 1
-  fi
-}
-
-if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+if ! command -v docker >/dev/null 2>&1 \
+  || ! docker info >/dev/null 2>&1 \
+  || ! docker compose version >/dev/null 2>&1; then
   echo "ssh-browser-e2e.sh: Docker with Compose is required" >&2
   exit 1
 fi
-for executable in node npm openssl shasum ssh-keygen; do
+for executable in node npm openssl ssh-keygen; do
   if ! command -v "${executable}" >/dev/null 2>&1; then
     echo "ssh-browser-e2e.sh: required executable not found: ${executable}" >&2
     exit 1
@@ -155,8 +121,6 @@ if ! [[ "${E2E_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ssh-browser-e2e.sh: OMXTERM_E2E_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 1
 fi
-RUN_DEADLINE=$((SECONDS + E2E_TIMEOUT_SECONDS))
-
 chmod 0700 "${WORK}"
 export OMXTERM_E2E_CLIENT_PRIVATE_KEY="${WORK}/client_key"
 export OMXTERM_E2E_CLIENT_PUBLIC_KEY="${WORK}/client_key.pub"
@@ -175,7 +139,11 @@ OMXTERM_E2E_HOST_FINGERPRINT="$(ssh-keygen -l -E sha256 -f "${OMXTERM_E2E_HOST_P
 
 # A run-specific /24 avoids collisions between concurrent harnesses. Compose
 # fails closed if the daemon already owns an overlapping range.
-OCTET=$((16#$(printf '%s' "${RUN_ID}" | shasum -a 256 | cut -c 1-2) % 200 + 20))
+OCTET="$(node --input-type=module -e '
+  import { createHash } from "node:crypto";
+  const firstByte = createHash("sha256").update(process.argv[1]).digest()[0];
+  console.log((firstByte % 200) + 20);
+' "${RUN_ID}")"
 export OMXTERM_E2E_SUBNET="10.231.${OCTET}.0/24"
 export OMXTERM_E2E_BROKER_ADDRESS="10.231.${OCTET}.10"
 export OMXTERM_E2E_SSH_ADDRESS="10.231.${OCTET}.20"
@@ -194,18 +162,31 @@ export OMXTERM_E2E_ORIGIN="http://127.0.0.1:${OMXTERM_E2E_BROWSER_PORT}"
 
 echo "ssh-browser-e2e.sh: building isolated OpenSSH fixture and OMXTerm"
 COMPOSE_STARTED=1
+RUN_DEADLINE=$((SECONDS + E2E_TIMEOUT_SECONDS))
 run_before_deadline "${COMPOSE[@]}" up --detach --build --wait >"${WORK}/compose-up.log" 2>&1
 status=$?
 if [ "${status}" -ne 0 ]; then
+  startup_status="${status}"
   if [ "${status}" -eq 124 ]; then
     echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
     exit 124
   fi
-  run_before_deadline "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
+  capture_compose_logs "${WORK}/compose.log"
+  log_status=$?
+  if [ "${log_status}" -ne 0 ]; then
+    echo "ssh-browser-e2e.sh: startup diagnostics are unavailable" >&2
+  fi
   echo "ssh-browser-e2e.sh: Compose startup failed (diagnostics withheld until secret scan)" >&2
-  exit 1
+  exit "${startup_status}"
 fi
-verify_runtime_isolation || exit 1
+verify_runtime_isolation
+status=$?
+if [ "${status}" -ne 0 ]; then
+  if [ "${status}" -eq 124 ]; then
+    echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
+  fi
+  exit "${status}"
+fi
 
 if [ "${OMXTERM_E2E_FORCE_FAILURE:-}" = "after-start" ]; then
   echo "ssh-browser-e2e.sh: forced failure requested after startup" >&2
@@ -237,19 +218,23 @@ echo "ssh-browser-e2e.sh: running real browser, fingerprint, PTY, and bar assert
 run_before_deadline npx playwright test --config tests/e2e/playwright.config.ts >"${WORK}/playwright.log" 2>&1
 status=$?
 if [ "${status}" -ne 0 ]; then
+  browser_status="${status}"
   if [ "${status}" -eq 124 ]; then
     echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
     exit 124
   fi
-  run_before_deadline "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
+  capture_compose_logs "${WORK}/compose.log"
+  log_status=$?
+  if [ "${log_status}" -ne 0 ]; then
+    echo "ssh-browser-e2e.sh: browser failure diagnostics are unavailable" >&2
+  fi
   echo "ssh-browser-e2e.sh: browser E2E failed (diagnostics withheld until secret scan)" >&2
-  exit 1
+  exit "${browser_status}"
 fi
-run_before_deadline "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1
+capture_compose_logs "${WORK}/compose.log"
 status=$?
-if [ "${status}" -eq 124 ]; then
-  echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
-  exit 124
+if [ "${status}" -ne 0 ]; then
+  exit "${status}"
 fi
 
 echo "ssh-browser-e2e.sh: passed; captured output contains no access token or private-key material"
