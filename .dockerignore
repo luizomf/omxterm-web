@@ -1,6 +1,11 @@
 # Misc
 _data/
 
+# Runtime logs (including the optional JSONL audit sink)
+**/logs/
+**/*.log
+**/*.jsonl
+
 # Temp
 TEMP.md
 TMP.md

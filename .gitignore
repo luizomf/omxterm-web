@@ -252,8 +252,9 @@ __marimo__/
 ### NODE
 
 # Logs
-logs
+logs/
 *.log
+*.jsonl
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
