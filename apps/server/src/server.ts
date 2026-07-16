@@ -58,6 +58,7 @@ type Stores = {
   sessions: InMemoryAccessSessionStore;
   devices: InMemoryDeviceTokenStore;
   tickets: InMemoryTerminalTicketStore;
+  unauthenticatedRejectionAuditLimiter: InMemoryFixedWindowRateLimiter;
   accessRateLimiter: InMemoryAccessRateLimiter;
   hostKeyRateLimiter: InMemoryFixedWindowRateLimiter;
   ticketRateLimiter: InMemoryFixedWindowRateLimiter;
@@ -79,6 +80,21 @@ const EXPIRY_SWEEP_INTERVAL_MS = 10 * 1000;
 // values instead of duplicating magic numbers.
 export const ACCESS_GATE_MAX_FAILURES = 10;
 export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
+
+// Public unauthenticated requests are still rejected on every attempt. Only
+// repeated durable writes are capped per direct peer and normalized reason:
+// bad Origin, blocked access gate, missing WebSocket credentials, and malformed
+// upgrade targets can each otherwise grow JSONL without bound (#144). The direct
+// peer plus this closed reason set keeps attacker-controlled request metadata out
+// of limiter keys. Keeping the audit budget separate preserves every response.
+export const MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
+export const UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS = 60 * 1000;
+
+type BoundedUnauthenticatedRejectionReason =
+  | "bad_origin"
+  | "rate_limited"
+  | "missing_auth_or_ticket"
+  | "upgrade_error";
 
 // Per-session, per-client, and global caps for authenticated traffic (#30,
 // #126). The access rate
@@ -226,6 +242,11 @@ export async function createOmxtermServer(
     sessions: new InMemoryAccessSessionStore(),
     devices: new InMemoryDeviceTokenStore(),
     tickets: new InMemoryTerminalTicketStore(),
+    unauthenticatedRejectionAuditLimiter: new InMemoryFixedWindowRateLimiter(
+      systemClock,
+      MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS,
+    ),
     accessRateLimiter: new InMemoryAccessRateLimiter(
       systemClock,
       ACCESS_GATE_MAX_FAILURES,
@@ -258,6 +279,7 @@ export async function createOmxtermServer(
       stores.tickets,
       stores.sessions,
       stores.devices,
+      stores.unauthenticatedRejectionAuditLimiter,
       stores.accessRateLimiter,
       stores.hostKeyRateLimiter,
       stores.ticketRateLimiter,
@@ -282,6 +304,20 @@ export async function createOmxtermServer(
   app.addHook("onClose", async () => {
     stopExpirySweeper();
   });
+
+  function auditBoundedUnauthenticatedRejection(
+    event: "access_rejected" | "ws_upgrade_rejected",
+    directPeer: string,
+    reason: BoundedUnauthenticatedRejectionReason,
+  ): void {
+    const auditKey = `${reason}\0${directPeer}`;
+    if (
+      !stores.unauthenticatedRejectionAuditLimiter.tryConsume(auditKey).allowed
+    ) {
+      return;
+    }
+    audit.write({ event, severity: "warn", reason });
+  }
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
   // when an allowlist is configured. On block it audits and returns
@@ -327,12 +363,11 @@ export async function createOmxtermServer(
   app.post("/api/access", async (request, reply) => {
     const origin = requestOrigin(request);
     if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      audit.write({
-        event: "access_rejected",
-        severity: "warn",
-        origin,
-        reason: "bad_origin",
-      });
+      auditBoundedUnauthenticatedRejection(
+        "access_rejected",
+        request.socket.remoteAddress ?? "unknown",
+        "bad_origin",
+      );
       return reply.code(403).send({ ok: false, message: "Bad Origin." });
     }
 
@@ -342,12 +377,11 @@ export async function createOmxtermServer(
     const clientKey = request.ip;
     const decision = stores.accessRateLimiter.check(clientKey);
     if (!decision.allowed) {
-      audit.write({
-        event: "access_rejected",
-        severity: "warn",
-        origin,
-        reason: "rate_limited",
-      });
+      auditBoundedUnauthenticatedRejection(
+        "access_rejected",
+        request.socket.remoteAddress ?? "unknown",
+        "rate_limited",
+      );
       return reply
         .code(429)
         .header("retry-after", Math.ceil(decision.retryAfterMs / 1000))
@@ -582,12 +616,11 @@ export async function createOmxtermServer(
       origin = normalizeOriginHeader(req.headers.origin);
       const upgradeId = randomUUID();
       if (!isOriginAllowed(origin, config.allowedOrigins)) {
-        audit.write({
-          event: "ws_upgrade_rejected",
-          severity: "warn",
-          origin,
-          reason: "bad_origin",
-        });
+        auditBoundedUnauthenticatedRejection(
+          "ws_upgrade_rejected",
+          req.socket.remoteAddress ?? "unknown",
+          "bad_origin",
+        );
         rejectUpgrade(socket, 403);
         return;
       }
@@ -607,12 +640,11 @@ export async function createOmxtermServer(
       const device = stores.devices.validate(session?.id, deviceToken);
       const rawTicket = url.searchParams.get("ticket");
       if (!session || !device || !deviceToken || !rawTicket) {
-        audit.write({
-          event: "ws_upgrade_rejected",
-          severity: "warn",
-          origin,
-          reason: "missing_auth_or_ticket",
-        });
+        auditBoundedUnauthenticatedRejection(
+          "ws_upgrade_rejected",
+          req.socket.remoteAddress ?? "unknown",
+          "missing_auth_or_ticket",
+        );
         rejectUpgrade(socket, 401);
         return;
       }
@@ -689,13 +721,11 @@ export async function createOmxtermServer(
       });
     } catch {
       releaseConnectionSlots();
-      audit.write({
-        event: "ws_upgrade_rejected",
-        severity: "warn",
-        sessionId,
-        origin,
-        reason: "upgrade_error",
-      });
+      auditBoundedUnauthenticatedRejection(
+        "ws_upgrade_rejected",
+        req.socket.remoteAddress ?? "unknown",
+        "upgrade_error",
+      );
       rejectUpgrade(socket, 400);
     }
   });
