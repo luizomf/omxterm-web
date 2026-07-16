@@ -125,4 +125,47 @@ if grep -E -q 'capture_compose_logs .*\|\| true' "${SCRIPT_DIR}/ssh-browser-e2e.
   exit 1
 fi
 
-echo "ssh-browser-e2e.test.sh: runtime Docker calls are bounded; log failures fail closed"
+export OMXTERM_E2E_ACCESS_TOKEN='synthetic-full-token'
+export OMXTERM_E2E_PRIVATE_KEY_MARKER='synthetic-marker'
+export OMXTERM_E2E_PLAYWRIGHT_OUTPUT="${WORK}/playwright-output"
+mkdir -p "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT}"
+OUTPUT_SCAN_COMPLETED=0
+printf 'ordinary diagnostic\n' >"${WORK}/scan-clean.log"
+verify_captured_output_and_report_success >"${WORK}/scan-clean.out"
+status=$?
+if [ "${status}" -ne 0 ] \
+  || [ "${OUTPUT_SCAN_COMPLETED}" -ne 1 ] \
+  || ! grep -F -q 'scan found no full access token, OpenSSH private-key header, or sampled private-key marker' "${WORK}/scan-clean.out"; then
+  echo "ssh-browser-e2e.test.sh: clean scan did not report its narrow successful result" >&2
+  exit 1
+fi
+
+printf '%s\n' "${OMXTERM_E2E_PRIVATE_KEY_MARKER}" >"${WORK}/scan-detection.log"
+scan_output="$(verify_captured_output_and_report_success 2>"${WORK}/scan-detection.err")"
+status=$?
+if [ "${status}" -ne 1 ] \
+  || grep -F -q 'ssh-browser-e2e.sh: passed' <<<"${scan_output}" \
+  || ! grep -F -q 'secret material detected' "${WORK}/scan-detection.err"; then
+  echo "ssh-browser-e2e.test.sh: marker detection did not fail before the positive message" >&2
+  exit 1
+fi
+rm "${WORK}/scan-detection.log"
+
+cat >"${FAKE_BIN}/grep" <<'EOF'
+#!/usr/bin/env bash
+exit 2
+EOF
+chmod +x "${FAKE_BIN}/grep"
+hash -r
+scan_output="$(verify_captured_output_and_report_success 2>"${WORK}/scan-error.err")"
+status=$?
+rm "${FAKE_BIN}/grep"
+hash -r
+if [ "${status}" -ne 2 ] \
+  || /usr/bin/grep -F -q 'ssh-browser-e2e.sh: passed' <<<"${scan_output}" \
+  || ! /usr/bin/grep -F -q 'captured-output scan failed with status 2' "${WORK}/scan-error.err"; then
+  echo "ssh-browser-e2e.test.sh: scan operational error did not fail before the positive message" >&2
+  exit 1
+fi
+
+echo "ssh-browser-e2e.test.sh: runtime calls are bounded; log and output scans fail closed"

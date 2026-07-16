@@ -5,9 +5,54 @@
 
 set -uo pipefail
 
-REPO_ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")"
-WORK="$(mktemp -d)"
+SCRIPT_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
+  echo "ssh-browser-e2e.sh: could not resolve the script directory" >&2
+  exit 1
+}
+REPO_ROOT="$(realpath "${SCRIPT_DIRECTORY}/.." 2>/dev/null)" || {
+  echo "ssh-browser-e2e.sh: could not resolve the repository root" >&2
+  exit 1
+}
+if [ -z "${REPO_ROOT}" ] \
+  || [ ! "${REPO_ROOT}/scripts/ssh-browser-e2e.sh" -ef "${BASH_SOURCE[0]}" ] \
+  || [ ! -f "${REPO_ROOT}/package.json" ] \
+  || [ ! -f "${REPO_ROOT}/tests/e2e/compose.yml" ]; then
+  echo "ssh-browser-e2e.sh: resolved repository root is invalid" >&2
+  exit 1
+fi
+
+TEMP_ROOT="$(realpath "${TMPDIR:-/tmp}" 2>/dev/null)" || {
+  echo "ssh-browser-e2e.sh: could not resolve the OS temp directory" >&2
+  exit 1
+}
+if [ -z "${TEMP_ROOT}" ] || [ "${TEMP_ROOT}" = '/' ] || [ ! -d "${TEMP_ROOT}" ]; then
+  echo "ssh-browser-e2e.sh: resolved OS temp directory is invalid" >&2
+  exit 1
+fi
+
+WORK_CANDIDATE="$(mktemp -d "${TEMP_ROOT}/omxterm-e2e.XXXXXXXXXX")" || {
+  echo "ssh-browser-e2e.sh: could not create the temporary work directory" >&2
+  exit 1
+}
+WORK="$(realpath "${WORK_CANDIDATE}" 2>/dev/null)" || {
+  rmdir "${WORK_CANDIDATE}" >/dev/null 2>&1 || true
+  echo "ssh-browser-e2e.sh: could not resolve the temporary work directory" >&2
+  exit 1
+}
+case "${WORK}" in
+  "${TEMP_ROOT}"/omxterm-e2e.*) ;;
+  *)
+    echo "ssh-browser-e2e.sh: temporary work directory is outside the OS temp directory" >&2
+    exit 1
+    ;;
+esac
+
 RUN_ID="$(basename "${WORK}" | tr '[:upper:]' '[:lower:]' | tr -dc 'a-z0-9' | tail -c 10)"
+if [ -z "${RUN_ID}" ]; then
+  rmdir "${WORK}" >/dev/null 2>&1 || true
+  echo "ssh-browser-e2e.sh: could not derive a safe run id" >&2
+  exit 1
+fi
 PROJECT="omxterm-e2e-${RUN_ID}"
 COMPOSE_FILE="${REPO_ROOT}/tests/e2e/compose.yml"
 COMPOSE=(docker compose --project-name "${PROJECT}" --file "${COMPOSE_FILE}")
@@ -16,6 +61,8 @@ COMPOSE_STARTED=0
 E2E_TIMEOUT_SECONDS="${OMXTERM_E2E_TIMEOUT_SECONDS:-600}"
 TEARDOWN_TIMEOUT_SECONDS=60
 RUN_DEADLINE=0
+OUTPUT_SCAN_COMPLETED=0
+OMXTERM_E2E_PRIVATE_KEY_MARKER=''
 # shellcheck source=scripts/ssh-browser-e2e-lib.sh
 source "${REPO_ROOT}/scripts/ssh-browser-e2e-lib.sh"
 
@@ -33,28 +80,16 @@ cleanup() {
     run_during_cleanup "${COMPOSE[@]}" down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || cleanup_failed=1
   fi
 
-  local private_key_marker=''
-  if [ -n "${OMXTERM_E2E_CLIENT_PRIVATE_KEY:-}" ] && [ -f "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}" ]; then
-    private_key_marker="$(sed -n '2p' "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}" | cut -c 1-16)"
+  local scan_status=0
+  if [ "${OUTPUT_SCAN_COMPLETED}" -eq 0 ]; then
+    scan_captured_output
+    scan_status=$?
   fi
-  local secret_leak=0
-  for log_file in "${WORK}"/*.log; do
-    [ -f "${log_file}" ] || continue
-    if { [ -n "${OMXTERM_E2E_ACCESS_TOKEN:-}" ] && grep -F -q "${OMXTERM_E2E_ACCESS_TOKEN}" "${log_file}"; } \
-      || grep -F -q -- 'BEGIN OPENSSH PRIVATE KEY' "${log_file}" \
-      || { [ -n "${private_key_marker}" ] && grep -F -q "${private_key_marker}" "${log_file}"; }; then
-      secret_leak=1
-    fi
-  done
-  if [ -d "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT:-}" ]; then
-    if { [ -n "${OMXTERM_E2E_ACCESS_TOKEN:-}" ] && grep -R -F -q "${OMXTERM_E2E_ACCESS_TOKEN}" "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT}"; } \
-      || grep -R -F -q -- 'BEGIN OPENSSH PRIVATE KEY' "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT}" \
-      || { [ -n "${private_key_marker}" ] && grep -R -F -q "${private_key_marker}" "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT}"; }; then
-      secret_leak=1
-    fi
-  fi
-  if [ "${secret_leak}" -ne 0 ]; then
+  if [ "${scan_status}" -eq 1 ]; then
     echo "ssh-browser-e2e.sh: secret material detected in captured output; diagnostics withheld" >&2
+    cleanup_failed=1
+  elif [ "${scan_status}" -ne 0 ]; then
+    echo "ssh-browser-e2e.sh: captured output could not be verified; diagnostics withheld" >&2
     cleanup_failed=1
   elif [ "${status}" -ne 0 ]; then
     for log_file in "${WORK}"/*.log; do
@@ -69,7 +104,7 @@ cleanup() {
   fi
 
   case "${WORK}" in
-    /tmp/tmp.*|/private/tmp/tmp.*|/var/folders/*/T/tmp.*|/private/var/folders/*/T/tmp.*)
+    "${TEMP_ROOT}"/omxterm-e2e.*)
       rm -rf "${WORK}" || cleanup_failed=1
       ;;
     *)
@@ -121,21 +156,76 @@ if ! [[ "${E2E_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ssh-browser-e2e.sh: OMXTERM_E2E_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 1
 fi
-chmod 0700 "${WORK}"
+if ! chmod 0700 "${WORK}"; then
+  echo "ssh-browser-e2e.sh: could not restrict temporary work directory permissions" >&2
+  exit 1
+fi
+WORK_MODE="$(stat -f '%Lp' "${WORK}" 2>/dev/null || stat -c '%a' "${WORK}" 2>/dev/null)"
+if ! [[ "${WORK_MODE}" =~ ^0?700$ ]]; then
+  echo "ssh-browser-e2e.sh: temporary work directory permissions are not 0700" >&2
+  exit 1
+fi
+
 export OMXTERM_E2E_CLIENT_PRIVATE_KEY="${WORK}/client_key"
 export OMXTERM_E2E_CLIENT_PUBLIC_KEY="${WORK}/client_key.pub"
 export OMXTERM_E2E_HOST_PRIVATE_KEY="${WORK}/host_key"
 export OMXTERM_E2E_PLAYWRIGHT_OUTPUT="${WORK}/playwright-output"
-export OMXTERM_E2E_ACCESS_TOKEN
-OMXTERM_E2E_ACCESS_TOKEN="$(openssl rand -hex 32)"
+for credential_path in \
+  "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}" \
+  "${OMXTERM_E2E_CLIENT_PUBLIC_KEY}" \
+  "${OMXTERM_E2E_HOST_PRIVATE_KEY}" \
+  "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT}"; do
+  case "${credential_path}" in
+    "${WORK}"/*) ;;
+    *)
+      echo "ssh-browser-e2e.sh: refusing credential path outside the temporary work directory" >&2
+      exit 1
+      ;;
+  esac
+done
 
-ssh-keygen -q -t ed25519 -N '' -C "omxterm-e2e-client-${RUN_ID}" -f "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}"
-ssh-keygen -q -t ed25519 -N '' -C "omxterm-e2e-host-${RUN_ID}" -f "${OMXTERM_E2E_HOST_PRIVATE_KEY}"
-chmod 0600 "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}" "${OMXTERM_E2E_HOST_PRIVATE_KEY}"
-chmod 0644 "${OMXTERM_E2E_CLIENT_PUBLIC_KEY}" "${OMXTERM_E2E_HOST_PRIVATE_KEY}.pub"
+export OMXTERM_E2E_ACCESS_TOKEN
+OMXTERM_E2E_ACCESS_TOKEN="$(openssl rand -hex 32)" || {
+  echo "ssh-browser-e2e.sh: access-token generation failed" >&2
+  exit 1
+}
+if [ -z "${OMXTERM_E2E_ACCESS_TOKEN}" ]; then
+  echo "ssh-browser-e2e.sh: access-token generation returned an empty value" >&2
+  exit 1
+fi
+
+if ! ssh-keygen -q -t ed25519 -N '' -C "omxterm-e2e-client-${RUN_ID}" -f "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}"; then
+  echo "ssh-browser-e2e.sh: SSH client-key generation failed" >&2
+  exit 1
+fi
+if ! ssh-keygen -q -t ed25519 -N '' -C "omxterm-e2e-host-${RUN_ID}" -f "${OMXTERM_E2E_HOST_PRIVATE_KEY}"; then
+  echo "ssh-browser-e2e.sh: SSH host-key generation failed" >&2
+  exit 1
+fi
+if ! chmod 0600 "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}" "${OMXTERM_E2E_HOST_PRIVATE_KEY}" \
+  || ! chmod 0644 "${OMXTERM_E2E_CLIENT_PUBLIC_KEY}" "${OMXTERM_E2E_HOST_PRIVATE_KEY}.pub"; then
+  echo "ssh-browser-e2e.sh: generated SSH key permissions could not be restricted" >&2
+  exit 1
+fi
+OMXTERM_E2E_PRIVATE_KEY_MARKER="$(awk 'NR == 2 { print substr($0, 1, 16); found = 1; exit } END { if (!found) exit 1 }' "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}")" || {
+  echo "ssh-browser-e2e.sh: private-key scan marker preparation failed" >&2
+  exit 1
+}
+if [ -z "${OMXTERM_E2E_PRIVATE_KEY_MARKER}" ]; then
+  echo "ssh-browser-e2e.sh: private-key scan marker is empty" >&2
+  exit 1
+fi
+export OMXTERM_E2E_PRIVATE_KEY_MARKER
 
 export OMXTERM_E2E_HOST_FINGERPRINT
-OMXTERM_E2E_HOST_FINGERPRINT="$(ssh-keygen -l -E sha256 -f "${OMXTERM_E2E_HOST_PRIVATE_KEY}.pub" | awk '{print $2}')"
+OMXTERM_E2E_HOST_FINGERPRINT="$(ssh-keygen -l -E sha256 -f "${OMXTERM_E2E_HOST_PRIVATE_KEY}.pub" | awk '{print $2}')" || {
+  echo "ssh-browser-e2e.sh: SSH host fingerprint calculation failed" >&2
+  exit 1
+}
+if [[ "${OMXTERM_E2E_HOST_FINGERPRINT}" != SHA256:* ]]; then
+  echo "ssh-browser-e2e.sh: SSH host fingerprint calculation returned an invalid value" >&2
+  exit 1
+fi
 
 # A run-specific /24 avoids collisions between concurrent harnesses. Compose
 # fails closed if the daemon already owns an overlapping range.
@@ -143,7 +233,14 @@ OCTET="$(node --input-type=module -e '
   import { createHash } from "node:crypto";
   const firstByte = createHash("sha256").update(process.argv[1]).digest()[0];
   console.log((firstByte % 200) + 20);
-' "${RUN_ID}")"
+' "${RUN_ID}")" || {
+  echo "ssh-browser-e2e.sh: isolated subnet preparation failed" >&2
+  exit 1
+}
+if ! [[ "${OCTET}" =~ ^[0-9]+$ ]] || [ "${OCTET}" -lt 20 ] || [ "${OCTET}" -gt 219 ]; then
+  echo "ssh-browser-e2e.sh: isolated subnet preparation returned an invalid octet" >&2
+  exit 1
+fi
 export OMXTERM_E2E_SUBNET="10.231.${OCTET}.0/24"
 export OMXTERM_E2E_BROKER_ADDRESS="10.231.${OCTET}.10"
 export OMXTERM_E2E_SSH_ADDRESS="10.231.${OCTET}.20"
@@ -157,7 +254,16 @@ OMXTERM_E2E_BROWSER_PORT="$(node --input-type=module -e '
     if (typeof address === "object" && address) console.log(address.port);
     server.close();
   });
-')"
+')" || {
+  echo "ssh-browser-e2e.sh: loopback browser port preparation failed" >&2
+  exit 1
+}
+if ! [[ "${OMXTERM_E2E_BROWSER_PORT}" =~ ^[0-9]+$ ]] \
+  || [ "${OMXTERM_E2E_BROWSER_PORT}" -lt 1 ] \
+  || [ "${OMXTERM_E2E_BROWSER_PORT}" -gt 65535 ]; then
+  echo "ssh-browser-e2e.sh: loopback browser port preparation returned an invalid value" >&2
+  exit 1
+fi
 export OMXTERM_E2E_ORIGIN="http://127.0.0.1:${OMXTERM_E2E_BROWSER_PORT}"
 
 echo "ssh-browser-e2e.sh: building isolated OpenSSH fixture and OMXTerm"
@@ -237,4 +343,6 @@ if [ "${status}" -ne 0 ]; then
   exit "${status}"
 fi
 
-echo "ssh-browser-e2e.sh: passed; captured output contains no access token or private-key material"
+verify_captured_output_and_report_success
+status=$?
+if [ "${status}" -ne 0 ]; then exit "${status}"; fi

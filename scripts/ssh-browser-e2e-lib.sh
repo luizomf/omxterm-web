@@ -36,6 +36,59 @@ capture_compose_logs() {
   return "${status}"
 }
 
+scan_path_for_secret_markers() {
+  local path="$1"
+  local recursive="$2"
+  local grep_arguments=(-F -q)
+  local pattern status
+  if [ "${recursive}" -eq 1 ]; then grep_arguments=(-R -F -q); fi
+
+  for pattern in "${OMXTERM_E2E_ACCESS_TOKEN:-}" 'BEGIN OPENSSH PRIVATE KEY' "${OMXTERM_E2E_PRIVATE_KEY_MARKER:-}"; do
+    [ -n "${pattern}" ] || continue
+    grep "${grep_arguments[@]}" -- "${pattern}" "${path}"
+    status=$?
+    if [ "${status}" -eq 0 ]; then return 1; fi
+    if [ "${status}" -gt 1 ]; then
+      echo "ssh-browser-e2e.sh: captured-output scan failed with status ${status}" >&2
+      return 2
+    fi
+  done
+}
+
+scan_captured_output() {
+  local log_file status
+  for log_file in "${WORK}"/*.log; do
+    [ -f "${log_file}" ] || continue
+    scan_path_for_secret_markers "${log_file}" 0
+    status=$?
+    if [ "${status}" -ne 0 ]; then return "${status}"; fi
+  done
+
+  if [ -d "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT:-}" ]; then
+    scan_path_for_secret_markers "${OMXTERM_E2E_PLAYWRIGHT_OUTPUT}" 1
+    status=$?
+    if [ "${status}" -ne 0 ]; then return "${status}"; fi
+  fi
+}
+
+verify_captured_output_and_report_success() {
+  local status
+  scan_captured_output
+  status=$?
+  if [ "${status}" -eq 1 ]; then
+    echo "ssh-browser-e2e.sh: secret material detected in captured output" >&2
+    return 1
+  fi
+  if [ "${status}" -ne 0 ]; then
+    echo "ssh-browser-e2e.sh: captured output could not be verified" >&2
+    return "${status}"
+  fi
+
+  # shellcheck disable=SC2034 # Read by the parent harness cleanup trap.
+  OUTPUT_SCAN_COMPLETED=1
+  echo "ssh-browser-e2e.sh: passed; scan found no full access token, OpenSSH private-key header, or sampled private-key marker"
+}
+
 verify_runtime_isolation() {
   local broker_id fixture_id gateway_id isolated_network
   local broker_networks fixture_networks gateway_networks

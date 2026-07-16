@@ -90,17 +90,22 @@ Cleanup traps are installed before credentials or containers are created.
 Success, test failure, timeout, and interruption tear down project containers,
 networks, volumes, local images, generated environment state, and keys, then
 verify no project-scoped Docker resource or temp directory remains. Browser
-traces, screenshots, and videos are disabled; captured failure output is scanned
-before display and is withheld if it contains the access token or private-key
-material. A ten-minute deadline terminates a hung build, Docker wait, browser
-installation, or browser test together with its child process group, then starts
-bounded teardown. Contributors diagnosing a slow local daemon can override it
-with a positive `OMXTERM_E2E_TIMEOUT_SECONDS` value.
-Prerequisite checks and local credential/subnet preparation happen before any
-Docker resource exists and are not included in that runtime deadline. Docker
-and Compose operations after startup begins, including isolation inspection,
-log capture, and teardown, are bounded; teardown has a separate one-minute
-aggregate deadline so it can still run after the main deadline expires.
+traces, screenshots, and videos are disabled. Before captured diagnostics are
+displayed or success is reported, the harness checks for the complete generated
+access token, the OpenSSH private-key header, and its sampled private-key marker;
+a detection or scan error withholds diagnostics and fails the run. A ten-minute
+deadline terminates a hung build, Docker wait, browser installation, or browser
+test together with its child process group, then starts bounded teardown.
+Contributors diagnosing a slow local daemon can override it with a positive
+`OMXTERM_E2E_TIMEOUT_SECONDS` value. Prerequisite checks and local
+credential/subnet preparation happen before any Docker resource exists and are
+not included in that runtime deadline. Repository/temp paths, restrictive temp
+permissions, generated credential paths, keys, fingerprint, subnet, and
+loopback port are validated before startup; preparation failure cleans up any
+synthetic credential material. Docker and Compose operations after startup
+begins, including isolation inspection, log capture, and teardown, are bounded;
+teardown has a separate one-minute aggregate deadline so it can still run after
+the main deadline expires.
 
 Troubleshooting:
 
