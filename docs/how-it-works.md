@@ -124,7 +124,10 @@ The server, in order
 1. **Checks Origin first.** The same exact `OMXTERM_ALLOWED_ORIGIN` allowlist
    used by the SSH calls and WebSocket upgrade is enforced here too. Bad or
    missing Origin → HTTP 403 and no cookies, so a cross-site request cannot mint
-   an authenticated browser session.
+   an authenticated browser session. Rejection stays immediate on every
+   request, but its durable `bad_origin` audit is capped at 10 events per direct
+   connection peer per 60-second window. The rejected Origin value is omitted
+   because it is attacker-controlled metadata.
 2. **Rate-limits by client IP.** `InMemoryAccessRateLimiter` allows 10
    failed attempts per 60-second window
    ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)). The token
@@ -344,6 +347,30 @@ as: `access_granted` / `access_rejected` (with a normalized reason like
 per-connection inbound flood was closed, with a normalized reason like
 `inbound_message_rate`, `inbound_byte_rate`, or `inbound_backlog`), and
 `session_ended` (with byte counts).
+
+Four repeatable public rejection reasons have separate audit budgets of 10
+events per direct TCP peer: `bad_origin`, `rate_limited`,
+`missing_auth_or_ticket`, and `upgrade_error`. Access and WebSocket Origin
+failures share the same `bad_origin` budget. Each peer/reason budget is a fixed
+window that starts with its first recorded event and stays open for 60 seconds;
+later events do not slide or extend it. An arbitrary 60-second observation that
+straddles a reset can therefore contain up to 20 records for one reason (80
+across all four), so this is not a rolling 40-record-per-minute guarantee. The
+first 10 `invalid_access_token` failures are governed by the access gate's
+separate fixed window and are not part of those four audit budgets. Behind a
+reverse proxy, all connections from that proxy intentionally share the four
+conservative audit budgets, while the failed-token limiter still uses the
+configured real `request.ip`.
+
+Every request beyond an audit budget keeps the same fail-closed response: 403
+for bad Origin, 429 with unchanged `Retry-After` for a blocked access client,
+401 for a WebSocket upgrade without auth or a ticket, and 400 for a malformed
+upgrade target. Only the persistent write is suppressed. Audit-limiter keys
+contain the direct socket peer and one of the four fixed reasons. Bounded events
+contain only the timestamp, endpoint-specific event name, severity, and
+normalized reason; Origin, request target, forwarded addresses, cookies, and
+tickets enter neither the keys nor the persisted event. The limiter's elapsed
+windows are reclaimed by the active expiry sweeper.
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
 keystroke or terminal output.

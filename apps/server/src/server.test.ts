@@ -7,6 +7,7 @@ import {
   ACCESS_GATE_MAX_FAILURES,
   ACCESS_GATE_WINDOW_MS,
   createOmxtermServer,
+  MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
   scrubSshConnectionSecrets,
 } from "./server";
 import { JsonlAuditLogger } from "./audit-logger";
@@ -122,6 +123,129 @@ async function exhaustAccessFailureBudget(
 }
 
 describe("POST /api/access abuse policy", () => {
+  test("bounds durable bad-Origin audit growth without weakening Origin or invalid-token rejection", async () => {
+    const auditDir = mkdtempSync(join(tmpdir(), "omxterm-origin-audit-"));
+    const auditLogPath = join(auditDir, "audit.jsonl");
+    const config: ServerConfig = { ...baseConfig, auditLogPath };
+    const app = await createOmxtermServer(config);
+    const client = { remoteAddress: "203.0.113.60" };
+    const attackerOrigin = "https://attacker-controlled.example/unique";
+
+    try {
+      for (
+        let attempt = 0;
+        attempt <
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW + 5;
+        attempt++
+      ) {
+        const response = await app.inject({
+          method: "POST",
+          url: "/api/access",
+          headers: attempt % 2 === 0 ? { origin: attackerOrigin } : {},
+          remoteAddress: client.remoteAddress,
+          payload: { accessToken: config.accessToken },
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.headers["set-cookie"]).toBeUndefined();
+      }
+
+      const originRejections = readFileSync(auditLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(originRejections).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(
+        originRejections.every(
+          (event) =>
+            event.event === "access_rejected" &&
+            event.reason === "bad_origin" &&
+            event.origin === undefined,
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(originRejections)).not.toContain(attackerOrigin);
+
+      await exhaustAccessFailureBudget(app, config, client);
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const blocked = await accessAttempt(app, config, "wrong-token", {
+          ...client,
+          forwardedFor: `198.51.100.${attempt}`,
+        });
+
+        expect(blocked.statusCode).toBe(429);
+        const retryAfter = Number(blocked.headers["retry-after"]);
+        expect(retryAfter).toBeGreaterThan(0);
+        expect(retryAfter).toBeLessThanOrEqual(
+          Math.ceil(ACCESS_GATE_WINDOW_MS / 1000),
+        );
+      }
+
+      const allEvents = readFileSync(auditLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(
+        allEvents.filter((event) => event.reason === "bad_origin"),
+      ).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(
+        allEvents.filter((event) => event.reason === "invalid_access_token"),
+      ).toHaveLength(ACCESS_GATE_MAX_FAILURES);
+      const rateLimitedEvents = allEvents.filter(
+        (event) => event.reason === "rate_limited",
+      );
+      expect(rateLimitedEvents).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(
+        rateLimitedEvents.every((event) => event.origin === undefined),
+      ).toBe(true);
+    } finally {
+      await app.close();
+      rmSync(auditDir, { recursive: true, force: true });
+    }
+  });
+
+  test("equivalent unauthenticated HTTP endpoints reject bad or missing Origin without parallel audit amplification", async () => {
+    const events: Omit<AuditEvent, "ts">[] = [];
+    const audit: AuditLogger = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const app = await createOmxtermServer(baseConfig, { audit });
+    const rejectedRequests = [
+      { method: "GET" as const, url: "/api/me", missingOrigin: false },
+      { method: "POST" as const, url: "/api/ssh/host-key", missingOrigin: false },
+      { method: "POST" as const, url: "/api/ssh/host-key", missingOrigin: true },
+      { method: "POST" as const, url: "/api/terminal-ticket", missingOrigin: false },
+      { method: "POST" as const, url: "/api/terminal-ticket", missingOrigin: true },
+    ];
+
+    try {
+      for (const request of rejectedRequests) {
+        const response = await app.inject({
+          method: request.method,
+          url: request.url,
+          headers: request.missingOrigin
+            ? {}
+            : { origin: "https://evil.example" },
+          remoteAddress: "203.0.113.61",
+          ...(request.method === "POST" ? { payload: {} } : {}),
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(response.headers["set-cookie"]).toBeUndefined();
+      }
+      expect(events).toHaveLength(0);
+    } finally {
+      await app.close();
+    }
+  });
+
   test("blocks a client with 429 and a valid Retry-After once its failed-attempt budget is exhausted", async () => {
     const app = await createOmxtermServer(baseConfig);
     try {
@@ -409,37 +533,191 @@ function maskedOversizedFrame(): Buffer {
 }
 
 describe("WebSocket upgrade boundary", () => {
-  test("rejects a malformed request target without taking down the broker", async () => {
+  test("shares the bad-Origin audit bound across access and WebSocket upgrade while both remain fail-closed", async () => {
+    const events: Omit<AuditEvent, "ts">[] = [];
+    const audit: AuditLogger = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const app = await createOmxtermServer(baseConfig, { audit });
+    const rejectedOrigin = "https://unique-attacker-origin.example";
+
+    try {
+      const port = await listenOnLoopback(app);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const response = await sendRawHttpRequest(
+          port,
+          [
+            "POST /api/access HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Connection: close",
+            "Content-Type: application/json",
+            "Content-Length: 2",
+            `Origin: ${rejectedOrigin}`,
+            "",
+            "{}",
+          ].join("\r\n"),
+        );
+        expect(response).toMatch(/^HTTP\/1\.1 403 /);
+      }
+
+      for (
+        let attempt = 0;
+        attempt <
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW + 5;
+        attempt++
+      ) {
+        const originHeader =
+          attempt % 2 === 0 ? [`Origin: ${rejectedOrigin}`] : [];
+        const response = await sendRawHttpRequest(
+          port,
+          [
+            "GET /terminal/ws HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Connection: Upgrade",
+            "Upgrade: websocket",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            ...originHeader,
+            "",
+            "",
+          ].join("\r\n"),
+        );
+        expect(response).toMatch(/^HTTP\/1\.1 403 /);
+      }
+
+      expect(events).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(
+        events.every(
+          (event) =>
+            (event.event === "access_rejected" ||
+              event.event === "ws_upgrade_rejected") &&
+            event.reason === "bad_origin" &&
+            event.origin === undefined,
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(events)).not.toContain(rejectedOrigin);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("bounds missing-auth upgrade audits while every request stays unauthorized", async () => {
+    const events: Omit<AuditEvent, "ts">[] = [];
+    const audit: AuditLogger = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const app = await createOmxtermServer(baseConfig, { audit });
+
+    try {
+      const port = await listenOnLoopback(app);
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const attackerTicket = `attacker-ticket-${attempt}`;
+        const attackerCookie = `attacker-cookie-${attempt}`;
+        const response = await sendRawHttpRequest(
+          port,
+          [
+            `GET /terminal/ws?ticket=${attackerTicket} HTTP/1.1`,
+            "Host: 127.0.0.1",
+            "Connection: Upgrade",
+            "Upgrade: websocket",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            `Origin: ${baseConfig.allowedOrigins[0]}`,
+            `Cookie: attacker=${attackerCookie}`,
+            `X-Forwarded-For: 198.51.100.${attempt}`,
+            "",
+            "",
+          ].join("\r\n"),
+        );
+
+        expect(response).toMatch(/^HTTP\/1\.1 401 /);
+      }
+
+      expect(
+        events.filter(
+          (event) => event.reason === "missing_auth_or_ticket",
+        ),
+      ).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(JSON.stringify(events)).not.toContain("attacker-ticket");
+      expect(JSON.stringify(events)).not.toContain("attacker-cookie");
+      expect(JSON.stringify(events)).not.toContain("198.51.100");
+      expect(JSON.stringify(events)).not.toContain(baseConfig.allowedOrigins[0]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("bounds malformed-target upgrade audits while every request stays rejected", async () => {
     const auditDir = mkdtempSync(join(tmpdir(), "omxterm-audit-"));
     const auditLogPath = join(auditDir, "audit.jsonl");
     const config: ServerConfig = { ...baseConfig, auditLogPath };
     const app = await createOmxtermServer(config);
     try {
       const port = await listenOnLoopback(app);
-      const response = await sendRawHttpRequest(
-        port,
-        [
-          "GET //example.com:99999/?ticket=secret-ticket HTTP/1.1",
-          "Host: 127.0.0.1",
-          "Connection: Upgrade",
-          "Upgrade: websocket",
-          "Sec-WebSocket-Version: 13",
-          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-          `Origin: ${baseConfig.allowedOrigins[0]}`,
-          "Cookie: session=secret-cookie",
-          "",
-          "",
-        ].join("\r\n"),
+      const responses = await Promise.all(
+        Array.from({ length: 50 }, (_, attempt) =>
+          sendRawHttpRequest(
+            port,
+            [
+              `GET //attacker-${attempt}.example:99999/?ticket=secret-ticket-${attempt} HTTP/1.1`,
+              "Host: 127.0.0.1",
+              "Connection: Upgrade",
+              "Upgrade: websocket",
+              "Sec-WebSocket-Version: 13",
+              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+              `Origin: ${baseConfig.allowedOrigins[0]}`,
+              `Cookie: session=secret-cookie-${attempt}`,
+              `X-Forwarded-For: 198.51.100.${attempt}`,
+              "",
+              "",
+            ].join("\r\n"),
+          ),
+        ),
       );
 
-      expect(response).toMatch(/^HTTP\/1\.1 400 /);
+      expect(responses).toHaveLength(50);
+      expect(
+        responses.every((response) => /^HTTP\/1\.1 400 /.test(response)),
+      ).toBe(true);
       const health = await app.inject({ method: "GET", url: "/health" });
       expect(health.statusCode).toBe(200);
 
-      const auditLog = readFileSync(auditLogPath, "utf8");
-      expect(auditLog).toContain('"reason":"upgrade_error"');
-      expect(auditLog).not.toContain("secret-ticket");
-      expect(auditLog).not.toContain("secret-cookie");
+      const upgradeErrors = readFileSync(auditLogPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(upgradeErrors).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(
+        upgradeErrors.every(
+          (event) =>
+            event.event === "ws_upgrade_rejected" &&
+            event.reason === "upgrade_error",
+        ),
+      ).toBe(true);
+      for (const event of upgradeErrors) {
+        expect(Object.keys(event).sort()).toEqual([
+          "event",
+          "reason",
+          "severity",
+          "ts",
+        ]);
+      }
+      const serializedEvents = JSON.stringify(upgradeErrors);
+      expect(serializedEvents).not.toContain("attacker-");
+      expect(serializedEvents).not.toContain("secret-ticket");
+      expect(serializedEvents).not.toContain("secret-cookie");
+      expect(serializedEvents).not.toContain("198.51.100");
+      expect(serializedEvents).not.toContain(baseConfig.allowedOrigins[0]);
     } finally {
       await app.close();
       rmSync(auditDir, { recursive: true, force: true });
