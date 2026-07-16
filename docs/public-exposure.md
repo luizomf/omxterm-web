@@ -47,7 +47,9 @@ full request flow; this is the abuse-control summary:
 - **Exact Origin allowlist** (`OMXTERM_ALLOWED_ORIGIN`) on state-changing
   authenticated HTTP calls and on the WebSocket upgrade. The read-only
   `/api/me` boot probe permits a missing Origin but rejects an explicitly bad
-  one.
+  one. Every bad/missing-Origin request still fails closed before auth; durable
+  access/upgrade rejection audits are capped at 10 per client per minute and
+  omit the attacker-controlled Origin value.
 
 All of this is real protection against a misbehaving or malicious
 **browser client** that has (or is trying to get) a session. It is not

@@ -124,7 +124,10 @@ The server, in order
 1. **Checks Origin first.** The same exact `OMXTERM_ALLOWED_ORIGIN` allowlist
    used by the SSH calls and WebSocket upgrade is enforced here too. Bad or
    missing Origin → HTTP 403 and no cookies, so a cross-site request cannot mint
-   an authenticated browser session.
+   an authenticated browser session. Rejection stays immediate on every
+   request, but its durable `bad_origin` audit is capped at 10 events per client
+   per 60-second window. The rejected Origin value is omitted because it is
+   attacker-controlled metadata.
 2. **Rate-limits by client IP.** `InMemoryAccessRateLimiter` allows 10
    failed attempts per 60-second window
    ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)). The token
@@ -344,6 +347,14 @@ as: `access_granted` / `access_rejected` (with a normalized reason like
 per-connection inbound flood was closed, with a normalized reason like
 `inbound_message_rate`, `inbound_byte_rate`, or `inbound_backlog`), and
 `session_ended` (with byte counts).
+
+Bad/missing-Origin rejections at the access gate and WebSocket upgrade share a
+per-client audit budget of 10 events per 60 seconds. Requests beyond that budget
+remain rejected before authentication; only the persistent write is suppressed.
+These events retain the endpoint-specific event name and normalized
+`bad_origin` reason, but omit the rejected Origin string to avoid
+attacker-controlled high-cardinality log content. The failed-token limiter is a
+separate control and keeps its own 401/429 and `Retry-After` behavior.
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
 keystroke or terminal output.
