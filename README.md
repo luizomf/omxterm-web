@@ -60,6 +60,63 @@ npm run test:run
 npm run build
 ```
 
+### Disposable browser-to-SSH E2E
+
+The opt-in end-to-end check exercises a real browser, the production-like
+OMXTerm image, and a repository-configured OpenSSH fixture without using a real
+SSH host or user credentials:
+
+```bash
+npm run test:e2e:ssh
+```
+
+Prerequisites are Docker with Compose, Node.js/npm, OpenSSL, `ssh-keygen`, and
+internet access the first time Playwright installs its pinned Chromium build.
+Expect the first run to take several minutes while three local images build;
+subsequent runs reuse Docker and Playwright caches. This command remains outside
+the default fast test suite.
+
+Each invocation creates a unique Compose project, access token, client key,
+host key, loopback browser port, and OS temp directory. The browser reaches only
+`127.0.0.1` through a non-root TCP gateway; the OMXTerm process and SSH fixture
+share only an `internal` Docker network with no published SSH port. The broker's
+SSH egress allowlist contains only the fixture's run-specific address. The test
+calculates the expected fingerprint from the generated host public key
+independently, confirms it in the browser, opens a PTY, runs a deterministic
+sentinel command, and checks both initially hidden terminal bars can be reopened
+independently.
+
+Cleanup traps are installed before credentials or containers are created.
+Success, test failure, timeout, and interruption tear down project containers,
+networks, volumes, local images, generated environment state, and keys, then
+verify no project-scoped Docker resource or temp directory remains. Browser
+traces, screenshots, and videos are disabled. Before captured diagnostics are
+displayed or success is reported, the harness checks for the complete generated
+access token, the OpenSSH private-key header, and its sampled private-key marker;
+a detection or scan error withholds diagnostics and fails the run. A ten-minute
+deadline terminates a hung build, Docker wait, browser installation, or browser
+test together with its child process group, then starts bounded teardown.
+Contributors diagnosing a slow local daemon can override it with a positive
+`OMXTERM_E2E_TIMEOUT_SECONDS` value. Prerequisite checks and local
+credential/subnet preparation happen before any Docker resource exists and are
+not included in that runtime deadline. Repository/temp paths, restrictive temp
+permissions, generated credential paths, keys, fingerprint, subnet, and
+loopback port are validated before startup; preparation failure cleans up any
+synthetic credential material. Docker and Compose operations after startup
+begins, including isolation inspection, log capture, and teardown, are bounded;
+teardown has a separate one-minute aggregate deadline so it can still run after
+the main deadline expires.
+
+Troubleshooting:
+
+- If Docker startup fails, verify `docker info` and `docker compose version`.
+- If Chromium installation fails, restore network access and run the command
+  again; Playwright reuses a successful browser download.
+- An address-overlap failure is intentional fail-closed behavior. Retry to get a
+  different run-specific isolated subnet; do not weaken the SSH allowlist.
+- After an interrupted run, the final `cleanup verified` line confirms the
+  disposable project and credentials were removed.
+
 ## Usage
 
 Once it is running, see `docs/usage.md` for the operator walkthrough — access
