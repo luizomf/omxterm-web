@@ -107,6 +107,25 @@ Body and `Co-Authored-By` are optional, but desired.
 
 ---
 
+## Agent skills
+
+### Issue tracker
+
+Specs, tickets, and issues are tracked in GitHub Issues. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical omskills triage-role names are used as GitHub labels. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses one shared domain context with `CONTEXT.md` and root-level
+ADRs. See `docs/agents/domain.md`.
+
+---
+
 ## Project Coding Rules
 
 These rules are not decorative. Follow them unless there is a clear technical
