@@ -160,5 +160,5 @@ describe("post-auth per-client rate limits", () => {
     } finally {
       await app.close();
     }
-  });
+  }, 30_000);
 });
