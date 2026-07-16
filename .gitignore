@@ -5,6 +5,7 @@
 # macOS
 .DS_Store
 .claude/
+.hermes/
 ._.DS_Store
 
 # A bit unreadable, but "temp.md" and "tmp.md". Case does not matter
