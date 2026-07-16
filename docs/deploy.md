@@ -121,8 +121,12 @@ ENV
   `docker compose run --rm omxterm id -u`; the broker fails fast at boot if the
   path is not writable. Leaving it unset writes metadata-only events to stdout.
   Keep runtime logs out of the source checkout when practical. Git and Docker
-  both exclude `logs/` directories at any package depth and `*.log`/`*.jsonl`
-  artifacts, so a broad image copy cannot package an ignored audit log.
+  both exclude directories named `logs` at any package depth; `.log`, `.jsonl`,
+  and `.ndjson` extensions; and rotated or compressed derivatives that continue
+  those extensions with `.` or `-` (for example, `.log.1`, `.jsonl.1.gz`, or
+  `.ndjson-20260715.gz`). Directory and extension matching is ASCII
+  case-insensitive. Extensionless names such as `audit-log` are outside this
+  boundary.
 - `OMXTERM_WEB_ROOT`, `OMXTERM_SERVER_HOST`, `OMXTERM_SERVER_PORT` are baked into
   the image; don't set them here. In particular, do **not** set
   `OMXTERM_SERVER_HOST` to a loopback value — the container must keep binding

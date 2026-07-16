@@ -2,9 +2,16 @@
 _data/
 
 # Runtime logs (including the optional JSONL audit sink)
-**/logs/
-**/*.log
-**/*.jsonl
+**/[lL][oO][gG][sS]/
+**/*.[lL][oO][gG]
+**/*.[lL][oO][gG].*
+**/*.[lL][oO][gG]-*
+**/*.[jJ][sS][oO][nN][lL]
+**/*.[jJ][sS][oO][nN][lL].*
+**/*.[jJ][sS][oO][nN][lL]-*
+**/*.[nN][dD][jJ][sS][oO][nN]
+**/*.[nN][dD][jJ][sS][oO][nN].*
+**/*.[nN][dD][jJ][sS][oO][nN]-*
 
 # Temp
 TEMP.md

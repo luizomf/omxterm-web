@@ -4,8 +4,9 @@
 #
 # The probe mirrors the runtime image's broad `COPY . .` in a disposable
 # scratch image. It adds synthetic log sentinels only inside a temporary copy
-# of the checkout, then proves Docker excludes them while retaining the source,
-# manifests, web assets, and documented environment example needed to build.
+# of the checkout, then proves Docker excludes case variants and conventional
+# rotated/compressed forms while retaining the source, manifests, web assets,
+# and documented environment example needed to build.
 #
 # Run: bash scripts/docker-build-context.test.sh
 
@@ -51,11 +52,30 @@ git -C "${REPO_ROOT}" ls-files --cached --others --exclude-standard -z |
   tar --null -C "${REPO_ROOT}" -T - -cf - | tar -C "${CONTEXT}" -xf -
 
 # These markers are deliberately harmless and never touch the real checkout.
-mkdir -p "${CONTEXT}/logs" "${CONTEXT}/apps/server/logs"
-printf '%s\n' 'synthetic-root-audit-sentinel' >"${CONTEXT}/logs/audit.jsonl"
-printf '%s\n' 'synthetic-nested-audit-sentinel' >"${CONTEXT}/apps/server/logs/audit.jsonl"
-printf '%s\n' 'synthetic-jsonl-sentinel' >"${CONTEXT}/runtime-audit.jsonl"
-printf '%s\n' 'synthetic-log-sentinel' >"${CONTEXT}/apps/server/runtime.log"
+EXCLUDED_ARTIFACTS=(
+  "logs/audit.jsonl"
+  "apps/server/logs/audit.jsonl"
+  "apps/server/Logs/runtime.txt"
+  "runtime-audit.jsonl"
+  "runtime-uppercase.JSONL"
+  "runtime-events.ndjson"
+  "runtime-uppercase.NDJSON"
+  "apps/server/runtime.log"
+  "apps/server/runtime.LOG"
+  "runtime.log.1"
+  "runtime.log.1.gz"
+  "runtime.log-20260715.gz"
+  "runtime.jsonl.1"
+  "runtime.JSONL-20260715.GZ"
+  "runtime.ndjson.1.gz"
+  "runtime.NDJSON-20260715.GZ"
+  "apps/server/runtime.LOG.1.GZ"
+)
+
+mkdir -p "${CONTEXT}/logs" "${CONTEXT}/apps/server/logs" "${CONTEXT}/apps/server/Logs"
+for artifact in "${EXCLUDED_ARTIFACTS[@]}"; do
+  printf '%s\n' 'synthetic-runtime-log-sentinel' >"${CONTEXT}/${artifact}"
+done
 
 cat >"${PROBE_DOCKERFILE}" <<'DOCKERFILE'
 FROM scratch
@@ -93,10 +113,9 @@ assert_present() {
   fi
 }
 
-assert_absent context/logs/audit.jsonl
-assert_absent context/apps/server/logs/audit.jsonl
-assert_absent context/runtime-audit.jsonl
-assert_absent context/apps/server/runtime.log
+for artifact in "${EXCLUDED_ARTIFACTS[@]}"; do
+  assert_absent "context/${artifact}"
+done
 
 assert_present context/package.json
 assert_present context/package-lock.json
