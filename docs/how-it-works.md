@@ -322,6 +322,16 @@ PTY chunks is reassembled instead of rendering as `�`
 ([`apps/server/src/terminal-output-decoder.ts`](../apps/server/src/terminal-output-decoder.ts),
 fix for #11).
 
+Remote output then passes through xterm's parser in the browser. xterm core
+processes OSC 8 semantic hyperlinks even when `WebLinksAddon` is not installed;
+its link service otherwise retains each attacker-controlled URI while linked
+cells remain in scrollback. OMXTerm disables OSC 8 through xterm's parser API,
+so splitting a sequence across WebSocket messages or `terminal.write` calls
+cannot make the core link service retain its URI (#146). Visible `http://` and
+`https://` text remains clickable through `WebLinksAddon`. The separate OSC 52
+handler remains write-only and continues to discard clipboard writes above
+64 KiB.
+
 When the socket closes, the SSH channel and client are torn down and a
 `session_ended` audit event (with byte counts) is written. This is
 **destroy-on-disconnect**: a dropped tab does not leave an orphan SSH session
