@@ -15,7 +15,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
     "test:run": "npm run test:run --workspaces --if-present && npm run test:scripts",
-    "test:scripts": "bash scripts/deploy.test.sh && bash scripts/compose-baseline.test.sh && bash scripts/docker-build-context.test.sh",
+    "test:scripts": "bash scripts/deploy.test.sh && bash scripts/compose-baseline.test.sh && bash scripts/docker-build-context.test.sh && bash scripts/run-bounded-command.test.sh",
     "test:compose:integration": "bash scripts/compose-baseline.integration.test.sh",
     "test:e2e:ssh": "bash scripts/ssh-browser-e2e.sh"
   },

@@ -92,9 +92,10 @@ networks, volumes, local images, generated environment state, and keys, then
 verify no project-scoped Docker resource or temp directory remains. Browser
 traces, screenshots, and videos are disabled; captured failure output is scanned
 before display and is withheld if it contains the access token or private-key
-material. A ten-minute watchdog bounds the complete run; contributors diagnosing
-a slow local daemon can override it with a positive
-`OMXTERM_E2E_TIMEOUT_SECONDS` value.
+material. A ten-minute deadline terminates a hung build, Docker wait, browser
+installation, or browser test together with its child process group, then starts
+bounded teardown. Contributors diagnosing a slow local daemon can override it
+with a positive `OMXTERM_E2E_TIMEOUT_SECONDS` value.
 
 Troubleshooting:
 

@@ -11,22 +11,36 @@ RUN_ID="$(basename "${WORK}" | tr '[:upper:]' '[:lower:]' | tr -dc 'a-z0-9' | ta
 PROJECT="omxterm-e2e-${RUN_ID}"
 COMPOSE_FILE="${REPO_ROOT}/tests/e2e/compose.yml"
 COMPOSE=(docker compose --project-name "${PROJECT}" --file "${COMPOSE_FILE}")
+RUN_BOUNDED=(bash "${REPO_ROOT}/scripts/run-bounded-command.sh")
 COMPOSE_STARTED=0
-WATCHDOG_PID=''
+E2E_TIMEOUT_SECONDS="${OMXTERM_E2E_TIMEOUT_SECONDS:-600}"
+TEARDOWN_TIMEOUT_SECONDS=60
+RUN_DEADLINE=0
+
+run_before_deadline() {
+  local remaining=$((RUN_DEADLINE - SECONDS))
+  if [ "${remaining}" -lt 1 ]; then return 124; fi
+  "${RUN_BOUNDED[@]}" "${remaining}" "$@"
+}
+
+run_during_cleanup() {
+  local remaining=$((CLEANUP_DEADLINE - SECONDS))
+  if [ "${remaining}" -lt 1 ]; then return 124; fi
+  "${RUN_BOUNDED[@]}" "${remaining}" "$@"
+}
 
 # Traps are installed before credentials are generated or any container starts.
 cleanup() {
   local status=$?
   local cleanup_failed=0
+  local docker_resources_remain=0
+  local resource_ids=''
+  local query_status=0
   trap - EXIT INT TERM HUP USR1
-
-  if [ -n "${WATCHDOG_PID}" ]; then
-    kill "${WATCHDOG_PID}" >/dev/null 2>&1 || true
-    wait "${WATCHDOG_PID}" >/dev/null 2>&1 || true
-  fi
+  CLEANUP_DEADLINE=$((SECONDS + TEARDOWN_TIMEOUT_SECONDS))
 
   if [ "${COMPOSE_STARTED}" -eq 1 ]; then
-    "${COMPOSE[@]}" down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || cleanup_failed=1
+    run_during_cleanup "${COMPOSE[@]}" down --volumes --remove-orphans --rmi local >/dev/null 2>&1 || cleanup_failed=1
   fi
 
   local private_key_marker=''
@@ -74,10 +88,17 @@ cleanup() {
       ;;
   esac
 
-  if docker ps --all --quiet --filter "label=com.docker.compose.project=${PROJECT}" | grep -q . \
-    || docker network ls --quiet --filter "label=com.docker.compose.project=${PROJECT}" | grep -q . \
-    || docker volume ls --quiet --filter "label=com.docker.compose.project=${PROJECT}" | grep -q . \
-    || [ -e "${WORK}" ]; then
+  resource_ids="$(run_during_cleanup docker ps --all --quiet --filter "label=com.docker.compose.project=${PROJECT}")"
+  query_status=$?
+  if [ "${query_status}" -ne 0 ] || [ -n "${resource_ids}" ]; then docker_resources_remain=1; fi
+  resource_ids="$(run_during_cleanup docker network ls --quiet --filter "label=com.docker.compose.project=${PROJECT}")"
+  query_status=$?
+  if [ "${query_status}" -ne 0 ] || [ -n "${resource_ids}" ]; then docker_resources_remain=1; fi
+  resource_ids="$(run_during_cleanup docker volume ls --quiet --filter "label=com.docker.compose.project=${PROJECT}")"
+  query_status=$?
+  if [ "${query_status}" -ne 0 ] || [ -n "${resource_ids}" ]; then docker_resources_remain=1; fi
+
+  if [ "${docker_resources_remain}" -ne 0 ] || [ -e "${WORK}" ]; then
     echo "ssh-browser-e2e.sh: cleanup verification failed" >&2
     cleanup_failed=1
   else
@@ -130,17 +151,11 @@ for executable in node npm openssl shasum ssh-keygen; do
   fi
 done
 
-E2E_TIMEOUT_SECONDS="${OMXTERM_E2E_TIMEOUT_SECONDS:-600}"
 if ! [[ "${E2E_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ssh-browser-e2e.sh: OMXTERM_E2E_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 1
 fi
-(
-  sleep "${E2E_TIMEOUT_SECONDS}"
-  echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
-  kill -USR1 "$$"
-) &
-WATCHDOG_PID=$!
+RUN_DEADLINE=$((SECONDS + E2E_TIMEOUT_SECONDS))
 
 chmod 0700 "${WORK}"
 export OMXTERM_E2E_CLIENT_PRIVATE_KEY="${WORK}/client_key"
@@ -179,8 +194,14 @@ export OMXTERM_E2E_ORIGIN="http://127.0.0.1:${OMXTERM_E2E_BROWSER_PORT}"
 
 echo "ssh-browser-e2e.sh: building isolated OpenSSH fixture and OMXTerm"
 COMPOSE_STARTED=1
-if ! "${COMPOSE[@]}" up --detach --build --wait >"${WORK}/compose-up.log" 2>&1; then
-  "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
+run_before_deadline "${COMPOSE[@]}" up --detach --build --wait >"${WORK}/compose-up.log" 2>&1
+status=$?
+if [ "${status}" -ne 0 ]; then
+  if [ "${status}" -eq 124 ]; then
+    echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
+    exit 124
+  fi
+  run_before_deadline "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
   echo "ssh-browser-e2e.sh: Compose startup failed (diagnostics withheld until secret scan)" >&2
   exit 1
 fi
@@ -192,21 +213,43 @@ if [ "${OMXTERM_E2E_FORCE_FAILURE:-}" = "after-start" ]; then
 fi
 if [ "${OMXTERM_E2E_PAUSE_AFTER_START:-}" = "true" ]; then
   echo "ssh-browser-e2e.sh: interruption checkpoint reached"
-  while :; do sleep 1; done
+  run_before_deadline bash -c 'while :; do sleep 10; done'
+  status=$?
+  if [ "${status}" -eq 124 ]; then
+    echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
+  fi
+  exit "${status}"
 fi
 
 echo "ssh-browser-e2e.sh: ensuring the pinned Playwright Chromium is installed"
-if ! npx playwright install chromium >"${WORK}/playwright-install.log" 2>&1; then
+run_before_deadline npx playwright install chromium >"${WORK}/playwright-install.log" 2>&1
+status=$?
+if [ "${status}" -ne 0 ]; then
+  if [ "${status}" -eq 124 ]; then
+    echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
+    exit 124
+  fi
   echo "ssh-browser-e2e.sh: Chromium installation failed" >&2
   exit 1
 fi
 
 echo "ssh-browser-e2e.sh: running real browser, fingerprint, PTY, and bar assertions"
-if ! npx playwright test --config tests/e2e/playwright.config.ts >"${WORK}/playwright.log" 2>&1; then
-  "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
+run_before_deadline npx playwright test --config tests/e2e/playwright.config.ts >"${WORK}/playwright.log" 2>&1
+status=$?
+if [ "${status}" -ne 0 ]; then
+  if [ "${status}" -eq 124 ]; then
+    echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
+    exit 124
+  fi
+  run_before_deadline "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
   echo "ssh-browser-e2e.sh: browser E2E failed (diagnostics withheld until secret scan)" >&2
   exit 1
 fi
-"${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1 || true
+run_before_deadline "${COMPOSE[@]}" logs --no-color >"${WORK}/compose.log" 2>&1
+status=$?
+if [ "${status}" -eq 124 ]; then
+  echo "ssh-browser-e2e.sh: timed out after ${E2E_TIMEOUT_SECONDS}s" >&2
+  exit 124
+fi
 
 echo "ssh-browser-e2e.sh: passed; captured output contains no access token or private-key material"
