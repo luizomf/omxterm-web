@@ -1,0 +1,76 @@
+services:
+  ssh-fixture:
+    build:
+      context: ./ssh-fixture
+    restart: "no"
+    volumes:
+      - type: bind
+        source: ${OMXTERM_E2E_CLIENT_PUBLIC_KEY:?generated client public key is required}
+        target: /run/omxterm-e2e/client_key.pub
+        read_only: true
+      - type: bind
+        source: ${OMXTERM_E2E_HOST_PRIVATE_KEY:?generated host private key is required}
+        target: /run/omxterm-e2e/host_key
+        read_only: true
+    networks:
+      isolated:
+        ipv4_address: ${OMXTERM_E2E_SSH_ADDRESS:?fixture address is required}
+    healthcheck:
+      test: ["CMD-SHELL", "sshd -t && kill -0 1"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  omxterm:
+    build:
+      context: ../..
+    restart: "no"
+    depends_on:
+      ssh-fixture:
+        condition: service_healthy
+    environment:
+      OMXTERM_ACCESS_TOKEN: ${OMXTERM_E2E_ACCESS_TOKEN:?generated access token is required}
+      OMXTERM_ALLOWED_ORIGIN: ${OMXTERM_E2E_ORIGIN:?loopback origin is required}
+      OMXTERM_SECURE_COOKIES: "true"
+      OMXTERM_SERVER_HOST: "0.0.0.0"
+      OMXTERM_SSH_ALLOWED_CIDR: ${OMXTERM_E2E_SSH_ADDRESS:?fixture address is required}/32
+    networks:
+      isolated:
+        ipv4_address: ${OMXTERM_E2E_BROKER_ADDRESS:?broker address is required}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  loopback-gateway:
+    build:
+      context: ./loopback-gateway
+    restart: "no"
+    depends_on:
+      omxterm:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${OMXTERM_E2E_BROWSER_PORT:?browser port is required}:3000"
+    networks:
+      - browser
+      - isolated
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 1s
+      timeout: 2s
+      retries: 10
+
+networks:
+  browser: {}
+  isolated:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${OMXTERM_E2E_SUBNET:?isolated subnet is required}

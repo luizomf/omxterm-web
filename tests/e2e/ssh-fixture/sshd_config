@@ -1,0 +1,27 @@
+Port 2222
+ListenAddress 0.0.0.0
+HostKey /run/omxterm-e2e/host_key
+PidFile /run/sshd.pid
+
+AllowUsers omxterm-e2e
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+UsePAM no
+
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+AllowTcpForwarding no
+DisableForwarding yes
+GatewayPorts no
+PermitTunnel no
+X11Forwarding no
+PermitUserEnvironment no
+
+PrintMotd no
+PrintLastLog no
+StrictModes yes
+Subsystem sftp internal-sftp
