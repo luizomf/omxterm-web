@@ -26,6 +26,12 @@ full request flow; this is the abuse-control summary:
   the limit returns `429` with `Retry-After`
   (`apps/server/src/server.ts`, `ACCESS_GATE_MAX_FAILURES` /
   `ACCESS_GATE_WINDOW_MS`).
+- **Bounded successful-login state**: each `request.ip` retains at most five
+  live session/device pairs. Further valid logins remain usable and atomically
+  replace the oldest pair; evicted cookies cannot authorize later HTTP calls or
+  WebSocket upgrades. Successful logins still reset the failed-login budget.
+  Established terminal WebSockets are not retroactively killed by replacement;
+  their existing connection caps and lifecycle remain in force.
 - **Post-auth per-session and per-client rate limits**: once a browser has a
   valid session, host-key probes and terminal-ticket issuance are each capped
   at 30 per minute for both the session and `request.ip`. A new login cannot
@@ -57,6 +63,12 @@ full request flow; this is the abuse-control summary:
   use a separate fixed window. Clients behind one proxy share the audit budgets,
   and Origin, request target, forwarded addresses, cookies, and tickets enter
   neither their keys nor their bounded persisted events.
+- **Bounded successful-login auditing**: `access_granted` writes have their own
+  10-per-60-second fixed window keyed by the direct TCP peer. Successful login,
+  credential replacement, and the HTTP response continue after that budget is
+  exhausted; only the persistent event is suppressed. This keeps forwarded-IP
+  rotation from turning one trusted proxy connection source into a parallel log
+  amplifier.
 
 All of this is real protection against a misbehaving or malicious
 **browser client** that has (or is trying to get) a session. It is not
@@ -68,7 +80,8 @@ Be precise about the boundary, because it is easy to over-read "rate
 limited" as "DoS-resistant":
 
 - **Scale beyond one client.** The failed-login limiter is keyed per client
-  IP. A botnet with thousands of source IPs can each get 10 free guesses,
+  IP, and the live credential cap is also per client IP. A botnet with thousands
+  of source IPs can each get 10 free guesses and its own five credential pairs,
   which adds up to a real credential-stuffing campaign against the access
   token even though each individual IP is capped.
 - **Volumetric or distributed denial of service.** Nothing in the broker
@@ -134,9 +147,9 @@ Both misconfigurations are real failure modes, in opposite directions:
 
 - **Left unset behind a real proxy.** Every request arrives from the proxy's
   own IP, so `request.ip` is the same address for every client. The
-  failed-login limiter (and the post-auth limiters) now key on one shared
-  bucket: one abusive client can burn the whole budget and lock out every
-  other client behind that proxy, and per-client limiting stops meaning
+  failed-login limiter, live credential cap, and post-auth limiters now key on
+  one shared bucket: one abusive client can burn the whole budget and lock out
+  every other client behind that proxy, and per-client limiting stops meaning
   anything.
 - **Trusted too broadly** (`true`, or a hop count) when untrusted parties
   can reach the broker's port directly — e.g. it is also exposed on a LAN or
@@ -144,7 +157,9 @@ Both misconfigurations are real failure modes, in opposite directions:
   header; anyone who can reach the port can set it to whatever they want,
   including a different fake IP on every request. With trust turned on but
   no actual proxy enforcing the header, an attacker rotates IPs at will and
-  the per-client rate limits stop limiting anything.
+  the per-client rate limits and live credential cap stop limiting one physical
+  attacker as a single client. The direct-peer access-audit budget still holds,
+  but it is not a substitute for correct proxy trust.
 
 The safe pattern is: only turn on `OMXTERM_TRUST_PROXY`, and only trust the
 exact address(es) the real proxy connects from (its Docker network subnet,

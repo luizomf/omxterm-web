@@ -1,10 +1,15 @@
 import type { AuditLogger } from "@omxterm/core/audit";
+import {
+  InMemoryFixedWindowRateLimiter,
+  type Clock,
+} from "@omxterm/core/stores";
 import { describe, expect, test } from "vitest";
 import type { ServerConfig } from "./config";
 import {
   createOmxtermServer,
   MAX_HOST_KEY_PROBES_PER_WINDOW,
   MAX_TICKETS_PER_WINDOW,
+  POST_AUTH_RATE_WINDOW_MS,
 } from "./server";
 
 const config: ServerConfig = {
@@ -21,6 +26,17 @@ const config: ServerConfig = {
 
 const discardAudit: AuditLogger = { write: () => {} };
 const remoteAddress = "203.0.113.126";
+const HIGH_ROTATION_ATTEMPTS = 20_000;
+
+function createClock(start = 1_000): Clock & { advance(ms: number): void } {
+  let now = start;
+  return {
+    now: () => now,
+    advance: (ms) => {
+      now += ms;
+    },
+  };
+}
 
 function cookieHeader(setCookie: string | string[] | undefined): string {
   if (!setCookie) throw new Error("Expected login to set auth cookies.");
@@ -99,4 +115,50 @@ describe("post-auth per-client rate limits", () => {
       }
     },
   );
+
+  test("keeps limiter windows bounded during high denied session rotation", async () => {
+    const clock = createClock();
+    const ticketRateLimiter = new InMemoryFixedWindowRateLimiter(
+      clock,
+      MAX_TICKETS_PER_WINDOW,
+      POST_AUTH_RATE_WINDOW_MS,
+    );
+    const app = await createOmxtermServer(config, {
+      audit: discardAudit,
+      ticketRateLimiter,
+    });
+
+    try {
+      for (let attempt = 0; attempt < MAX_TICKETS_PER_WINDOW; attempt++) {
+        const cookie = await loginWithRotatedSession(app);
+        const allowed = await app.inject({
+          method: "POST",
+          url: "/api/terminal-ticket",
+          remoteAddress,
+          headers: { origin: config.allowedOrigins[0], cookie },
+          payload: rateLimitedRoutes[1].payload,
+        });
+        expect(allowed.statusCode).toBe(200);
+      }
+
+      for (let attempt = 0; attempt < HIGH_ROTATION_ATTEMPTS; attempt++) {
+        const cookie = await loginWithRotatedSession(app);
+        const blocked = await app.inject({
+          method: "POST",
+          url: "/api/terminal-ticket",
+          remoteAddress,
+          headers: { origin: config.allowedOrigins[0], cookie },
+          payload: rateLimitedRoutes[1].payload,
+        });
+        expect(blocked.statusCode).toBe(429);
+      }
+
+      clock.advance(POST_AUTH_RATE_WINDOW_MS);
+      expect(ticketRateLimiter.sweepExpired()).toBe(
+        MAX_TICKETS_PER_WINDOW + 1,
+      );
+    } finally {
+      await app.close();
+    }
+  });
 });
