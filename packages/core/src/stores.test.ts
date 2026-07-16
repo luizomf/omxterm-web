@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { InMemoryAccessRateLimiter, InMemoryAccessSessionStore, InMemoryConcurrencyLimiter, InMemoryDeviceTokenStore, InMemoryFixedWindowRateLimiter, InMemoryTerminalTicketStore, type Clock } from './stores';
+import { hashSecret, InMemoryAccessCredentialStore, InMemoryAccessRateLimiter, InMemoryConcurrencyLimiter, InMemoryFixedWindowRateLimiter, InMemoryTerminalTicketStore, type Clock } from './stores';
 
 function createClock(start = 1_000): Clock & { advance(ms: number): void } {
   let now = start;
@@ -15,27 +15,56 @@ const profile = {
 };
 
 describe('in-memory stores', () => {
-  test('validates sessions by raw token without accepting mismatches', () => {
-    const store = new InMemoryAccessSessionStore();
-    const { rawSessionToken, session } = store.create();
-    expect(store.validate(session.id, rawSessionToken)?.id).toBe(session.id);
-    expect(store.validate(session.id, 'wrong')).toBeNull();
+  test('keeps session and device ownership paired while evicting the oldest client credentials', () => {
+    const credentials = new InMemoryAccessCredentialStore(createClock(), 1_000, 2);
+    const first = credentials.create('client-a');
+    const second = credentials.create('client-a');
+    const third = credentials.create('client-a');
+
+    expect(first.evictedSessionId).toBeUndefined();
+    expect(second.evictedSessionId).toBeUndefined();
+    expect(third.evictedSessionId).toBe(first.session.id);
+    expect(credentials.validate(first.session.id, first.rawSessionToken, first.rawDeviceToken)).toBeNull();
+    expect(credentials.validate(second.session.id, second.rawSessionToken, second.rawDeviceToken)?.id).toBe(second.session.id);
+    expect(credentials.validate(third.session.id, third.rawSessionToken, third.rawDeviceToken)?.id).toBe(third.session.id);
+    expect(credentials.validate(third.session.id, third.rawSessionToken, second.rawDeviceToken)).toBeNull();
+    expect(credentials.getLiveCredentialCounts()).toEqual({ clients: 1, sessions: 2, devices: 2, ownerships: 2 });
   });
 
-  test('expires sessions', () => {
+  test('applies the live-credential capacity independently per client', () => {
+    const credentials = new InMemoryAccessCredentialStore(createClock(), 1_000, 2);
+    const firstClientOldest = credentials.create('client-a');
+    credentials.create('client-a');
+    const secondClient = credentials.create('client-b');
+    credentials.create('client-a');
+
+    expect(credentials.validate(firstClientOldest.session.id, firstClientOldest.rawSessionToken, firstClientOldest.rawDeviceToken)).toBeNull();
+    expect(credentials.validate(secondClient.session.id, secondClient.rawSessionToken, secondClient.rawDeviceToken)?.id).toBe(secondClient.session.id);
+    expect(credentials.getLiveCredentialCounts()).toEqual({ clients: 2, sessions: 3, devices: 3, ownerships: 3 });
+  });
+
+  test('sweeps expired credential pairs and their client ownership together', () => {
     const clock = createClock();
-    const store = new InMemoryAccessSessionStore(clock, 10);
-    const { rawSessionToken, session } = store.create();
+    const credentials = new InMemoryAccessCredentialStore(clock, 10, 2);
+    const expired = credentials.create('client-a');
+
     clock.advance(11);
-    expect(store.validate(session.id, rawSessionToken)).toBeNull();
+    expect(credentials.sweepExpired()).toBe(1);
+
+    expect(credentials.validate(expired.session.id, expired.rawSessionToken, expired.rawDeviceToken)).toBeNull();
+    expect(credentials.getLiveCredentialCounts()).toEqual({ clients: 0, sessions: 0, devices: 0, ownerships: 0 });
+  });
+
+  test('rejects a credential capacity that could never keep a successful login usable', () => {
+    expect(() => new InMemoryAccessCredentialStore(createClock(), 1_000, 0)).toThrow(
+      'Access credential capacity must be a positive integer. Received 0.',
+    );
   });
 
   test('consumes terminal tickets only once and binds device/session/origin', () => {
-    const sessions = new InMemoryAccessSessionStore();
-    const devices = new InMemoryDeviceTokenStore();
+    const credentials = new InMemoryAccessCredentialStore();
     const tickets = new InMemoryTerminalTicketStore();
-    const { session } = sessions.create();
-    const { rawDeviceToken } = devices.create(session.id);
+    const { session, rawDeviceToken } = credentials.create('client-a');
     const issued = tickets.issue({ sessionId: session.id, rawDeviceToken, origin: 'https://app.example', profile });
 
     expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: 'bad', origin: 'https://app.example' }).ok).toBe(false);
@@ -67,29 +96,59 @@ describe('in-memory stores', () => {
     expect(result.ok).toBe(false);
   });
 
-  test('create hands the raw device token to the caller without retaining it in the store', () => {
-    const devices = new InMemoryDeviceTokenStore();
-    const { rawDeviceToken, device } = devices.create('session-1');
+  test('create returns a minimal immutable snapshot that cannot forge stored credentials', () => {
+    const credentials = new InMemoryAccessCredentialStore();
+    const issued = credentials.create('client-a');
+    const exposedRecords = issued as unknown as {
+      session: Record<string, unknown>;
+      device?: Record<string, unknown>;
+    };
+    const forgedSessionToken = 'forged-session-token';
+    const forgedDeviceToken = 'forged-device-token';
 
-    // The raw secret is returned once; the stored record carries only its hash.
-    expect(rawDeviceToken).not.toBe('');
-    expect(devices.validate('session-1', rawDeviceToken)).not.toBeNull();
-    expect(JSON.stringify(device)).not.toContain(rawDeviceToken);
+    Reflect.set(exposedRecords.session, 'tokenHash', hashSecret(forgedSessionToken));
+    if (exposedRecords.device) {
+      Reflect.set(exposedRecords.device, 'hash', hashSecret(forgedDeviceToken));
+    }
+
+    expect(
+      credentials.validate(issued.session.id, forgedSessionToken, forgedDeviceToken),
+    ).toBeNull();
+    expect(Object.keys(issued).sort()).toEqual([
+      'rawDeviceToken',
+      'rawSessionToken',
+      'session',
+    ]);
+    expect(Object.keys(issued.session).sort()).toEqual([
+      'createdAt',
+      'expiresAt',
+      'id',
+    ]);
+    expect(Object.isFrozen(issued)).toBe(true);
+    expect(Object.isFrozen(issued.session)).toBe(true);
   });
 
-  test('sweepExpired removes expired sessions and device tokens', () => {
-    const clock = createClock();
-    const sessions = new InMemoryAccessSessionStore(clock, 10);
-    const devices = new InMemoryDeviceTokenStore(clock, 10);
-    const { session, rawSessionToken } = sessions.create();
-    const { rawDeviceToken } = devices.create(session.id);
+  test('validate returns an immutable snapshot instead of stored ownership state', () => {
+    const credentials = new InMemoryAccessCredentialStore();
+    const issued = credentials.create('client-a');
+    const validated = credentials.validate(
+      issued.session.id,
+      issued.rawSessionToken,
+      issued.rawDeviceToken,
+    );
 
-    clock.advance(11);
-    sessions.sweepExpired();
-    devices.sweepExpired();
+    expect(validated).not.toBeNull();
+    if (!validated) return;
+    Reflect.set(validated, 'id', 'attacker-controlled-session');
 
-    expect(sessions.validate(session.id, rawSessionToken)).toBeNull();
-    expect(devices.validate(session.id, rawDeviceToken)).toBeNull();
+    expect(Object.isFrozen(validated)).toBe(true);
+    expect(
+      credentials.validate(
+        issued.session.id,
+        issued.rawSessionToken,
+        issued.rawDeviceToken,
+      )?.id,
+    ).toBe(issued.session.id);
   });
 
   test('sweepExpired keeps still-valid tickets and their key intact', () => {
@@ -212,6 +271,19 @@ describe('fixed-window rate limiter', () => {
     const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 1, 1_000);
     expect(limiter.tryConsume('session-1').allowed).toBe(true);
     expect(limiter.tryConsume('session-1').allowed).toBe(false);
+  });
+
+  test('consumes combined budgets atomically without charging available keys on rejection', () => {
+    const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 2, 1_000);
+    limiter.tryConsume('session:exhausted');
+    limiter.tryConsume('session:exhausted');
+
+    expect(
+      limiter.tryConsumeAll(['session:exhausted', 'client:available']).allowed,
+    ).toBe(false);
+    expect(limiter.tryConsume('client:available').allowed).toBe(true);
+    expect(limiter.tryConsume('client:available').allowed).toBe(true);
+    expect(limiter.tryConsume('client:available').allowed).toBe(false);
   });
 
   test('opens a fresh window once the previous one elapses', () => {
