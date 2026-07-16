@@ -185,9 +185,10 @@ function consumePostAuthBudget(
   sessionId: string,
   clientIp: string,
 ) {
-  const sessionRate = limiter.tryConsume(`session:${sessionId}`);
-  if (!sessionRate.allowed) return sessionRate;
-  return limiter.tryConsume(`client:${clientIp}`);
+  return limiter.tryConsumeAll([
+    `session:${sessionId}`,
+    `client:${clientIp}`,
+  ]);
 }
 
 function authenticateFastifyRequest(
@@ -232,6 +233,9 @@ export type ServerDependencies = {
   // Injected state lets HTTP-boundary tests assert the live session/device
   // cardinality after adversarial successful-login rotation.
   accessCredentials?: InMemoryAccessCredentialStore;
+  // Injected so the rotation regression can inspect the production limiter
+  // through its expiry contract without exposing server internals.
+  ticketRateLimiter?: InMemoryFixedWindowRateLimiter;
   // Test seams for proving slot reclamation without waiting for the production
   // heartbeat or opening all 50 production slots.
   websocketHeartbeatIntervalMs?: number;
@@ -277,11 +281,13 @@ export async function createOmxtermServer(
       MAX_HOST_KEY_PROBES_PER_WINDOW,
       POST_AUTH_RATE_WINDOW_MS,
     ),
-    ticketRateLimiter: new InMemoryFixedWindowRateLimiter(
-      systemClock,
-      MAX_TICKETS_PER_WINDOW,
-      POST_AUTH_RATE_WINDOW_MS,
-    ),
+    ticketRateLimiter:
+      deps.ticketRateLimiter ??
+      new InMemoryFixedWindowRateLimiter(
+        systemClock,
+        MAX_TICKETS_PER_WINDOW,
+        POST_AUTH_RATE_WINDOW_MS,
+      ),
     sessionConcurrency: new InMemoryConcurrencyLimiter(
       deps.maxActiveSessionsPerClient ?? MAX_ACTIVE_SESSIONS_PER_CLIENT,
     ),

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { InMemoryAccessCredentialStore, InMemoryAccessRateLimiter, InMemoryConcurrencyLimiter, InMemoryFixedWindowRateLimiter, InMemoryTerminalTicketStore, type Clock } from './stores';
+import { hashSecret, InMemoryAccessCredentialStore, InMemoryAccessRateLimiter, InMemoryConcurrencyLimiter, InMemoryFixedWindowRateLimiter, InMemoryTerminalTicketStore, type Clock } from './stores';
 
 function createClock(start = 1_000): Clock & { advance(ms: number): void } {
   let now = start;
@@ -96,14 +96,59 @@ describe('in-memory stores', () => {
     expect(result.ok).toBe(false);
   });
 
-  test('create hands the raw device token to the caller without retaining it in the store', () => {
+  test('create returns a minimal immutable snapshot that cannot forge stored credentials', () => {
     const credentials = new InMemoryAccessCredentialStore();
-    const { rawDeviceToken, device, session, rawSessionToken } = credentials.create('client-a');
+    const issued = credentials.create('client-a');
+    const exposedRecords = issued as unknown as {
+      session: Record<string, unknown>;
+      device?: Record<string, unknown>;
+    };
+    const forgedSessionToken = 'forged-session-token';
+    const forgedDeviceToken = 'forged-device-token';
 
-    // The raw secret is returned once; the stored record carries only its hash.
-    expect(rawDeviceToken).not.toBe('');
-    expect(credentials.validate(session.id, rawSessionToken, rawDeviceToken)).not.toBeNull();
-    expect(JSON.stringify(device)).not.toContain(rawDeviceToken);
+    Reflect.set(exposedRecords.session, 'tokenHash', hashSecret(forgedSessionToken));
+    if (exposedRecords.device) {
+      Reflect.set(exposedRecords.device, 'hash', hashSecret(forgedDeviceToken));
+    }
+
+    expect(
+      credentials.validate(issued.session.id, forgedSessionToken, forgedDeviceToken),
+    ).toBeNull();
+    expect(Object.keys(issued).sort()).toEqual([
+      'rawDeviceToken',
+      'rawSessionToken',
+      'session',
+    ]);
+    expect(Object.keys(issued.session).sort()).toEqual([
+      'createdAt',
+      'expiresAt',
+      'id',
+    ]);
+    expect(Object.isFrozen(issued)).toBe(true);
+    expect(Object.isFrozen(issued.session)).toBe(true);
+  });
+
+  test('validate returns an immutable snapshot instead of stored ownership state', () => {
+    const credentials = new InMemoryAccessCredentialStore();
+    const issued = credentials.create('client-a');
+    const validated = credentials.validate(
+      issued.session.id,
+      issued.rawSessionToken,
+      issued.rawDeviceToken,
+    );
+
+    expect(validated).not.toBeNull();
+    if (!validated) return;
+    Reflect.set(validated, 'id', 'attacker-controlled-session');
+
+    expect(Object.isFrozen(validated)).toBe(true);
+    expect(
+      credentials.validate(
+        issued.session.id,
+        issued.rawSessionToken,
+        issued.rawDeviceToken,
+      )?.id,
+    ).toBe(issued.session.id);
   });
 
   test('sweepExpired keeps still-valid tickets and their key intact', () => {
@@ -226,6 +271,19 @@ describe('fixed-window rate limiter', () => {
     const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 1, 1_000);
     expect(limiter.tryConsume('session-1').allowed).toBe(true);
     expect(limiter.tryConsume('session-1').allowed).toBe(false);
+  });
+
+  test('consumes combined budgets atomically without charging available keys on rejection', () => {
+    const limiter = new InMemoryFixedWindowRateLimiter(createClock(), 2, 1_000);
+    limiter.tryConsume('session:exhausted');
+    limiter.tryConsume('session:exhausted');
+
+    expect(
+      limiter.tryConsumeAll(['session:exhausted', 'client:available']).allowed,
+    ).toBe(false);
+    expect(limiter.tryConsume('client:available').allowed).toBe(true);
+    expect(limiter.tryConsume('client:available').allowed).toBe(true);
+    expect(limiter.tryConsume('client:available').allowed).toBe(false);
   });
 
   test('opens a fresh window once the previous one elapses', () => {

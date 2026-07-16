@@ -3,14 +3,17 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 export type Clock = { now(): number };
 export const systemClock: Clock = { now: () => Date.now() };
 
-export type AccessSession = {
+export type AccessSession = Readonly<{
   id: string;
-  tokenHash: string;
   createdAt: number;
   expiresAt: number;
+}>;
+
+type StoredAccessSession = AccessSession & {
+  tokenHash: string;
 };
 
-export type DeviceToken = {
+type StoredDeviceToken = {
   hash: string;
   createdAt: number;
   expiresAt: number;
@@ -68,13 +71,12 @@ export function safeEqualHash(left: string, right: string): boolean {
   return timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-export type IssuedAccessCredentials = {
+export type IssuedAccessCredentials = Readonly<{
   rawSessionToken: string;
   rawDeviceToken: string;
   session: AccessSession;
-  device: DeviceToken;
   evictedSessionId?: string;
-};
+}>;
 
 export type LiveAccessCredentialState = {
   clients: number;
@@ -92,8 +94,8 @@ export type LiveAccessCredentialState = {
  * eviction or expiry sweep from leaving one half authorized by mistake.
  */
 export class InMemoryAccessCredentialStore {
-  readonly #sessions = new Map<string, AccessSession>();
-  readonly #devices = new Map<string, DeviceToken>();
+  readonly #sessions = new Map<string, StoredAccessSession>();
+  readonly #devices = new Map<string, StoredDeviceToken>();
   readonly #clientBySessionId = new Map<string, string>();
   readonly #sessionIdsByClient = new Map<string, Set<string>>();
 
@@ -115,13 +117,13 @@ export class InMemoryAccessCredentialStore {
 
     const rawSessionToken = createOpaqueSecret();
     const rawDeviceToken = createOpaqueSecret();
-    const session: AccessSession = {
+    const session: StoredAccessSession = {
       id: randomUUID(),
       tokenHash: hashSecret(rawSessionToken),
       createdAt: now,
       expiresAt: now + this.credentialTtlMs,
     };
-    const device: DeviceToken = {
+    const device: StoredDeviceToken = {
       hash: hashSecret(rawDeviceToken),
       createdAt: now,
       expiresAt: now + this.credentialTtlMs,
@@ -137,13 +139,12 @@ export class InMemoryAccessCredentialStore {
     this.#devices.set(session.id, device);
     this.#clientBySessionId.set(session.id, clientKey);
 
-    return {
+    return Object.freeze({
       rawSessionToken,
       rawDeviceToken,
-      session,
-      device,
+      session: accessSessionSnapshot(session),
       ...(oldestSessionId ? { evictedSessionId: oldestSessionId } : {}),
-    };
+    });
   }
 
   validate(
@@ -160,7 +161,7 @@ export class InMemoryAccessCredentialStore {
     }
     if (!safeEqualHash(session.tokenHash, hashSecret(rawSessionToken))) return null;
     if (!safeEqualHash(device.hash, hashSecret(rawDeviceToken))) return null;
-    return session;
+    return accessSessionSnapshot(session);
   }
 
   sweepExpired(): number {
@@ -211,6 +212,14 @@ export class InMemoryAccessCredentialStore {
     clientSessions?.delete(sessionId);
     if (clientSessions?.size === 0) this.#sessionIdsByClient.delete(clientKey);
   }
+}
+
+function accessSessionSnapshot(session: StoredAccessSession): AccessSession {
+  return Object.freeze({
+    id: session.id,
+    createdAt: session.createdAt,
+    expiresAt: session.expiresAt,
+  });
 }
 
 export class InMemoryTerminalTicketStore {
@@ -381,17 +390,43 @@ export class InMemoryFixedWindowRateLimiter {
   ) {}
 
   tryConsume(clientKey: string): RateLimitDecision {
+    return this.tryConsumeAll([clientKey]);
+  }
+
+  /**
+   * Consumes every supplied budget or none of them.
+   *
+   * Decisions are evaluated before any window is created or incremented. This
+   * keeps a denied combined policy from leaking fresh per-session keys or
+   * charging an otherwise available budget for work that was not admitted.
+   */
+  tryConsumeAll(clientKeys: readonly string[]): RateLimitDecision {
     const now = this.clock.now();
-    const record = this.#windowsByKey.get(clientKey);
-    if (!record || now - record.windowStartedAt >= this.windowMs) {
-      this.#windowsByKey.set(clientKey, { count: 1, windowStartedAt: now });
-      return { allowed: true };
+    for (const clientKey of clientKeys) {
+      const decision = this.#check(clientKey, now);
+      if (!decision.allowed) return decision;
     }
+    for (const clientKey of clientKeys) this.#consume(clientKey, now);
+    return { allowed: true };
+  }
+
+  #check(clientKey: string, now: number): RateLimitDecision {
+    const record = this.#windowsByKey.get(clientKey);
+    if (!record || now - record.windowStartedAt >= this.windowMs)
+      return { allowed: true };
     if (record.count >= this.maxPerWindow) {
       return { allowed: false, retryAfterMs: this.windowMs - (now - record.windowStartedAt) };
     }
-    record.count += 1;
     return { allowed: true };
+  }
+
+  #consume(clientKey: string, now: number): void {
+    const record = this.#windowsByKey.get(clientKey);
+    if (!record || now - record.windowStartedAt >= this.windowMs) {
+      this.#windowsByKey.set(clientKey, { count: 1, windowStartedAt: now });
+      return;
+    }
+    record.count += 1;
   }
 
   // Drops windows that have fully elapsed (a later request just reopens a fresh
