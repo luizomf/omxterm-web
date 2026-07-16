@@ -7,7 +7,7 @@ import {
   ACCESS_GATE_MAX_FAILURES,
   ACCESS_GATE_WINDOW_MS,
   createOmxtermServer,
-  MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW,
+  MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
   scrubSshConnectionSecrets,
 } from "./server";
 import { JsonlAuditLogger } from "./audit-logger";
@@ -134,7 +134,8 @@ describe("POST /api/access abuse policy", () => {
     try {
       for (
         let attempt = 0;
-        attempt < MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW + 5;
+        attempt <
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW + 5;
         attempt++
       ) {
         const response = await app.inject({
@@ -154,7 +155,7 @@ describe("POST /api/access abuse policy", () => {
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
       expect(originRejections).toHaveLength(
-        MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW,
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
       );
       expect(
         originRejections.every(
@@ -167,14 +168,19 @@ describe("POST /api/access abuse policy", () => {
       expect(JSON.stringify(originRejections)).not.toContain(attackerOrigin);
 
       await exhaustAccessFailureBudget(app, config, client);
-      const blocked = await accessAttempt(app, config, "wrong-token", client);
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const blocked = await accessAttempt(app, config, "wrong-token", {
+          ...client,
+          forwardedFor: `198.51.100.${attempt}`,
+        });
 
-      expect(blocked.statusCode).toBe(429);
-      const retryAfter = Number(blocked.headers["retry-after"]);
-      expect(retryAfter).toBeGreaterThan(0);
-      expect(retryAfter).toBeLessThanOrEqual(
-        Math.ceil(ACCESS_GATE_WINDOW_MS / 1000),
-      );
+        expect(blocked.statusCode).toBe(429);
+        const retryAfter = Number(blocked.headers["retry-after"]);
+        expect(retryAfter).toBeGreaterThan(0);
+        expect(retryAfter).toBeLessThanOrEqual(
+          Math.ceil(ACCESS_GATE_WINDOW_MS / 1000),
+        );
+      }
 
       const allEvents = readFileSync(auditLogPath, "utf8")
         .trim()
@@ -182,13 +188,17 @@ describe("POST /api/access abuse policy", () => {
         .map((line) => JSON.parse(line) as Record<string, unknown>);
       expect(
         allEvents.filter((event) => event.reason === "bad_origin"),
-      ).toHaveLength(MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW);
+      ).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
       expect(
         allEvents.filter((event) => event.reason === "invalid_access_token"),
       ).toHaveLength(ACCESS_GATE_MAX_FAILURES);
       expect(
         allEvents.filter((event) => event.reason === "rate_limited"),
-      ).toHaveLength(1);
+      ).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
     } finally {
       await app.close();
       rmSync(auditDir, { recursive: true, force: true });
@@ -550,7 +560,8 @@ describe("WebSocket upgrade boundary", () => {
 
       for (
         let attempt = 0;
-        attempt < MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW + 5;
+        attempt <
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW + 5;
         attempt++
       ) {
         const originHeader =
@@ -572,7 +583,9 @@ describe("WebSocket upgrade boundary", () => {
         expect(response).toMatch(/^HTTP\/1\.1 403 /);
       }
 
-      expect(events).toHaveLength(MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW);
+      expect(events).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
       expect(
         events.every(
           (event) =>
@@ -583,6 +596,55 @@ describe("WebSocket upgrade boundary", () => {
         ),
       ).toBe(true);
       expect(JSON.stringify(events)).not.toContain(rejectedOrigin);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("bounds missing-auth upgrade audits while every request stays unauthorized", async () => {
+    const events: Omit<AuditEvent, "ts">[] = [];
+    const audit: AuditLogger = {
+      write: (event) => {
+        events.push(event);
+      },
+    };
+    const app = await createOmxtermServer(baseConfig, { audit });
+
+    try {
+      const port = await listenOnLoopback(app);
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const attackerTicket = `attacker-ticket-${attempt}`;
+        const attackerCookie = `attacker-cookie-${attempt}`;
+        const response = await sendRawHttpRequest(
+          port,
+          [
+            `GET /terminal/ws?ticket=${attackerTicket} HTTP/1.1`,
+            "Host: 127.0.0.1",
+            "Connection: Upgrade",
+            "Upgrade: websocket",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            `Origin: ${baseConfig.allowedOrigins[0]}`,
+            `Cookie: attacker=${attackerCookie}`,
+            `X-Forwarded-For: 198.51.100.${attempt}`,
+            "",
+            "",
+          ].join("\r\n"),
+        );
+
+        expect(response).toMatch(/^HTTP\/1\.1 401 /);
+      }
+
+      expect(
+        events.filter(
+          (event) => event.reason === "missing_auth_or_ticket",
+        ),
+      ).toHaveLength(
+        MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      );
+      expect(JSON.stringify(events)).not.toContain("attacker-ticket");
+      expect(JSON.stringify(events)).not.toContain("attacker-cookie");
+      expect(JSON.stringify(events)).not.toContain("198.51.100");
     } finally {
       await app.close();
     }

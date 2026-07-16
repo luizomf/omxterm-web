@@ -348,16 +348,24 @@ per-connection inbound flood was closed, with a normalized reason like
 `inbound_message_rate`, `inbound_byte_rate`, or `inbound_backlog`), and
 `session_ended` (with byte counts).
 
-Bad/missing-Origin rejections at the access gate and WebSocket upgrade share an
-audit budget of 10 events per direct TCP peer per 60 seconds. Behind a reverse
-proxy, all connections from that proxy intentionally share its conservative
-audit budget; the failed-token limiter still uses the configured real
-`request.ip`. Requests beyond the audit budget remain rejected before
-authentication; only the persistent write is suppressed.
-These events retain the endpoint-specific event name and normalized
-`bad_origin` reason, but omit the rejected Origin string to avoid
-attacker-controlled high-cardinality log content. The failed-token limiter is a
-separate control and keeps its own 401/429 and `Retry-After` behavior.
+Three repeatable public rejection reasons have separate audit budgets of 10
+events per direct TCP peer per 60 seconds: `bad_origin`, `rate_limited`, and
+`missing_auth_or_ticket`. Access and WebSocket Origin failures share the same
+`bad_origin` budget. Thus these repeatable paths can persist at most 30 records
+per direct peer per window; on a directly exposed broker, the access gate's
+first 10 `invalid_access_token` records make the complete unauthenticated bound
+40 records per peer per window. Behind a reverse proxy, all connections from
+that proxy intentionally share the three conservative audit budgets, while the
+failed-token limiter still uses the configured real `request.ip`.
+
+Every request beyond an audit budget keeps the same fail-closed response: 403
+for bad Origin, 429 with unchanged `Retry-After` for a blocked access client,
+and 401 for a WebSocket upgrade without auth or a ticket. Only the persistent
+write is suppressed. Audit-limiter keys contain the direct socket peer and one
+of the three fixed reasons, never Origin, forwarded addresses, cookies, or
+tickets. The limiter's elapsed windows are reclaimed by the active expiry
+sweeper. Events retain the endpoint-specific event name and normalized reason;
+`bad_origin` omits the rejected Origin string because it is attacker-controlled.
 
 Notably absent: private keys, passphrases, raw tickets, cookies, and any
 keystroke or terminal output.

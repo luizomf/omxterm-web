@@ -58,7 +58,7 @@ type Stores = {
   sessions: InMemoryAccessSessionStore;
   devices: InMemoryDeviceTokenStore;
   tickets: InMemoryTerminalTicketStore;
-  originRejectionAuditLimiter: InMemoryFixedWindowRateLimiter;
+  unauthenticatedRejectionAuditLimiter: InMemoryFixedWindowRateLimiter;
   accessRateLimiter: InMemoryAccessRateLimiter;
   hostKeyRateLimiter: InMemoryFixedWindowRateLimiter;
   ticketRateLimiter: InMemoryFixedWindowRateLimiter;
@@ -81,13 +81,19 @@ const EXPIRY_SWEEP_INTERVAL_MS = 10 * 1000;
 export const ACCESS_GATE_MAX_FAILURES = 10;
 export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
 
-// A bad or missing Origin is still rejected before authentication on every
-// request. Only the durable audit write is capped: one client can otherwise
-// grow the JSONL file without bound because Origin rejection deliberately runs
-// before the failed-token limiter (#144). Keep this budget separate so it never
-// changes the access gate's 401/429 or Retry-After semantics.
-export const MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW = 10;
-export const ORIGIN_REJECTION_AUDIT_WINDOW_MS = 60 * 1000;
+// Public unauthenticated requests are still rejected on every attempt. Only
+// repeated durable writes are capped per direct peer and normalized reason:
+// bad Origin, blocked access gate, and missing WebSocket credentials can each
+// otherwise grow JSONL without bound (#144). The direct peer plus this closed
+// reason set keeps attacker-controlled headers out of limiter keys. Keeping the
+// audit budget separate preserves the access gate's 401/429/Retry-After policy.
+export const MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
+export const UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS = 60 * 1000;
+
+type BoundedUnauthenticatedRejectionReason =
+  | "bad_origin"
+  | "rate_limited"
+  | "missing_auth_or_ticket";
 
 // Per-session, per-client, and global caps for authenticated traffic (#30,
 // #126). The access rate
@@ -235,10 +241,10 @@ export async function createOmxtermServer(
     sessions: new InMemoryAccessSessionStore(),
     devices: new InMemoryDeviceTokenStore(),
     tickets: new InMemoryTerminalTicketStore(),
-    originRejectionAuditLimiter: new InMemoryFixedWindowRateLimiter(
+    unauthenticatedRejectionAuditLimiter: new InMemoryFixedWindowRateLimiter(
       systemClock,
-      MAX_ORIGIN_REJECTION_AUDITS_PER_WINDOW,
-      ORIGIN_REJECTION_AUDIT_WINDOW_MS,
+      MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS,
     ),
     accessRateLimiter: new InMemoryAccessRateLimiter(
       systemClock,
@@ -272,7 +278,7 @@ export async function createOmxtermServer(
       stores.tickets,
       stores.sessions,
       stores.devices,
-      stores.originRejectionAuditLimiter,
+      stores.unauthenticatedRejectionAuditLimiter,
       stores.accessRateLimiter,
       stores.hostKeyRateLimiter,
       stores.ticketRateLimiter,
@@ -298,17 +304,19 @@ export async function createOmxtermServer(
     stopExpirySweeper();
   });
 
-  function auditOriginRejection(
+  function auditBoundedUnauthenticatedRejection(
     event: "access_rejected" | "ws_upgrade_rejected",
-    clientKey: string,
+    directPeer: string,
+    reason: BoundedUnauthenticatedRejectionReason,
+    origin?: string,
   ): void {
-    if (!stores.originRejectionAuditLimiter.tryConsume(clientKey).allowed) {
+    const auditKey = `${reason}\0${directPeer}`;
+    if (
+      !stores.unauthenticatedRejectionAuditLimiter.tryConsume(auditKey).allowed
+    ) {
       return;
     }
-    // The rejected Origin is attacker-controlled and can have unbounded
-    // cardinality. The normalized reason plus event type is enough to show the
-    // security boundary fired without persisting attacker-selected metadata.
-    audit.write({ event, severity: "warn", reason: "bad_origin" });
+    audit.write({ event, severity: "warn", reason, origin });
   }
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
@@ -355,9 +363,10 @@ export async function createOmxtermServer(
   app.post("/api/access", async (request, reply) => {
     const origin = requestOrigin(request);
     if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      auditOriginRejection(
+      auditBoundedUnauthenticatedRejection(
         "access_rejected",
         request.socket.remoteAddress ?? "unknown",
+        "bad_origin",
       );
       return reply.code(403).send({ ok: false, message: "Bad Origin." });
     }
@@ -368,12 +377,12 @@ export async function createOmxtermServer(
     const clientKey = request.ip;
     const decision = stores.accessRateLimiter.check(clientKey);
     if (!decision.allowed) {
-      audit.write({
-        event: "access_rejected",
-        severity: "warn",
+      auditBoundedUnauthenticatedRejection(
+        "access_rejected",
+        request.socket.remoteAddress ?? "unknown",
+        "rate_limited",
         origin,
-        reason: "rate_limited",
-      });
+      );
       return reply
         .code(429)
         .header("retry-after", Math.ceil(decision.retryAfterMs / 1000))
@@ -608,9 +617,10 @@ export async function createOmxtermServer(
       origin = normalizeOriginHeader(req.headers.origin);
       const upgradeId = randomUUID();
       if (!isOriginAllowed(origin, config.allowedOrigins)) {
-        auditOriginRejection(
+        auditBoundedUnauthenticatedRejection(
           "ws_upgrade_rejected",
           req.socket.remoteAddress ?? "unknown",
+          "bad_origin",
         );
         rejectUpgrade(socket, 403);
         return;
@@ -631,12 +641,12 @@ export async function createOmxtermServer(
       const device = stores.devices.validate(session?.id, deviceToken);
       const rawTicket = url.searchParams.get("ticket");
       if (!session || !device || !deviceToken || !rawTicket) {
-        audit.write({
-          event: "ws_upgrade_rejected",
-          severity: "warn",
+        auditBoundedUnauthenticatedRejection(
+          "ws_upgrade_rejected",
+          req.socket.remoteAddress ?? "unknown",
+          "missing_auth_or_ticket",
           origin,
-          reason: "missing_auth_or_ticket",
-        });
+        );
         rejectUpgrade(socket, 401);
         return;
       }
