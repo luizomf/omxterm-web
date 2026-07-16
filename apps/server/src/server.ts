@@ -83,17 +83,18 @@ export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
 
 // Public unauthenticated requests are still rejected on every attempt. Only
 // repeated durable writes are capped per direct peer and normalized reason:
-// bad Origin, blocked access gate, and missing WebSocket credentials can each
-// otherwise grow JSONL without bound (#144). The direct peer plus this closed
-// reason set keeps attacker-controlled headers out of limiter keys. Keeping the
-// audit budget separate preserves the access gate's 401/429/Retry-After policy.
+// bad Origin, blocked access gate, missing WebSocket credentials, and malformed
+// upgrade targets can each otherwise grow JSONL without bound (#144). The direct
+// peer plus this closed reason set keeps attacker-controlled request metadata out
+// of limiter keys. Keeping the audit budget separate preserves every response.
 export const MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
 export const UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS = 60 * 1000;
 
 type BoundedUnauthenticatedRejectionReason =
   | "bad_origin"
   | "rate_limited"
-  | "missing_auth_or_ticket";
+  | "missing_auth_or_ticket"
+  | "upgrade_error";
 
 // Per-session, per-client, and global caps for authenticated traffic (#30,
 // #126). The access rate
@@ -308,7 +309,6 @@ export async function createOmxtermServer(
     event: "access_rejected" | "ws_upgrade_rejected",
     directPeer: string,
     reason: BoundedUnauthenticatedRejectionReason,
-    origin?: string,
   ): void {
     const auditKey = `${reason}\0${directPeer}`;
     if (
@@ -316,7 +316,7 @@ export async function createOmxtermServer(
     ) {
       return;
     }
-    audit.write({ event, severity: "warn", reason, origin });
+    audit.write({ event, severity: "warn", reason });
   }
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
@@ -381,7 +381,6 @@ export async function createOmxtermServer(
         "access_rejected",
         request.socket.remoteAddress ?? "unknown",
         "rate_limited",
-        origin,
       );
       return reply
         .code(429)
@@ -645,7 +644,6 @@ export async function createOmxtermServer(
           "ws_upgrade_rejected",
           req.socket.remoteAddress ?? "unknown",
           "missing_auth_or_ticket",
-          origin,
         );
         rejectUpgrade(socket, 401);
         return;
@@ -723,13 +721,11 @@ export async function createOmxtermServer(
       });
     } catch {
       releaseConnectionSlots();
-      audit.write({
-        event: "ws_upgrade_rejected",
-        severity: "warn",
-        sessionId,
-        origin,
-        reason: "upgrade_error",
-      });
+      auditBoundedUnauthenticatedRejection(
+        "ws_upgrade_rejected",
+        req.socket.remoteAddress ?? "unknown",
+        "upgrade_error",
+      );
       rejectUpgrade(socket, 400);
     }
   });
