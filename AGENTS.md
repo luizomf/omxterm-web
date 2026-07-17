@@ -6,7 +6,7 @@ Read this before doing anything.
 
 ## Repository Context
 
-OMXTerm is a TypeScript web terminal project. The MVP is a browser-based SSH
+OMXTerm Web is a TypeScript web terminal project. The MVP is a browser-based SSH
 terminal: a Vite/React/xterm.js frontend talks to a Node/Fastify/WebSocket
 backend, which uses SSH to connect to a user-provided target. The product's
 security boundary is safe brokering: access gate, device token, short-lived

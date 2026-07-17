@@ -165,9 +165,9 @@ export function App() {
 
 function MarketingChrome() {
   return (
-    <section className='hero-copy' aria-label='OMXTerm intro'>
+    <section className='hero-copy' aria-label='OMXTerm Web intro'>
       <p className='eyebrow'>Browser SSH terminal</p>
-      <h1>OMXTerm</h1>
+      <h1>OMXTerm Web</h1>
       <p>
         A weekend build that still checks your host key before letting you in.
       </p>
@@ -196,7 +196,7 @@ function AccessGate({ onSubmit }: { onSubmit(accessToken: string): void }) {
           autoFocus
         />
       </label>
-      <button type='submit'>Unlock OMXTerm</button>
+      <button type='submit'>Unlock OMXTerm Web</button>
     </form>
   );
 }

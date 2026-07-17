@@ -1,6 +1,6 @@
-# Exposing OMXTerm publicly
+# Exposing OMXTerm Web publicly
 
-OMXTerm's own request handling is safe to put behind a public hostname: it
+OMXTerm Web's own request handling is safe to put behind a public hostname: it
 validates the access token, rate-limits abuse, and caps concurrency without
 help from anything in front of it. That is a different claim from "safe to
 put on the public internet with no edge protection." This document is about
@@ -13,7 +13,7 @@ Caddy, a cloud load balancer, or a CDN in front of any of them.
 
 ---
 
-## What OMXTerm protects against, on its own
+## What OMXTerm Web protects against, on its own
 
 These controls run inside the broker itself, regardless of what proxy (if
 any) sits in front of it. See [`how-it-works.md`](./how-it-works.md) for the
@@ -87,9 +87,9 @@ limited" as "DoS-resistant":
 - **Volumetric or distributed denial of service.** Nothing in the broker
   defends against a flood of traffic large enough to saturate the network
   link, exhaust connection tables at the OS/proxy level, or overwhelm TLS
-  handshakes before a request ever reaches OMXTerm's own rate limiters.
-  **OMXTerm makes no DDoS-resistance claim, full stop.**
-- **TLS.** OMXTerm does not terminate TLS. Without a reverse proxy doing
+  handshakes before a request ever reaches OMXTerm Web's own rate limiters.
+  **OMXTerm Web makes no DDoS-resistance claim, full stop.**
+- **TLS.** OMXTerm Web does not terminate TLS. Without a reverse proxy doing
   HTTPS/WSS in front of it, the auth cookies (which _are_ the authentication)
   travel in cleartext. See the README "Deploy" section and
   `assertSafeCookieDeployment` in `apps/server/src/deploy-safety.ts`, which
@@ -97,20 +97,20 @@ limited" as "DoS-resistant":
 - **Non-browser clients in general.** See the Origin section below — Origin
   checks are a browser-only mechanism.
 
-If you are putting OMXTerm on a hostname reachable from the open internet,
+If you are putting OMXTerm Web on a hostname reachable from the open internet,
 treat the in-app limits as the **last** line of defense, not the only one.
 
 ## Why public deploys need HTTPS and edge rate limiting
 
 Two things are true at once:
 
-1. OMXTerm's application-level limits are real and effective against an
+1. OMXTerm Web's application-level limits are real and effective against an
    individual abusive client.
 2. They were sized and scoped for a single-user/small-team MVP broker, not
    for standing alone against internet-scale abuse.
 
 Application limits **complement** edge protection; they do not **replace**
-it. Before exposing a real domain, put in front of OMXTerm whichever of these
+it. Before exposing a real domain, put in front of OMXTerm Web whichever of these
 your environment already gives you:
 
 - A reverse proxy or load balancer terminating **TLS** (required — see
@@ -120,13 +120,13 @@ your environment already gives you:
   below).
 - Your **hosting/CDN provider's DDoS protection**, if you have one — this is
   the layer actually designed to absorb volumetric and distributed attacks,
-  which is out of scope for both OMXTerm and a single reverse-proxy rate
+  which is out of scope for both OMXTerm Web and a single reverse-proxy rate
   limit rule.
 - A **WAF**, where your threat model calls for one (e.g. the deploy is
   reachable from an untrusted network segment, or you want protocol-level
   filtering ahead of the broker).
 
-None of this is bundled with OMXTerm. It is deliberately left to whatever
+None of this is bundled with OMXTerm Web. It is deliberately left to whatever
 edge you already operate, because the right answer depends on your
 infrastructure (bare server vs. managed load balancer vs. CDN) far more than
 on anything the broker itself could decide.
@@ -174,7 +174,7 @@ state-changing authenticated HTTP call and on the WebSocket upgrade. The
 read-only `/api/me` boot probe permits a missing Origin because same-origin GET
 requests commonly omit it, but still rejects an explicitly bad Origin. This is
 real, load-bearing protection against **cross-site browser attacks**: another
-website cannot open a hidden request or WebSocket to your OMXTerm broker using
+website cannot open a hidden request or WebSocket to your OMXTerm Web broker using
 a logged-in visitor's cookies, because browsers attach the real page Origin
 and cannot be told to lie about it.
 
@@ -188,7 +188,7 @@ non-browser traffic; Origin only closes the cross-site-browser hole.
 ## Basic Auth as an optional private-preview layer
 
 [`docs/deploy.md`](./deploy.md) documents adding HTTP Basic Auth at the
-reverse proxy, in front of OMXTerm's own access gate. This is **optional**,
+reverse proxy, in front of OMXTerm Web's own access gate. This is **optional**,
 useful while a deploy is still a private preview and you want a coarse
 extra barrier before anyone reaches the access-token prompt at all. It is
 not a substitute for the access gate, and it is not required for a public
@@ -197,7 +197,7 @@ not a documented requirement.
 
 ## Logging hygiene: this extends to the edge too
 
-OMXTerm's own audit log is metadata-only: no private keys, passphrases, raw
+OMXTerm Web's own audit log is metadata-only: no private keys, passphrases, raw
 tickets, cookies, or terminal transcripts ever reach it (see
 [`how-it-works.md`](./how-it-works.md#what-the-audit-log-records)). That
 discipline does not automatically extend to anything you put in front of
@@ -208,15 +208,15 @@ query strings, and sometimes headers or bodies by default. Terminal
 tickets travel as a URL query parameter on the WebSocket upgrade
 (`GET /terminal/ws?ticket=...`), and the access token and cookies are sent as
 request bodies/headers. If your proxy's access log records the full request
-line, headers, or body, it can capture exactly the secrets OMXTerm's own
+line, headers, or body, it can capture exactly the secrets OMXTerm Web's own
 audit log deliberately omits. Configure proxy/edge/WAF logging the same way:
 no request bodies, no `Authorization`/cookie headers, and no full query
 strings on the ticket-bearing WebSocket path.
 
 ## Optional edge recipe: Traefik v3 router-scoped rate limit
 
-One optional recipe among many, not something OMXTerm depends on or ships.
-It rate-limits requests to the OMXTerm router only, so it cannot affect any
+One optional recipe among many, not something OMXTerm Web depends on or ships.
+It rate-limits requests to the OMXTerm Web router only, so it cannot affect any
 other route your Traefik instance serves. Add it to the same dynamic
 configuration file used in [`docs/deploy.md`](./deploy.md) step 5, scoping
 the new middleware to the existing `omxterm` router:
@@ -248,15 +248,15 @@ If you are not using the optional private-preview BasicAuth, remove
 
 Tune `average`/`burst` to your expected traffic; the values above are a
 starting point, not a recommendation. This complements, and does not
-replace, OMXTerm's own per-client limiters and any DDoS protection your
+replace, OMXTerm Web's own per-client limiters and any DDoS protection your
 hosting provider offers.
 
 If you use a different proxy:
 
-- **nginx**: `limit_req_zone` + `limit_req` on the OMXTerm `location` block
+- **nginx**: `limit_req_zone` + `limit_req` on the OMXTerm Web `location` block
   achieves the same router-scoped effect.
 - **Caddy**: a rate-limit plugin (e.g. `caddy-ratelimit`) scoped to the
-  OMXTerm site block is the equivalent.
+  OMXTerm Web site block is the equivalent.
 
 Neither is spelled out here in full — the Traefik example above is the one
 worked recipe; the mechanism (edge-level, router/route-scoped, tunable

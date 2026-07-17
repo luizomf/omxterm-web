@@ -18,7 +18,7 @@ function captureTerminalOutput(socket: WebSocket, chunks: string[]): void {
         chunks.push(message.data);
       }
     } catch {
-      // Protocol parsing belongs to OMXTerm. The E2E only collects valid output
+      // Protocol parsing belongs to OMXTerm Web. The E2E only collects valid output
       // frames and ignores unrelated WebSocket traffic such as pong messages.
     }
   });
@@ -58,7 +58,9 @@ test('brokers a disposable SSH PTY and independently reopens both terminal bars'
   try {
     await page.goto(origin);
     await page.getByLabel('Access token').fill(accessToken);
-    await page.getByRole('button', { name: 'Unlock OMXTerm' }).click();
+    await page
+      .getByRole('button', { name: 'Unlock OMXTerm Web', exact: true })
+      .click();
 
     await page.getByLabel('Host').fill(fixtureAddress);
     await page.getByLabel('Port').fill('2222');
