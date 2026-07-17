@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Disposable browser -> OMXTerm -> OpenSSH E2E for issue #159. This is opt-in:
+# Disposable browser -> OMXTerm Web -> OpenSSH E2E for issue #159. This is opt-in:
 # it builds three local images and installs Chromium on the first Playwright run.
 
 set -uo pipefail
@@ -266,7 +266,7 @@ if ! [[ "${OMXTERM_E2E_BROWSER_PORT}" =~ ^[0-9]+$ ]] \
 fi
 export OMXTERM_E2E_ORIGIN="http://127.0.0.1:${OMXTERM_E2E_BROWSER_PORT}"
 
-echo "ssh-browser-e2e.sh: building isolated OpenSSH fixture and OMXTerm"
+echo "ssh-browser-e2e.sh: building isolated OpenSSH fixture and OMXTerm Web"
 COMPOSE_STARTED=1
 RUN_DEADLINE=$((SECONDS + E2E_TIMEOUT_SECONDS))
 run_before_deadline "${COMPOSE[@]}" up --detach --build --wait >"${WORK}/compose-up.log" 2>&1

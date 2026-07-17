@@ -118,7 +118,7 @@ ENV
 - `OMXTERM_AUDIT_LOG` — when you opt into a file sink inside the container,
   mount its parent directory and make it writable by the image's non-root
   `node` user. Check the runtime UID with
-  `docker compose --project-name omxterm run --rm omxterm id -u`; the broker fails fast at boot if the
+  `docker compose run --rm omxterm id -u`; the broker fails fast at boot if the
   path is not writable. Leaving it unset writes metadata-only events to stdout.
   Keep runtime logs out of the source checkout when practical. Git and Docker
   both exclude directories named `logs` at any package depth; `.log`, `.jsonl`,
@@ -140,8 +140,8 @@ Choose the path that matches where your reverse proxy runs.
 
 ```bash
 cd /opt/omxterm-web
-docker compose --project-name omxterm up -d --build
-docker compose --project-name omxterm logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
+docker compose up -d --build
+docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
 `compose.yml` publishes the broker on `127.0.0.1:3000` only, so no other machine
@@ -152,7 +152,7 @@ to the port. On a single-admin host where everything local is as trusted as the
 proxy itself, it is reasonable to set:
 
 ```bash
-# Add to .env, then `docker compose --project-name omxterm up -d` again to apply.
+# Add to .env, then `docker compose up -d` again to apply.
 OMXTERM_TRUST_PROXY=true
 ```
 
@@ -173,8 +173,8 @@ Layer `compose.prod.yml` explicitly to put the broker on the shared
 
 ```bash
 cd /opt/omxterm-web
-docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d --build
-docker compose --project-name omxterm -f compose.yml -f compose.prod.yml logs -f omxterm
+docker compose -f compose.yml -f compose.prod.yml up -d --build
+docker compose -f compose.yml -f compose.prod.yml logs -f omxterm
 ```
 
 Read the subnet Compose assigned to `omxterm-edge` and set `OMXTERM_TRUST_PROXY`
@@ -183,7 +183,7 @@ to it, then re-run `up` so the change takes effect:
 ```bash
 docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
 # Put the printed subnet in .env as OMXTERM_TRUST_PROXY=<subnet>, then:
-docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d
+docker compose -f compose.yml -f compose.prod.yml up -d
 ```
 
 A reverse proxy running in its own stack is not on `omxterm-edge` yet — attach it
@@ -322,7 +322,7 @@ If the SSH step fails to reach a host inside `OMXTERM_SSH_ALLOWED_CIDR`, confirm
 the container can route to that network:
 
 ```bash
-docker compose --project-name omxterm exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
+docker compose exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
 ```
 
 ---
@@ -348,7 +348,8 @@ To deploy the plain portable baseline instead, clear the override:
 OMXTERM_COMPOSE_OVERRIDE= /opt/omxterm-web/scripts/deploy
 ```
 
-To roll out by hand instead (app service only; don't touch the proxy):
+To migrate or roll out the existing maintainer stack by hand instead (app
+service only; don't touch the proxy), keep its established project name:
 
 ```bash
 cd /opt/omxterm-web
