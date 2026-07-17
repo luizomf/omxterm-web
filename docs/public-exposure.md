@@ -219,32 +219,32 @@ One optional recipe among many, not something OMXTerm Web depends on or ships.
 It rate-limits requests to the OMXTerm Web router only, so it cannot affect any
 other route your Traefik instance serves. Add it to the same dynamic
 configuration file used in [`docs/deploy.md`](./deploy.md) step 5, scoping
-the new middleware to the existing `omxterm` router:
+the new middleware to the existing `omxterm-web` router:
 
 ```yaml
 http:
   middlewares:
-    omxterm-ratelimit:
+    omxterm-web-ratelimit:
       rateLimit:
         average: 20 # sustained requests/second allowed
         burst: 40 # short burst allowance above average
         period: 1s
 
   routers:
-    omxterm:
-      rule: 'Host(`omxterm.example.com`)'
+    omxterm-web:
+      rule: 'Host(`omxterm-web.example.com`)'
       entryPoints:
         - websecure
       tls:
         certResolver: le
       middlewares:
-        - omxterm-auth
-        - omxterm-ratelimit
-      service: omxterm
+        - omxterm-web-auth
+        - omxterm-web-ratelimit
+      service: omxterm-web
 ```
 
 If you are not using the optional private-preview BasicAuth, remove
-`omxterm-auth` from the router's middleware list; keep `omxterm-ratelimit`.
+`omxterm-web-auth` from the router's middleware list; keep `omxterm-web-ratelimit`.
 
 Tune `average`/`burst` to your expected traffic; the values above are a
 starting point, not a recommendation. This complements, and does not

@@ -6,7 +6,7 @@
 #   before any Docker action, so tracked and untracked files are left as-is;
 # - syncs source with fetch + fast-forward-only after verifying the branch and
 #   its upstream, and refuses to run on a diverged branch (no merge, no rewrite);
-# - recreates ONLY the OMXTerm service, leaving the reverse proxy and its
+# - recreates ONLY the OMXTerm Web service, leaving the reverse proxy and its
 #   unrelated routes running.
 #
 # Paths are overridable via env so this can be exercised in a sandbox.
@@ -22,7 +22,7 @@ set -euo pipefail
 OMXTERM_CODE_DIR="${OMXTERM_CODE_DIR:-/opt}"
 OMXTERM_DIR="${OMXTERM_DIR:-${OMXTERM_CODE_DIR}/omxterm-web}"
 DEPLOY_BRANCH="${OMXTERM_DEPLOY_BRANCH:-main}"
-OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm}"
+OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm-web}"
 
 # The maintainer rollout layers the production edge topology (compose.prod.yml)
 # on top of the portable, safe-by-default baseline (compose.yml), so a
@@ -80,7 +80,7 @@ if [ "${local_sha}" != "${remote_sha}" ]; then
   git merge --ff-only '@{upstream}'
 fi
 
-# Rebuild and recreate only the OMXTerm service. The reverse proxy is left
+# Rebuild and recreate only the OMXTerm Web service. The reverse proxy is left
 # untouched so unrelated routes stay up. -f paths resolve against the checkout
 # we cd'd into above.
 compose_files=(-f "${OMXTERM_COMPOSE_FILE}")
@@ -88,6 +88,6 @@ if [ -n "${OMXTERM_COMPOSE_OVERRIDE}" ]; then
   compose_files+=(-f "${OMXTERM_COMPOSE_OVERRIDE}")
 fi
 
-docker compose --project-name omxterm \
+docker compose --project-name omxterm-web \
   --project-directory "${OMXTERM_DIR}" "${compose_files[@]}" \
   up -d --build --force-recreate --remove-orphans "${OMXTERM_SERVICE}"

@@ -94,7 +94,7 @@ verify_runtime_isolation() {
   local broker_networks fixture_networks gateway_networks
   local broker_ports fixture_ports gateway_user network_internal published_address
 
-  capture_before_deadline broker_id "${COMPOSE[@]}" ps --quiet omxterm || return $?
+  capture_before_deadline broker_id "${COMPOSE[@]}" ps --quiet omxterm-web || return $?
   capture_before_deadline fixture_id "${COMPOSE[@]}" ps --quiet ssh-fixture || return $?
   capture_before_deadline gateway_id "${COMPOSE[@]}" ps --quiet loopback-gateway || return $?
   if [ -z "${broker_id}" ] || [ -z "${fixture_id}" ] || [ -z "${gateway_id}" ]; then
