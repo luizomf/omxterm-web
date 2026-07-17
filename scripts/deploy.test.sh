@@ -12,6 +12,7 @@ set -uo pipefail
 
 SCRIPTS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 DEPLOY="${SCRIPTS_DIR}/deploy"
+DEPLOY_DOC="${SCRIPTS_DIR}/../docs/deploy.md"
 
 # Deterministic identity so `git commit` works in the temp repos.
 export GIT_AUTHOR_NAME="deploy-test"
@@ -46,7 +47,7 @@ setup_sandbox() {
   SANDBOX="$(mktemp -d)"
   sandboxes+=("${SANDBOX}")
   REMOTE="${SANDBOX}/remote.git"
-  APP="${SANDBOX}/omxterm"
+  APP="${SANDBOX}/omxterm-web"
   FAKEBIN="${SANDBOX}/bin"
   DOCKER_LOG="${SANDBOX}/docker.log"
   OUT_LOG="${SANDBOX}/out.log"
@@ -102,6 +103,8 @@ test_clean_uptodate_deploys_app_only() {
     return
   fi
   docker_ran || fail_test "expected docker compose to run"
+  grep -q -- "--project-name omxterm" "${DOCKER_LOG}" ||
+    fail_test "expected the existing omxterm Compose project to be preserved"
   grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
   if grep -qiE "traefik|nginx|caddy" "${DOCKER_LOG}"; then
     fail_test "must not touch the reverse-proxy edge stack"
@@ -238,8 +241,35 @@ test_ignores_generic_project_dirs() {
     return
   fi
   docker_ran || fail_test "expected docker compose to run against the namespaced checkout"
+  grep -q -- "--project-name omxterm" "${DOCKER_LOG}" ||
+    fail_test "expected the existing omxterm Compose project to be preserved"
   grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
   pass_test "resolved via OMXTERM_CODE_DIR, generic PROJECTS_DIR/CODE_DIR ignored"
+}
+
+test_docs_keep_portable_compose_project_isolation() {
+  echo "portable docs derive the Compose project; maintainer rollout pins the existing stack"
+  local portable_docs updating_docs
+  portable_docs="$(sed '/^## Updating$/,$d' "${DEPLOY_DOC}")"
+  updating_docs="$(sed -n '/^## Updating$/,$p' "${DEPLOY_DOC}")"
+
+  if grep -F -q -- '--project-name omxterm' <<<"${portable_docs}"; then
+    fail_test "fresh-clone documentation must not adopt the maintainer Compose project"
+    return
+  fi
+  if ! grep -F -q -- 'docker compose up -d --build' <<<"${portable_docs}"; then
+    fail_test "portable baseline command must use Compose directory-derived project semantics"
+    return
+  fi
+  if ! grep -F -q -- "docker network inspect omxterm-web_default -f '{{(index .IPAM.Config 0).Subnet}}'" <<<"${portable_docs}"; then
+    fail_test "portable subnet lookup must use the directory-derived omxterm-web_default network"
+    return
+  fi
+  if ! grep -F -q -- '--project-name omxterm' <<<"${updating_docs}"; then
+    fail_test "maintainer migration/rollout must preserve the existing omxterm Compose project"
+    return
+  fi
+  pass_test "fresh clones remain isolated; existing maintainer rollout remains continuous"
 }
 
 test_clean_uptodate_deploys_app_only
@@ -251,6 +281,7 @@ test_untracked_file_stops_before_docker
 test_wrong_branch_fails
 test_unexpected_upstream_fails
 test_ignores_generic_project_dirs
+test_docs_keep_portable_compose_project_isolation
 
 echo
 echo "deploy.test.sh: ${pass} passed, ${fail} failed"

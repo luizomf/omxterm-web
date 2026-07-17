@@ -1,6 +1,6 @@
 # Domain docs
 
-OMXTerm uses one shared domain context across its npm workspaces.
+OMXTerm Web uses one shared domain context across its npm workspaces.
 
 ## Before exploring, read these
 

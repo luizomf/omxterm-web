@@ -51,7 +51,7 @@ export function assertSafeCookieDeployment(deployment: {
   throw new Error(
     `Refusing to boot: OMXTERM_SECURE_COOKIES is false while binding to the ` +
       `non-loopback host "${deployment.host}". The auth cookies are the ` +
-      `authentication and would travel in cleartext. Put OMXTerm behind ` +
+      `authentication and would travel in cleartext. Put OMXTerm Web behind ` +
       `HTTPS/WSS and set OMXTERM_SECURE_COOKIES=true, or bind to a loopback ` +
       `host. See the README "Deploy" section.`,
   );

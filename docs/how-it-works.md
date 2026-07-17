@@ -1,6 +1,6 @@
-# How OMXTerm works (the security flow)
+# How OMXTerm Web works (the security flow)
 
-OMXTerm is a **browser SSH terminal**: you open a web page, type into it, and
+OMXTerm Web is a **browser SSH terminal**: you open a web page, type into it, and
 the keystrokes end up in a real shell on a server you chose. The hard part is
 not drawing a terminal — it is doing that _without_ turning a public URL into an
 open SSH proxy.
@@ -15,7 +15,7 @@ file references point at the exact place each rule lives.
 ## The 30-second version
 
 A naive browser terminal is dangerous: it can become an unauthenticated SSH
-proxy, leak the private key, skip host-key verification, or log secrets. OMXTerm
+proxy, leak the private key, skip host-key verification, or log secrets. OMXTerm Web
 defends each of those with one specific mechanism:
 
 | Risk                                  | Defense                                                                                                                                                  |
@@ -29,9 +29,9 @@ defends each of those with one specific mechanism:
 | The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed                                                                       |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript                                                                                    |
 
-The boundary OMXTerm promises is **safe brokering**. It does _not_ decide
+The boundary OMXTerm Web promises is **safe brokering**. It does _not_ decide
 whether your remote user is root — that is the SSH target's job (see
-[What OMXTerm does not do](#what-omxterm-does-not-do)).
+[What OMXTerm Web does not do](#what-omxterm-web-does-not-do)).
 
 ---
 
@@ -325,7 +325,7 @@ fix for #11).
 Remote output then passes through xterm's parser in the browser. xterm core
 processes OSC 8 semantic hyperlinks even when `WebLinksAddon` is not installed;
 its link service otherwise retains each attacker-controlled URI while linked
-cells remain in scrollback. OMXTerm disables OSC 8 through xterm's parser API,
+cells remain in scrollback. OMXTerm Web disables OSC 8 through xterm's parser API,
 so splitting a sequence across WebSocket messages or `terminal.write` calls
 cannot make the core link service retain its URI (#146). Visible `http://` and
 `https://` text remains clickable through `WebLinksAddon`. The separate OSC 52
@@ -431,12 +431,12 @@ log rotation are out of scope.
 
 ---
 
-## What OMXTerm does not do
+## What OMXTerm Web does not do
 
 Being honest about the boundary is part of the point:
 
 - It does **not** decide your remote privileges. If you connect as root, that is
-  your SSH target's configuration, not OMXTerm's doing.
+  your SSH target's configuration, not OMXTerm Web's doing.
 - It does **not** keep a persistent `known_hosts` — host-key trust is per
   session.
 - It does **not** save private keys, passphrases, connection profiles, or

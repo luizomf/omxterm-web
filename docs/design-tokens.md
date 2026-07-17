@@ -1,6 +1,6 @@
 # Design Tokens
 
-OMXTerm uses a hand-made terminal palette as the product palette. The visual
+OMXTerm Web uses a hand-made terminal palette as the product palette. The visual
 direction is dark, premium, sparse, and terminal-native: "nerd in a tuxedo", not
 green Matrix cosplay.
 

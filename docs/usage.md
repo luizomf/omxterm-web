@@ -1,6 +1,6 @@
-# Using OMXTerm
+# Using OMXTerm Web
 
-This is the operator's walkthrough: you already have OMXTerm running, and now you
+This is the operator's walkthrough: you already have OMXTerm Web running, and now you
 want to open a remote shell and know what every screen and key does. It follows
 the path the UI actually takes — access token, SSH form, host-key confirmation,
 terminal — and then lists what the terminal can do once you are connected.
@@ -16,7 +16,7 @@ It does **not** cover setup or the security model:
 
 ## Before you start
 
-You need OMXTerm running and reachable, plus three things to connect:
+You need OMXTerm Web running and reachable, plus three things to connect:
 
 - The **access token** the server was started with (`OMXTERM_ACCESS_TOKEN`).
 - An **SSH target** you own: host, port, and username.
@@ -34,12 +34,12 @@ deploy it is whatever origin you put behind your HTTPS proxy (see the README
 ### 1. Enter the access token
 
 The first screen is the **access gate**. Paste the access token and press
-**Unlock OMXTerm**. This is the shared gate that keeps the public URL from being
+**Unlock OMXTerm Web**. This is the shared gate that keeps the public URL from being
 an open SSH proxy; it is not your SSH credential. On success the browser gets its
 session and device cookies and moves on to the connection form. A wrong token
 just shows an error — try again.
 
-If you have already unlocked OMXTerm in this browser, you skip straight to the
+If you have already unlocked OMXTerm Web in this browser, you skip straight to the
 connection form.
 
 ### 2. Fill in the SSH target
@@ -55,13 +55,13 @@ The **connection form** collects one connection's inputs:
   control to reveal or re-hide it while editing.
 - **Passphrase (optional)** — only if your private key is encrypted.
 
-Press **Continue to fingerprint**. Nothing here is saved: OMXTerm does not keep
+Press **Continue to fingerprint**. Nothing here is saved: OMXTerm Web does not keep
 keys, profiles, `known_hosts`, or transcripts, so every connection starts from a
 blank form.
 
 ### 3. Confirm the host-key fingerprint
 
-Before logging in, OMXTerm probes the server's SSH host key and shows you its
+Before logging in, OMXTerm Web probes the server's SSH host key and shows you its
 **SHA256 fingerprint** alongside the `host:port` you entered. This is how you
 catch a man-in-the-middle or a wrong host: you confirm the server is who you
 think it is before the private key is ever used.
@@ -81,7 +81,7 @@ you will confirm the fingerprint again next time.
 
 ### 4. Use the terminal
 
-After you trust the key, OMXTerm opens the WebSocket, logs in over SSH, and drops
+After you trust the key, OMXTerm Web opens the WebSocket, logs in over SSH, and drops
 you into a real shell. The top bar shows the session title (`username@host`), a
 **status pill**, and an **End session** button. The status pill tracks the live
 connection state (for example `connecting` then `connected`, or `error` /
@@ -126,7 +126,7 @@ Once connected, the terminal is a full xterm.js surface with a few extras:
 
 ## What it deliberately does not do
 
-OMXTerm is a weekend-sized MVP, and some of the "missing" behavior is on purpose:
+OMXTerm Web is a weekend-sized MVP, and some of the "missing" behavior is on purpose:
 
 - No saved keys, profiles, or `known_hosts` — every connection re-enters the
   form and re-confirms the fingerprint.
@@ -135,4 +135,4 @@ OMXTerm is a weekend-sized MVP, and some of the "missing" behavior is on purpose
   can do on the target is decided by the target's own SSH server and users.
 
 For the full list and the reasoning, see
-[What OMXTerm does not do](./how-it-works.md#what-omxterm-does-not-do).
+[What OMXTerm Web does not do](./how-it-works.md#what-omxterm-web-does-not-do).

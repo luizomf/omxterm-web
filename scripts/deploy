@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# OMXTerm rollout. Non-destructive and app-scoped by design (issue #75):
+# OMXTerm Web rollout. Non-destructive and app-scoped by design (issue #75):
 #
 # - never stages or resets operator work: a dirty checkout stops the deploy
 #   before any Docker action, so tracked and untracked files are left as-is;
@@ -16,11 +16,11 @@ set -euo pipefail
 # Resolve the checkout from OMXTerm-namespaced env only. Do NOT read the generic
 # PROJECTS_DIR/CODE_DIR: unrelated tooling may already export them (e.g.
 # PROJECTS_DIR=/some/base), and the old chain turned that into a wrong path
-# like /some/base/code/omxterm, aborting the deploy before Docker (issue #85).
+# like /some/base/code/omxterm-web, aborting the deploy before Docker (issue #85).
 # OMXTERM_CODE_DIR is the code root; OMXTERM_DIR the full checkout the sandbox
 # suite points at throwaway repos.
 OMXTERM_CODE_DIR="${OMXTERM_CODE_DIR:-/opt}"
-OMXTERM_DIR="${OMXTERM_DIR:-${OMXTERM_CODE_DIR}/omxterm}"
+OMXTERM_DIR="${OMXTERM_DIR:-${OMXTERM_CODE_DIR}/omxterm-web}"
 DEPLOY_BRANCH="${OMXTERM_DEPLOY_BRANCH:-main}"
 OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm}"
 
@@ -88,5 +88,6 @@ if [ -n "${OMXTERM_COMPOSE_OVERRIDE}" ]; then
   compose_files+=(-f "${OMXTERM_COMPOSE_OVERRIDE}")
 fi
 
-docker compose --project-directory "${OMXTERM_DIR}" "${compose_files[@]}" \
+docker compose --project-name omxterm \
+  --project-directory "${OMXTERM_DIR}" "${compose_files[@]}" \
   up -d --build --force-recreate --remove-orphans "${OMXTERM_SERVICE}"
