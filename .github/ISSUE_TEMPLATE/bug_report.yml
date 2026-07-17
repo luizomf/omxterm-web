@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a problem with OMXTerm
+description: Report a problem with OMXTerm Web
 title: "fix: "
 labels: ["bug"]
 body:

@@ -1,6 +1,6 @@
-# Deploying OMXTerm
+# Deploying OMXTerm Web
 
-This is the runbook for putting OMXTerm behind a reverse proxy on a server. It
+This is the runbook for putting OMXTerm Web behind a reverse proxy on a server. It
 walks one concrete example — a single container reached at `omxterm.example.com`
 through a reverse proxy that terminates TLS — but the steps are proxy-agnostic;
 only the routing snippet is specific to the proxy you pick.
@@ -10,7 +10,7 @@ For the env knobs themselves and why each exists, see the
 [`how-it-works.md`](./how-it-works.md). This document is the _how to roll it
 out_, not the security model.
 
-OMXTerm ships two Compose paths:
+OMXTerm Web ships two Compose paths:
 
 - **Portable baseline** (`compose.yml`, the default) — publishes only to
   loopback so a reverse proxy on the same host can forward to it. No pre-created
@@ -27,13 +27,13 @@ Pick the path that matches where your proxy runs; both serve the same image.
 
 ## Topology
 
-OMXTerm ships as **one container**. The broker (Fastify) serves both the API/
+OMXTerm Web ships as **one container**. The broker (Fastify) serves both the API/
 WebSocket and the built web SPA, so everything is one origin — the browser's
 relative `/api` calls and the same-origin `wss://` just work, with no path
 splitting in the proxy.
 
 ```text
-Browser ──HTTPS/WSS──> Reverse proxy (edge, TLS) ──HTTP──> OMXTerm broker :3000
+Browser ──HTTPS/WSS──> Reverse proxy (edge, TLS) ──HTTP──> OMXTerm Web broker :3000
                                                             ├─ /            SPA (apps/web/dist)
                                                             ├─ /api/*       broker API
                                                             └─ /terminal/ws WebSocket
@@ -56,7 +56,7 @@ to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web
 - A reverse proxy (Traefik, Caddy, nginx, …) as the edge, terminating TLS (e.g.
   via Let's Encrypt). This runbook uses **Traefik v3** with the file provider as
   one worked example; any proxy works.
-- Convention used below: clone the repo somewhere stable such as `/opt/omxterm`.
+- Convention used below: clone the repo somewhere stable such as `/opt/omxterm-web`.
   Adjust the paths to wherever you keep the checkout.
 
 ---
@@ -65,7 +65,7 @@ to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web
 
 - **DNS**: `omxterm.example.com` resolves to the edge host (A/AAAA record).
 - A reverse proxy in front of the container, terminating TLS.
-- Docker + Compose on the host; the repo cloned at `/opt/omxterm`.
+- Docker + Compose on the host; the repo cloned at `/opt/omxterm-web`.
 
 ---
 
@@ -77,7 +77,7 @@ never `reset --hard`s or creates merge commits, so it can't discard local work.
 To sync by hand, keep it non-destructive:
 
 ```bash
-cd /opt/omxterm
+cd /opt/omxterm-web
 git status --short            # must be empty; commit or stash your own work first
 git fetch origin
 git merge --ff-only origin/main   # fast-forward only; fails instead of rewriting
@@ -92,7 +92,7 @@ checkout that silently throws away uncommitted and untracked files.
 `compose.yml` with the production values:
 
 ```bash
-cd /opt/omxterm
+cd /opt/omxterm-web
 cat > .env <<'ENV'
 OMXTERM_ACCESS_TOKEN=__REPLACE_WITH_A_STRONG_TOKEN__
 OMXTERM_ALLOWED_ORIGIN=https://omxterm.example.com
@@ -118,7 +118,7 @@ ENV
 - `OMXTERM_AUDIT_LOG` — when you opt into a file sink inside the container,
   mount its parent directory and make it writable by the image's non-root
   `node` user. Check the runtime UID with
-  `docker compose run --rm omxterm id -u`; the broker fails fast at boot if the
+  `docker compose --project-name omxterm run --rm omxterm id -u`; the broker fails fast at boot if the
   path is not writable. Leaving it unset writes metadata-only events to stdout.
   Keep runtime logs out of the source checkout when practical. Git and Docker
   both exclude directories named `logs` at any package depth; `.log`, `.jsonl`,
@@ -139,9 +139,9 @@ Choose the path that matches where your reverse proxy runs.
 ### 3a. Portable baseline — proxy on the same host
 
 ```bash
-cd /opt/omxterm
-docker compose up -d --build
-docker compose logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
+cd /opt/omxterm-web
+docker compose --project-name omxterm up -d --build
+docker compose --project-name omxterm logs -f omxterm   # expect: "OMXTerm server listening on http://0.0.0.0:3000"
 ```
 
 `compose.yml` publishes the broker on `127.0.0.1:3000` only, so no other machine
@@ -152,7 +152,7 @@ to the port. On a single-admin host where everything local is as trusted as the
 proxy itself, it is reasonable to set:
 
 ```bash
-# Add to .env, then `docker compose up -d` again to apply.
+# Add to .env, then `docker compose --project-name omxterm up -d` again to apply.
 OMXTERM_TRUST_PROXY=true
 ```
 
@@ -172,9 +172,9 @@ Layer `compose.prod.yml` explicitly to put the broker on the shared
 `omxterm-edge` network (Compose creates it on `up`; nothing is pre-created):
 
 ```bash
-cd /opt/omxterm
-docker compose -f compose.yml -f compose.prod.yml up -d --build
-docker compose -f compose.yml -f compose.prod.yml logs -f omxterm
+cd /opt/omxterm-web
+docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d --build
+docker compose --project-name omxterm -f compose.yml -f compose.prod.yml logs -f omxterm
 ```
 
 Read the subnet Compose assigned to `omxterm-edge` and set `OMXTERM_TRUST_PROXY`
@@ -183,7 +183,7 @@ to it, then re-run `up` so the change takes effect:
 ```bash
 docker network inspect omxterm-edge -f '{{(index .IPAM.Config 0).Subnet}}'
 # Put the printed subnet in .env as OMXTERM_TRUST_PROXY=<subnet>, then:
-docker compose -f compose.yml -f compose.prod.yml up -d
+docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d
 ```
 
 A reverse proxy running in its own stack is not on `omxterm-edge` yet — attach it
@@ -199,9 +199,9 @@ this same Compose project is already on the network and needs no connect step.
 
 ## 4. Add basic-auth credentials (optional)
 
-Basic auth is an extra barrier in front of OMXTerm's own access gate, useful
+Basic auth is an extra barrier in front of OMXTerm Web's own access gate, useful
 while the deploy is still a private preview. Point your proxy at a dedicated
-bcrypt users file so OMXTerm's credentials stay separate from anything else the
+bcrypt users file so OMXTerm Web's credentials stay separate from anything else the
 proxy serves:
 
 ```bash
@@ -214,7 +214,7 @@ htpasswd -nB <user> | sudo tee -a /etc/omxterm/auth/omxterm-usersfile
 `-b '<password>'`: that exposes it to shell history and process listings.)
 
 Before you route a public hostname to it in step 5, read
-[`docs/public-exposure.md`](./public-exposure.md): what OMXTerm's own rate
+[`docs/public-exposure.md`](./public-exposure.md): what OMXTerm Web's own rate
 limits and concurrency caps do and don't protect against, `OMXTERM_TRUST_PROXY`
 pitfalls, and an optional edge rate-limit recipe for whichever proxy you use.
 
@@ -226,7 +226,7 @@ maps — don't duplicate the top-level keys). The router and middleware are the
 same for both topologies from step 3; only the service URL differs:
 
 The example includes the optional preview BasicAuth from step 4. If you skipped
-that step and want OMXTerm's own access gate to be the public login, omit both
+that step and want OMXTerm Web's own access gate to be the public login, omit both
 the router's `middlewares` block and the `omxterm-auth` middleware definition.
 Do not leave a router reference to a middleware you did not create.
 
@@ -281,7 +281,7 @@ http:
 The file provider applies the change on save (`watch=true`) — no proxy restart.
 Watch the proxy logs for parse errors after saving.
 
-> Do **not** reuse an unrelated strict security-headers middleware. OMXTerm sets
+> Do **not** reuse an unrelated strict security-headers middleware. OMXTerm Web sets
 > its own CSP and headers via `@fastify/helmet`; a `default-src 'none'` CSP from
 > another site would break the app.
 
@@ -306,14 +306,14 @@ curl -sI https://omxterm.example.com | head -n 1   # 401 (basic auth)
 # and shell history.
 curl -sI -u <user> https://omxterm.example.com | head -n 1   # 200
 
-# Without the optional BasicAuth, OMXTerm's access-gate page is public:
+# Without the optional BasicAuth, OMXTerm Web's access-gate page is public:
 curl -sI https://omxterm.example.com | head -n 1   # 200
 ```
 
-If your proxy fronts other routes, confirm the OMXTerm rollout did not disturb
+If your proxy fronts other routes, confirm the OMXTerm Web rollout did not disturb
 them — the proxy container and the other routes should be unchanged.
 
-Then in a browser: clear the basic-auth prompt, if configured → the OMXTerm
+Then in a browser: clear the basic-auth prompt, if configured → the OMXTerm Web
 access gate → enter the access token → fill the SSH form for an allowed host →
 confirm the host-key fingerprint → use the terminal. The full walkthrough is in
 [`usage.md`](./usage.md).
@@ -322,7 +322,7 @@ If the SSH step fails to reach a host inside `OMXTERM_SSH_ALLOWED_CIDR`, confirm
 the container can route to that network:
 
 ```bash
-docker compose exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
+docker compose --project-name omxterm exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
 ```
 
 ---
@@ -330,12 +330,14 @@ docker compose exec omxterm sh -lc 'getent hosts 10.0.0.2 || true'
 ## Updating
 
 Run the deploy helper. It fast-forwards `main` and rebuilds **only** the
-OMXTerm service, leaving the reverse proxy and any other routes running. It
+OMXTerm Web service, leaving the reverse proxy and any other routes running. It
 applies the production override by default, so an update keeps the broker on
-`omxterm-edge` for a separate-stack proxy:
+`omxterm-edge` for a separate-stack proxy. The helper also pins the Compose
+project to `omxterm`, preserving the existing stack when the checkout lives in
+the `omxterm-web` directory:
 
 ```bash
-/opt/omxterm/scripts/deploy
+/opt/omxterm-web/scripts/deploy
 ```
 
 It stops before any Docker action when the checkout is dirty or `main` has
@@ -343,17 +345,17 @@ diverged from its upstream, so it never discards local work or rewrites history.
 To deploy the plain portable baseline instead, clear the override:
 
 ```bash
-OMXTERM_COMPOSE_OVERRIDE= /opt/omxterm/scripts/deploy
+OMXTERM_COMPOSE_OVERRIDE= /opt/omxterm-web/scripts/deploy
 ```
 
 To roll out by hand instead (app service only; don't touch the proxy):
 
 ```bash
-cd /opt/omxterm
+cd /opt/omxterm-web
 git fetch origin && git merge --ff-only origin/main
-docker compose up -d --build omxterm                                  # portable baseline
+docker compose --project-name omxterm up -d --build omxterm                                  # portable baseline
 # or, for the production edge topology:
-docker compose -f compose.yml -f compose.prod.yml up -d --build omxterm
+docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d --build omxterm
 ```
 
 The stores are in-memory, so a rebuild drops active sessions and pending tickets
@@ -364,8 +366,8 @@ The stores are in-memory, so a rebuild drops active sessions and pending tickets
 Roll back the app service only; the edge stays up throughout.
 
 ```bash
-cd /opt/omxterm
+cd /opt/omxterm-web
 git checkout <previous-good-sha>       # detached HEAD, non-destructive
-docker compose up -d --build omxterm   # add -f compose.prod.yml for the edge topology
+docker compose --project-name omxterm up -d --build omxterm   # add -f compose.prod.yml for the edge topology
 # If a proxy config edit caused it, restore the backup you made in step 5.
 ```

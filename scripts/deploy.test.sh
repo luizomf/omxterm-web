@@ -46,7 +46,7 @@ setup_sandbox() {
   SANDBOX="$(mktemp -d)"
   sandboxes+=("${SANDBOX}")
   REMOTE="${SANDBOX}/remote.git"
-  APP="${SANDBOX}/omxterm"
+  APP="${SANDBOX}/omxterm-web"
   FAKEBIN="${SANDBOX}/bin"
   DOCKER_LOG="${SANDBOX}/docker.log"
   OUT_LOG="${SANDBOX}/out.log"
@@ -102,6 +102,8 @@ test_clean_uptodate_deploys_app_only() {
     return
   fi
   docker_ran || fail_test "expected docker compose to run"
+  grep -q -- "--project-name omxterm" "${DOCKER_LOG}" ||
+    fail_test "expected the existing omxterm Compose project to be preserved"
   grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
   if grep -qiE "traefik|nginx|caddy" "${DOCKER_LOG}"; then
     fail_test "must not touch the reverse-proxy edge stack"
@@ -238,6 +240,8 @@ test_ignores_generic_project_dirs() {
     return
   fi
   docker_ran || fail_test "expected docker compose to run against the namespaced checkout"
+  grep -q -- "--project-name omxterm" "${DOCKER_LOG}" ||
+    fail_test "expected the existing omxterm Compose project to be preserved"
   grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
   pass_test "resolved via OMXTERM_CODE_DIR, generic PROJECTS_DIR/CODE_DIR ignored"
 }

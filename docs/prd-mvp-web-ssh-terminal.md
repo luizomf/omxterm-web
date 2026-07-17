@@ -1,4 +1,4 @@
-# PRD: OMXTerm MVP — Browser SSH Terminal
+# PRD: OMXTerm Web MVP — Browser SSH Terminal
 
 ## Problem Statement
 
@@ -15,7 +15,7 @@ rewriting the terminal emulator.
 
 ## Solution
 
-Build OMXTerm as a TypeScript full-stack web app that brokers a browser terminal
+Build OMXTerm Web as a TypeScript full-stack web app that brokers a browser terminal
 to a user-provided SSH target.
 
 The user passes an access gate, enters SSH connection inputs, confirms the SSH
@@ -126,7 +126,7 @@ dashboards, no gratuitous metrics.
   tokens, device tokens, terminal tickets, host-key confirmation, or
   product-specific flows.
 - Use a terminal transport adapter interface on the frontend. The MVP adapter
-  speaks OMXTerm WebSocket protocol.
+  speaks OMXTerm Web's WebSocket protocol.
 - Use an access token configured by environment variable as the MVP access gate.
 - After a valid access gate, create secure HttpOnly SameSite cookies for an
   access session and a random device token.
@@ -169,7 +169,7 @@ dashboards, no gratuitous metrics.
   sudo policy, and operating system.
 - The MVP does not promise to prevent a user from connecting as root; it must
   explain that remote privileges are the user's responsibility.
-- UI direction: dark premium terminal-first product, using the OMXTerm palette
+- UI direction: dark premium terminal-first product, using the OMXTerm Web palette
   with cyan/teal primary accent, blue/purple support, and green reserved for
   ANSI or semantic success only.
 - Initial UI flow: access gate, connection gate, host-key confirmation, focused
@@ -278,7 +278,7 @@ Verification before declaring the MVP done:
 - Publishing the terminal emulator as an npm package.
 - Admin panel.
 - Public anonymous terminal access.
-- A claim that OMXTerm controls privileges on the SSH target.
+- A claim that OMXTerm Web controls privileges on the SSH target.
 
 ## Further Notes
 

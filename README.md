@@ -1,9 +1,9 @@
-# OMXTerm
+# OMXTerm Web
 
 A browser-based SSH terminal MVP built with TypeScript, React, xterm.js,
 Fastify, WebSocket, and `ssh2`.
 
-OMXTerm is not a shell running in the browser. xterm.js renders the terminal UI;
+OMXTerm Web is not a shell running in the browser. xterm.js renders the terminal UI;
 the backend brokers a WebSocket connection to a real SSH session on a
 user-provided target.
 
@@ -63,7 +63,7 @@ npm run build
 ### Disposable browser-to-SSH E2E
 
 The opt-in end-to-end check exercises a real browser, the production-like
-OMXTerm image, and a repository-configured OpenSSH fixture without using a real
+OMXTerm Web image, and a repository-configured OpenSSH fixture without using a real
 SSH host or user credentials:
 
 ```bash
@@ -78,7 +78,7 @@ the default fast test suite.
 
 Each invocation creates a unique Compose project, access token, client key,
 host key, loopback browser port, and OS temp directory. The browser reaches only
-`127.0.0.1` through a non-root TCP gateway; the OMXTerm process and SSH fixture
+`127.0.0.1` through a non-root TCP gateway; the OMXTerm Web process and SSH fixture
 share only an `internal` Docker network with no published SSH port. The broker's
 SSH egress allowlist contains only the fixture's run-specific address. The test
 calculates the expected fingerprint from the generated host public key
@@ -127,13 +127,13 @@ token, SSH form, host-key confirmation, and what the terminal can do.
 The defaults target `localhost`. Any deploy reachable over an untrusted network
 must run behind HTTPS/WSS, because the auth cookies (`omxterm_session_*`,
 `omxterm_device_*`) **are** the authentication and would otherwise travel in
-cleartext. OMXTerm does not terminate TLS itself; put it behind a reverse proxy
+cleartext. OMXTerm Web does not terminate TLS itself; put it behind a reverse proxy
 (e.g. Traefik, Caddy, nginx) that does.
 
-**Before exposing OMXTerm on a public hostname**, know the difference
+**Before exposing OMXTerm Web on a public hostname**, know the difference
 between what the broker rate-limits itself (access-gate brute force,
 post-auth probe/ticket abuse, concurrent sessions/connections) and what it
-does not defend against (botnets, volumetric/distributed DoS, TLS). OMXTerm
+does not defend against (botnets, volumetric/distributed DoS, TLS). OMXTerm Web
 makes no DDoS-resistance claim — application limits complement edge rate
 limiting, firewalling, your provider's DDoS protection, and a WAF where
 appropriate; they do not replace them. See
@@ -173,7 +173,7 @@ app-scoped rollout (reverse proxy in its own stack, reached over a shared Docker
 network) layers `compose.prod.yml` on top:
 
 ```bash
-docker compose -f compose.yml -f compose.prod.yml up -d --build
+docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d --build
 ```
 
 For a step-by-step container rollout behind a reverse proxy (Docker, Compose,

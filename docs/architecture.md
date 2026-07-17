@@ -1,6 +1,6 @@
-# OMXTerm MVP architecture
+# OMXTerm Web MVP architecture
 
-OMXTerm is a browser SSH terminal, not a local sandbox terminal. Three
+OMXTerm Web is a browser SSH terminal, not a local sandbox terminal. Three
 components talk to each other, and only the broker ever speaks SSH.
 
 For a didactic, end-to-end walkthrough of the security flow (access gate →
@@ -11,7 +11,7 @@ sequence diagram of the request/response flow.
 ## Component map
 
 ```text
-        BROWSER                        OMXTERM BROKER                      SSH TARGET
+        BROWSER                      OMXTERM WEB BROKER                    SSH TARGET
    Vite / React / xterm.js          Node · Fastify · ws                      sshd
  ┌─────────────────────┐        ┌────────────────────────────┐        ┌──────────────┐
  │  access gate        │        │  POST /api/access          │        │              │
@@ -36,4 +36,4 @@ sequence diagram of the request/response flow.
 - The private key/passphrase are not persisted by the MVP.
 - SSH host key trust is explicit per session; persistent `known_hosts` is out of
   MVP scope.
-- Remote privileges are controlled by the SSH target, not by OMXTerm.
+- Remote privileges are controlled by the SSH target, not by OMXTerm Web.

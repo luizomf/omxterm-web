@@ -1,12 +1,12 @@
 name: Feature request
-description: Suggest an enhancement for OMXTerm
+description: Suggest an enhancement for OMXTerm Web
 title: "feat: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        OMXTerm is a small, scope-locked MVP. Features outside
+        OMXTerm Web is a small, scope-locked MVP. Features outside
         `docs/prd-mvp-web-ssh-terminal.md` require updating the PRD first — see `AGENTS.md`.
   - type: textarea
     id: problem

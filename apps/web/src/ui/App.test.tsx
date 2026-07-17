@@ -41,6 +41,25 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+test('shows the OMXTerm Web product identity', async () => {
+  render(<App />);
+
+  expect(
+    screen.getByRole('heading', { level: 1, name: 'OMXTerm Web' }),
+  ).toBeInTheDocument();
+});
+
+test('uses the OMXTerm Web identity on the access gate', async () => {
+  const { checkAuth } = await import('../api');
+  vi.mocked(checkAuth).mockResolvedValueOnce(false);
+
+  render(<App />);
+
+  expect(
+    await screen.findByRole('button', { name: 'Unlock OMXTerm Web' }),
+  ).toBeInTheDocument();
+});
+
 async function reachHostKeyConfirmation() {
   const view = renderHook(() => useSshBrokerFlow());
   await waitFor(() => expect(view.result.current.step).toBe('connect'));

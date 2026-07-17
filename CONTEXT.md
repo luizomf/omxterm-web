@@ -52,7 +52,7 @@ A replaceable backend port that creates a terminal session against a target. The
 MVP connector uses SSH, but the product language keeps this generic so future
 connectors can use containers, local PTYs, or other execution environments.
 
-### OMXTerm theme
+### OMXTerm Web theme
 
 The project's visual language uses a hand-made terminal palette as the product
 palette. It is dark, premium, and terminal-native, but it avoids the overused
@@ -94,6 +94,6 @@ backend should be able to drive it through a small adapter contract.
 ### Terminal transport adapter
 
 A frontend port used by the terminal emulator component to connect, send input,
-send resize events, receive output, and close. The MVP adapter speaks OMXTerm's
-WebSocket protocol, but the component must not know about SSH forms, access
-tokens, device tokens, or backend-specific product flows.
+send resize events, receive output, and close. The MVP adapter speaks OMXTerm
+Web's WebSocket protocol, but the component must not know about SSH forms,
+access tokens, device tokens, or backend-specific product flows.
