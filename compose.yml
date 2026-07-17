@@ -17,14 +17,15 @@
 #
 #     docker compose -f compose.yml -f compose.prod.yml up -d --build
 services:
-  omxterm:
+  omxterm-web:
     build: .
     # Deliberately no container_name: a fixed name is daemon-global, so a fresh
-    # clone would collide with any other OMXTerm container already on the host
+    # clone would collide with any other OMXTerm Web container already on the host
     # (e.g. the maintainer's deployment) and could not `docker compose up`
     # alongside it — defeating Compose's per-project isolation. Left unset,
-    # Compose derives a project-scoped name, and the service name `omxterm` stays
-    # a network alias, so an in-network proxy still reaches http://omxterm:3000
+    # Compose derives a project-scoped name, and the service name `omxterm-web`
+    # stays a network alias, so an in-network proxy reaches
+    # http://omxterm-web:3000
     # (see compose.prod.yml and docs/deploy.md).
     # `unless-stopped` (not `always`) so a self-hoster's deliberate `docker stop`
     # sticks across daemon restarts/reboots. The maintainer's production rollout

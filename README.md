@@ -173,7 +173,7 @@ app-scoped rollout (reverse proxy in its own stack, reached over a shared Docker
 network) layers `compose.prod.yml` on top:
 
 ```bash
-docker compose --project-name omxterm -f compose.yml -f compose.prod.yml up -d --build
+docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml up -d --build
 ```
 
 For a step-by-step container rollout behind a reverse proxy (Docker, Compose,

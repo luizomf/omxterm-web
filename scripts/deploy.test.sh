@@ -95,7 +95,7 @@ docker_ran() { [ -s "${DOCKER_LOG}" ]; }
 head_sha() { git -C "${APP}" rev-parse HEAD; }
 
 test_clean_uptodate_deploys_app_only() {
-  echo "clean + up-to-date deploys only the omxterm service"
+  echo "clean + up-to-date deploys only the omxterm-web service"
   setup_sandbox
 
   if ! run_deploy; then
@@ -103,9 +103,9 @@ test_clean_uptodate_deploys_app_only() {
     return
   fi
   docker_ran || fail_test "expected docker compose to run"
-  grep -q -- "--project-name omxterm" "${DOCKER_LOG}" ||
-    fail_test "expected the existing omxterm Compose project to be preserved"
-  grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
+  grep -q -- "--project-name omxterm-web" "${DOCKER_LOG}" ||
+    fail_test "expected the omxterm-web Compose project"
+  grep -q "omxterm-web" "${DOCKER_LOG}" || fail_test "expected the omxterm-web service to be recreated"
   if grep -qiE "traefik|nginx|caddy" "${DOCKER_LOG}"; then
     fail_test "must not touch the reverse-proxy edge stack"
   fi
@@ -126,7 +126,7 @@ test_applies_production_override() {
   grep -q -- "-f compose.yml" "${DOCKER_LOG}" || fail_test "expected the portable baseline compose.yml to be applied"
   grep -q -- "-f compose.prod.yml" "${DOCKER_LOG}" ||
     fail_test "expected the production edge override compose.prod.yml to be applied"
-  grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
+  grep -q "omxterm-web" "${DOCKER_LOG}" || fail_test "expected the omxterm-web service to be recreated"
   pass_test "baseline + production override applied, app-scoped"
 }
 
@@ -241,19 +241,19 @@ test_ignores_generic_project_dirs() {
     return
   fi
   docker_ran || fail_test "expected docker compose to run against the namespaced checkout"
-  grep -q -- "--project-name omxterm" "${DOCKER_LOG}" ||
-    fail_test "expected the existing omxterm Compose project to be preserved"
-  grep -q "omxterm" "${DOCKER_LOG}" || fail_test "expected the omxterm service to be recreated"
+  grep -q -- "--project-name omxterm-web" "${DOCKER_LOG}" ||
+    fail_test "expected the omxterm-web Compose project"
+  grep -q "omxterm-web" "${DOCKER_LOG}" || fail_test "expected the omxterm-web service to be recreated"
   pass_test "resolved via OMXTERM_CODE_DIR, generic PROJECTS_DIR/CODE_DIR ignored"
 }
 
 test_docs_keep_portable_compose_project_isolation() {
-  echo "portable docs derive the Compose project; maintainer rollout pins the existing stack"
+  echo "portable docs derive the Compose project; maintainer rollout pins omxterm-web"
   local portable_docs updating_docs
   portable_docs="$(sed '/^## Updating$/,$d' "${DEPLOY_DOC}")"
   updating_docs="$(sed -n '/^## Updating$/,$p' "${DEPLOY_DOC}")"
 
-  if grep -F -q -- '--project-name omxterm' <<<"${portable_docs}"; then
+  if grep -F -q -- '--project-name omxterm-web' <<<"${portable_docs}"; then
     fail_test "fresh-clone documentation must not adopt the maintainer Compose project"
     return
   fi
@@ -265,8 +265,8 @@ test_docs_keep_portable_compose_project_isolation() {
     fail_test "portable subnet lookup must use the directory-derived omxterm-web_default network"
     return
   fi
-  if ! grep -F -q -- '--project-name omxterm' <<<"${updating_docs}"; then
-    fail_test "maintainer migration/rollout must preserve the existing omxterm Compose project"
+  if ! grep -F -q -- '--project-name omxterm-web' <<<"${updating_docs}"; then
+    fail_test "maintainer rollout must pin the omxterm-web Compose project"
     return
   fi
   pass_test "fresh clones remain isolated; existing maintainer rollout remains continuous"

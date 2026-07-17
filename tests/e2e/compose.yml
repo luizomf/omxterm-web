@@ -21,7 +21,7 @@ services:
       timeout: 2s
       retries: 20
 
-  omxterm:
+  omxterm-web:
     build:
       context: ../..
     restart: "no"
@@ -54,7 +54,7 @@ services:
       context: ./loopback-gateway
     restart: "no"
     depends_on:
-      omxterm:
+      omxterm-web:
         condition: service_healthy
     ports:
       - "127.0.0.1:${OMXTERM_E2E_BROWSER_PORT:?browser port is required}:3000"

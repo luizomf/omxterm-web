@@ -6,4 +6,4 @@ RUN apt-get update \
 
 USER nobody
 
-ENTRYPOINT ["socat", "TCP-LISTEN:3000,fork,reuseaddr", "TCP:omxterm:3000"]
+ENTRYPOINT ["socat", "TCP-LISTEN:3000,fork,reuseaddr", "TCP:omxterm-web:3000"]
