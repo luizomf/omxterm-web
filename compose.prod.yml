@@ -11,19 +11,19 @@
 # proxy-agnostic: it wires the shared-network seam only and prescribes no proxy
 # product, domain, or address. See docs/deploy.md.
 services:
-  omxterm:
+  omxterm-web:
     # Production keeps the pre-#101 `always` policy (commit 4744e08): the broker
     # must come back after daemon restarts/reboots even if it was manually
     # stopped before them. The portable baseline stays `unless-stopped` so a
     # self-hoster's deliberate `docker stop` sticks across reboots (issue #108).
     restart: always
     # Join a neutral, stably-named network a separate-stack reverse proxy can
-    # attach to (`docker network connect omxterm-edge <proxy>`) and then reach
-    # the broker as http://omxterm:3000. Created by Compose on `up`, so nothing
+    # attach to (`docker network connect omxterm-web-edge <proxy>`) and then reach
+    # the broker as http://omxterm-web:3000. Created by Compose on `up`, so nothing
     # has to be pre-created out of band.
     networks:
       - edge
 
 networks:
   edge:
-    name: omxterm-edge
+    name: omxterm-web-edge

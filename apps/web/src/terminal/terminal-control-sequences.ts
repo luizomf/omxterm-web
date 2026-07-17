@@ -2,7 +2,7 @@ import type { IDisposable, Terminal } from '@xterm/xterm';
 import { handleOsc52, type HostClipboardWriter } from './osc52-clipboard';
 
 /**
- * Registers the remote-controlled OSC handlers owned by OMXTerm.
+ * Registers the remote-controlled OSC handlers owned by OMXTerm Web.
  *
  * xterm core handles OSC 8 even without WebLinksAddon and retains each URI for
  * as long as linked cells remain in scrollback. The MVP does not need semantic

@@ -16,7 +16,7 @@
 #   - Fresh-clone copy: tracked + untracked-unignored files into a temp dir, so
 #     the local .env, node_modules, or a live checkout state never leak in.
 #   - Unique Compose project name, so containers/networks/images are scoped to
-#     this run and cannot collide with any existing OMXTerm project.
+#     this run and cannot collide with any existing OMXTerm Web project.
 #   - A test-harness port override (`ports: !override 127.0.0.1:0:3000`) asks
 #     the kernel for a free ephemeral loopback port, so a broker already
 #     listening on 3000 (dev server or real deploy) is never disturbed.
@@ -43,7 +43,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 WORK="$(mktemp -d)"
-PROJECT="omxterm-it-$(basename "${WORK}" | tr 'A-Z' 'a-z' | tr -dc 'a-z0-9' | tail -c 8)"
+PROJECT="omxterm-web-it-$(basename "${WORK}" | tr 'A-Z' 'a-z' | tr -dc 'a-z0-9' | tail -c 8)"
 COMPOSE=(docker compose -p "${PROJECT}" -f "${WORK}/compose.yml" -f "${WORK}/compose.override.yml")
 
 cleanup() {
@@ -73,7 +73,7 @@ printf '\nOMXTERM_ACCESS_TOKEN=%s\nOMXTERM_SECURE_COOKIES=true\n' "${TOKEN}" >> 
 # the baseline's port list instead of merging with it.
 cat > "${WORK}/compose.override.yml" <<'YAML'
 services:
-  omxterm:
+  omxterm-web:
     ports: !override
       - "127.0.0.1:0:3000"
 YAML
@@ -86,9 +86,9 @@ if ! "${COMPOSE[@]}" up -d --build >"${WORK}/up.log" 2>&1; then
 fi
 
 # `docker compose port` prints e.g. 127.0.0.1:49154 for the ephemeral mapping.
-ADDRESS="$("${COMPOSE[@]}" port omxterm 3000)"
+ADDRESS="$("${COMPOSE[@]}" port omxterm-web 3000)"
 if [ -z "${ADDRESS}" ]; then
-  echo "  FAIL: no published port for omxterm:3000"
+  echo "  FAIL: no published port for omxterm-web:3000"
   "${COMPOSE[@]}" ps
   exit 1
 fi
@@ -104,7 +104,7 @@ until body="$(node -e '
 ' "${ADDRESS}")"; do
   if [ "${SECONDS}" -ge "${deadline}" ]; then
     echo "  FAIL: /health not reachable within ${HEALTH_TIMEOUT_SECONDS}s; broker logs:"
-    "${COMPOSE[@]}" logs --tail 40 omxterm
+    "${COMPOSE[@]}" logs --tail 40 omxterm-web
     exit 1
   fi
   sleep 2
@@ -119,7 +119,7 @@ case "${body}" in
 esac
 
 echo "verifying non-root runtime user"
-if ! runtime_uid="$("${COMPOSE[@]}" exec -T omxterm id -u)"; then
+if ! runtime_uid="$("${COMPOSE[@]}" exec -T omxterm-web id -u)"; then
   echo "  FAIL: could not read the broker runtime UID"
   exit 1
 fi

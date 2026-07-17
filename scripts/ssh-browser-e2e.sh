@@ -30,7 +30,7 @@ if [ -z "${TEMP_ROOT}" ] || [ "${TEMP_ROOT}" = '/' ] || [ ! -d "${TEMP_ROOT}" ];
   exit 1
 fi
 
-WORK_CANDIDATE="$(mktemp -d "${TEMP_ROOT}/omxterm-e2e.XXXXXXXXXX")" || {
+WORK_CANDIDATE="$(mktemp -d "${TEMP_ROOT}/omxterm-web-e2e.XXXXXXXXXX")" || {
   echo "ssh-browser-e2e.sh: could not create the temporary work directory" >&2
   exit 1
 }
@@ -40,7 +40,7 @@ WORK="$(realpath "${WORK_CANDIDATE}" 2>/dev/null)" || {
   exit 1
 }
 case "${WORK}" in
-  "${TEMP_ROOT}"/omxterm-e2e.*) ;;
+  "${TEMP_ROOT}"/omxterm-web-e2e.*) ;;
   *)
     echo "ssh-browser-e2e.sh: temporary work directory is outside the OS temp directory" >&2
     exit 1
@@ -53,7 +53,7 @@ if [ -z "${RUN_ID}" ]; then
   echo "ssh-browser-e2e.sh: could not derive a safe run id" >&2
   exit 1
 fi
-PROJECT="omxterm-e2e-${RUN_ID}"
+PROJECT="omxterm-web-e2e-${RUN_ID}"
 COMPOSE_FILE="${REPO_ROOT}/tests/e2e/compose.yml"
 COMPOSE=(docker compose --project-name "${PROJECT}" --file "${COMPOSE_FILE}")
 RUN_BOUNDED=(bash "${REPO_ROOT}/scripts/run-bounded-command.sh")
@@ -104,7 +104,7 @@ cleanup() {
   fi
 
   case "${WORK}" in
-    "${TEMP_ROOT}"/omxterm-e2e.*)
+    "${TEMP_ROOT}"/omxterm-web-e2e.*)
       rm -rf "${WORK}" || cleanup_failed=1
       ;;
     *)
@@ -194,11 +194,11 @@ if [ -z "${OMXTERM_E2E_ACCESS_TOKEN}" ]; then
   exit 1
 fi
 
-if ! ssh-keygen -q -t ed25519 -N '' -C "omxterm-e2e-client-${RUN_ID}" -f "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}"; then
+if ! ssh-keygen -q -t ed25519 -N '' -C "omxterm-web-e2e-client-${RUN_ID}" -f "${OMXTERM_E2E_CLIENT_PRIVATE_KEY}"; then
   echo "ssh-browser-e2e.sh: SSH client-key generation failed" >&2
   exit 1
 fi
-if ! ssh-keygen -q -t ed25519 -N '' -C "omxterm-e2e-host-${RUN_ID}" -f "${OMXTERM_E2E_HOST_PRIVATE_KEY}"; then
+if ! ssh-keygen -q -t ed25519 -N '' -C "omxterm-web-e2e-host-${RUN_ID}" -f "${OMXTERM_E2E_HOST_PRIVATE_KEY}"; then
   echo "ssh-browser-e2e.sh: SSH host-key generation failed" >&2
   exit 1
 fi

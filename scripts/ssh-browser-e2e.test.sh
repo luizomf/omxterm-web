@@ -60,11 +60,11 @@ if [ "${OMXTERM_E2E_TEST_HANG:-}" = "docker-${operation}" ]; then sleep 30; fi
 format="$2"
 target="$3"
 case "${format}:${target}" in
-  *NetworkSettings.Networks*id-omxterm|*NetworkSettings.Networks*id-ssh-fixture) echo 1 ;;
+  *NetworkSettings.Networks*id-omxterm-web|*NetworkSettings.Networks*id-ssh-fixture) echo 1 ;;
   *NetworkSettings.Networks*id-loopback-gateway) echo 2 ;;
-  *PortBindings*id-omxterm|*PortBindings*id-ssh-fixture) echo '{}' ;;
+  *PortBindings*id-omxterm-web|*PortBindings*id-ssh-fixture) echo '{}' ;;
   *Config.User*id-loopback-gateway) echo nobody ;;
-  *Internal*omxterm-e2e-test_isolated) echo true ;;
+  *Internal*omxterm-web-e2e-test_isolated) echo true ;;
   *) exit 3 ;;
 esac
 EOF
@@ -73,7 +73,7 @@ chmod +x "${FAKE_BIN}/fake-compose" "${FAKE_BIN}/docker"
 PATH="${FAKE_BIN}:${PATH}"
 export PATH OMXTERM_E2E_BROWSER_PORT=32123
 # shellcheck disable=SC2034 # Consumed by the sourced E2E library.
-PROJECT='omxterm-e2e-test'
+PROJECT='omxterm-web-e2e-test'
 # shellcheck disable=SC2034 # Consumed by the sourced E2E library.
 COMPOSE=("${FAKE_BIN}/fake-compose")
 # shellcheck source=scripts/ssh-browser-e2e-lib.sh

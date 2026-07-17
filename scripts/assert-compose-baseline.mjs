@@ -21,9 +21,9 @@ if (mode !== "baseline" && mode !== "prod") {
 }
 
 const config = JSON.parse(readFileSync(0, "utf8"));
-const broker = config.services?.omxterm;
+const broker = config.services?.["omxterm-web"];
 if (!broker) {
-  fail("no omxterm service in the resolved compose config");
+  fail("no omxterm-web service in the resolved compose config");
 }
 
 const networks = config.networks ?? {};
@@ -86,7 +86,7 @@ function assertContainerBindsAllInterfaces(service) {
   const boundHost = service.environment?.OMXTERM_SERVER_HOST;
   if (boundHost !== "0.0.0.0") {
     fail(
-      `omxterm resolves OMXTERM_SERVER_HOST to "${boundHost ?? "<unset>"}" inside the container; ` +
+      `omxterm-web resolves OMXTERM_SERVER_HOST to "${boundHost ?? "<unset>"}" inside the container; ` +
         'the baseline must pin it to "0.0.0.0" via `environment:` so .env.example\'s ' +
         "127.0.0.1 default (meant for local `npm run dev`) cannot shadow the container bind",
     );
@@ -112,7 +112,7 @@ function assertNoPinnedAddress(service) {
   for (const [key, attachment] of Object.entries(service.networks ?? {})) {
     if (attachment && (attachment.ipv4_address || attachment.ipv6_address)) {
       fail(
-        `omxterm pins a fixed address on network "${key}" ` +
+        `omxterm-web pins a fixed address on network "${key}" ` +
           `(${attachment.ipv4_address ?? attachment.ipv6_address}); the portable baseline must not`,
       );
     }
@@ -120,16 +120,16 @@ function assertNoPinnedAddress(service) {
 }
 
 // A fixed container_name is daemon-global: two projects that both set it cannot
-// run at once, so a fresh clone would collide with any other OMXTerm container
+// run at once, so a fresh clone would collide with any other OMXTerm Web container
 // on the host and could not `docker compose up` alongside it. Unset, Compose
 // derives a project-scoped name and the service name stays a network alias, so
 // nothing needs a hardcoded name (issue #96).
 function assertNoGlobalContainerName(service) {
   if (service.container_name) {
     fail(
-      `omxterm pins a daemon-global container_name "${service.container_name}"; the portable ` +
+      `omxterm-web pins a daemon-global container_name "${service.container_name}"; the portable ` +
         "baseline must let Compose derive a project-scoped name so a fresh clone can run " +
-        "alongside another OMXTerm deployment instead of competing for one global name",
+        "alongside another OMXTerm Web deployment instead of competing for one global name",
     );
   }
 }
@@ -142,7 +142,7 @@ function assertRestartPolicy(service, expected) {
   const actual = service.restart;
   if (actual !== expected) {
     fail(
-      `omxterm resolves restart policy "${actual ?? "<unset>"}"; expected "${expected}" ` +
+      `omxterm-web resolves restart policy "${actual ?? "<unset>"}"; expected "${expected}" ` +
         "(baseline: unless-stopped so a manual stop sticks; prod override: always)",
     );
   }
@@ -151,13 +151,13 @@ function assertRestartPolicy(service, expected) {
 function assertReachableSharedNetwork(service, allNetworks) {
   const attached = Object.keys(service.networks ?? {});
   if (attached.length === 0) {
-    fail("omxterm is on no explicit network; a separate-stack reverse proxy could not reach omxterm:3000");
+    fail("omxterm-web is on no explicit network; a separate-stack reverse proxy could not reach omxterm-web:3000");
   }
   for (const key of attached) {
     const network = allNetworks[key] ?? {};
     if (network.external) {
       fail(
-        `omxterm network "${key}" is declared external; Compose would not create it, ` +
+        `omxterm-web network "${key}" is declared external; Compose would not create it, ` +
           "so the documented attach-and-reach path could not be bootstrapped from a clone",
       );
     }
@@ -169,7 +169,7 @@ function assertReachableSharedNetwork(service, allNetworks) {
       !resolvedName.endsWith("_default");
     if (!isStableShared) {
       fail(
-        `omxterm network "${key}" has no stable shared name a proxy can attach to ` +
+        `omxterm-web network "${key}" has no stable shared name a proxy can attach to ` +
           `(resolved: ${resolvedName || "<project default>"})`,
       );
     }
