@@ -261,6 +261,10 @@ test_docs_keep_portable_compose_project_isolation() {
     fail_test "portable baseline command must use Compose directory-derived project semantics"
     return
   fi
+  if ! grep -F -q -- "docker network inspect omxterm-web_default -f '{{(index .IPAM.Config 0).Subnet}}'" <<<"${portable_docs}"; then
+    fail_test "portable subnet lookup must use the directory-derived omxterm-web_default network"
+    return
+  fi
   if ! grep -F -q -- '--project-name omxterm' <<<"${updating_docs}"; then
     fail_test "maintainer migration/rollout must preserve the existing omxterm Compose project"
     return

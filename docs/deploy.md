@@ -163,7 +163,7 @@ multi-tenant host be strict instead: set it to the Docker network's subnet, whic
 covers the host-side bridge address the proxy connects from:
 
 ```bash
-docker network inspect omxterm_default -f '{{(index .IPAM.Config 0).Subnet}}'
+docker network inspect omxterm-web_default -f '{{(index .IPAM.Config 0).Subnet}}'
 ```
 
 ### 3b. Production override — proxy in its own stack
