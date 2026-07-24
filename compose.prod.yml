@@ -27,3 +27,4 @@ services:
 networks:
   edge:
     name: omxterm-web-edge
+    external: true
