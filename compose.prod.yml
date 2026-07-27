@@ -17,12 +17,12 @@ services:
     # stopped before them. The portable baseline stays `unless-stopped` so a
     # self-hoster's deliberate `docker stop` sticks across reboots (issue #108).
     restart: always
-    # Join a neutral, stably-named network a separate-stack reverse proxy can
-    # attach to (`docker network connect omxterm-web-edge <proxy>`) and then reach
-    # the broker as http://omxterm-web:3000. Created by Compose on `up`, so nothing
-    # has to be pre-created out of band.
+    # The host firewall allows this exact source address to SSH back into the
+    # host for the self-target demo. Keep it outside the edge network's dynamic
+    # 10.210.0.128/25 pool so every forced recreate preserves the rule match.
     networks:
-      - edge
+      edge:
+        ipv4_address: 10.210.0.10
 
 networks:
   edge:
