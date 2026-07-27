@@ -18,8 +18,9 @@ OMXTerm Web ships two Compose paths:
   fresh clone runs.
 - **Production override** (`compose.prod.yml`, opt-in) — the maintainer's
   app-scoped rollout, where the reverse proxy runs in its own stack and reaches
-  the broker over a shared, stably-named Docker network. Layered explicitly on
-  top of the baseline.
+  the broker at `10.210.0.10` over the pre-created `omxterm-web-edge` network.
+  The fixed address keeps the host's narrow SSH firewall rule valid across
+  container recreates. Layered explicitly on top of the baseline.
 
 Pick the path that matches where your proxy runs; both serve the same image.
 
@@ -168,8 +169,21 @@ docker network inspect omxterm-web_default -f '{{(index .IPAM.Config 0).Subnet}}
 
 ### 3b. Production override — proxy in its own stack
 
-Layer `compose.prod.yml` explicitly to put the broker on the shared
-`omxterm-web-edge` network (Compose creates it on `up`; nothing is pre-created):
+The production override expects a persistent edge network whose lower half is
+reserved for fixed service addresses and whose upper half is Docker's dynamic
+pool. Create it once; later deploys reuse it instead of replacing it:
+
+```bash
+docker network create \
+  --driver bridge \
+  --subnet 10.210.0.0/24 \
+  --ip-range 10.210.0.128/25 \
+  --gateway 10.210.0.1 \
+  omxterm-web-edge
+```
+
+Layer `compose.prod.yml` explicitly to put the broker at `10.210.0.10` on that
+network:
 
 ```bash
 cd /opt/omxterm-web
@@ -177,8 +191,8 @@ docker compose -f compose.yml -f compose.prod.yml up -d --build
 docker compose -f compose.yml -f compose.prod.yml logs -f omxterm-web
 ```
 
-Read the subnet Compose assigned to `omxterm-web-edge` and set `OMXTERM_TRUST_PROXY`
-to it, then re-run `up` so the change takes effect:
+Set `OMXTERM_TRUST_PROXY` to the edge subnet, then re-run `up` so the change
+takes effect:
 
 ```bash
 docker network inspect omxterm-web-edge -f '{{(index .IPAM.Config 0).Subnet}}'
@@ -194,8 +208,10 @@ once so it can resolve the broker by name:
 docker network connect omxterm-web-edge <your-reverse-proxy-container>
 ```
 
-The proxy then reaches the broker as `http://omxterm-web:3000`. A proxy defined in
-this same Compose project is already on the network and needs no connect step.
+The proxy then reaches the broker as `http://omxterm-web:3000`. The broker's
+`10.210.0.10` address survives every container recreate because Compose requests
+that address explicitly; a conflicting allocation makes deployment fail loudly
+instead of silently drifting past the firewall allowlist.
 
 ## 4. Add basic-auth credentials (optional)
 

@@ -7,8 +7,8 @@
 # address, and it publishes ONLY to loopback so the broker is never exposed on
 # every interface by accident. The maintainer's app-scoped production rollout
 # layers compose.prod.yml on top to reach the broker over a shared, stably-named
-# Docker network — this asserts that override still merges and still exposes that
-# seam, so neither the portable path nor the production path can silently break.
+# Docker network at the address allowlisted by the host SSH firewall. This
+# asserts that neither the portable path nor the production path silently drifts.
 #
 # Everything runs through `docker compose config` only: it resolves and validates
 # the descriptor without building images or starting containers, so it is safe to
@@ -81,7 +81,7 @@ check_config \
 
 echo "production override (compose.yml + compose.prod.yml)"
 check_config \
-  "override merges, joins the broker to a Compose-created, stably-named shared network, and restores the production restart: always policy" \
+  "override merges, joins the external shared network at 10.210.0.10, and restores the production restart: always policy" \
   prod \
   -f "${WORK}/compose.yml" -f "${WORK}/compose.prod.yml"
 
