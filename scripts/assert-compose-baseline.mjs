@@ -6,8 +6,8 @@
 //              interface regardless of the host's OMXTERM_SERVER_HOST, needs no
 //              pre-created external network, and pins no fixed container address.
 //   prod     — the maintainer's production override (compose.yml + compose.prod.yml):
-//              still joins the broker to a Compose-created, stably-named shared
-//              network a separate-stack reverse proxy can attach to.
+//              joins the broker at its firewall-allowlisted address on the
+//              pre-created shared network used by the separate-stack proxy.
 //
 // Prints a "  FAIL: <reason>" line and exits 1 when the contract is violated;
 // exits 0 otherwise. Kept as its own module so both checks share one parser
@@ -36,7 +36,8 @@ if (mode === "baseline") {
   assertNoGlobalContainerName(broker);
   assertRestartPolicy(broker, "unless-stopped");
 } else {
-  assertReachableSharedNetwork(broker, networks);
+  assertReachableExternalSharedNetwork(broker, networks);
+  assertPinnedAddress(broker, "edge", "10.210.0.10");
   assertRestartPolicy(broker, "always");
 }
 
@@ -119,6 +120,16 @@ function assertNoPinnedAddress(service) {
   }
 }
 
+function assertPinnedAddress(service, networkKey, expectedAddress) {
+  const actualAddress = service.networks?.[networkKey]?.ipv4_address;
+  if (actualAddress !== expectedAddress) {
+    fail(
+      `omxterm-web resolves ipv4_address "${actualAddress ?? "<unset>"}" on network "${networkKey}"; ` +
+        `expected "${expectedAddress}" so a redeploy keeps matching the host SSH firewall rule`,
+    );
+  }
+}
+
 // A fixed container_name is daemon-global: two projects that both set it cannot
 // run at once, so a fresh clone would collide with any other OMXTerm Web container
 // on the host and could not `docker compose up` alongside it. Unset, Compose
@@ -148,17 +159,17 @@ function assertRestartPolicy(service, expected) {
   }
 }
 
-function assertReachableSharedNetwork(service, allNetworks) {
+function assertReachableExternalSharedNetwork(service, allNetworks) {
   const attached = Object.keys(service.networks ?? {});
   if (attached.length === 0) {
     fail("omxterm-web is on no explicit network; a separate-stack reverse proxy could not reach omxterm-web:3000");
   }
   for (const key of attached) {
     const network = allNetworks[key] ?? {};
-    if (network.external) {
+    if (!network.external) {
       fail(
-        `omxterm-web network "${key}" is declared external; Compose would not create it, ` +
-          "so the documented attach-and-reach path could not be bootstrapped from a clone",
+        `omxterm-web network "${key}" is not external; the production rollout must reuse ` +
+          "the pre-created edge network so Compose redeploys cannot replace its reserved address pool",
       );
     }
     const resolvedName = network.name;
