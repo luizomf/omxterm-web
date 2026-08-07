@@ -82,13 +82,15 @@ you will confirm the fingerprint again next time.
 ### 4. Use the terminal
 
 After you trust the key, OMXTerm Web opens the WebSocket, logs in over SSH, and drops
-you into a real shell. The top bar shows the session title (`username@host`), a
-**status pill**, and an **End session** button. The status pill tracks the live
-connection state (for example `connecting` then `connected`, or `error` /
-`closed` when the session ends).
+you into a real shell. Both terminal toolbars start hidden so the terminal gets
+the available space. Use the top-left **Show toolbar (+)** control to reveal the
+session title (`username@host`), **status pill**, and **End session** button. The
+status pill tracks the live connection state (for example `connecting` then
+`connected`, or `error` / `closed` when the session ends). The keyboard-tools
+bar has its own independent `+` control.
 
-Type as you would in any terminal. When you are done, press **End session** to
-close the SSH session and return to the connection form.
+Type as you would in any terminal. When you are done, reveal the top toolbar and
+press **End session** to close the SSH session and return to the connection form.
 
 ---
 

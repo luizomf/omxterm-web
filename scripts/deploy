@@ -23,6 +23,14 @@ OMXTERM_CODE_DIR="${OMXTERM_CODE_DIR:-/opt}"
 OMXTERM_DIR="${OMXTERM_DIR:-${OMXTERM_CODE_DIR}/omxterm-web}"
 DEPLOY_BRANCH="${OMXTERM_DEPLOY_BRANCH:-main}"
 OMXTERM_SERVICE="${OMXTERM_SERVICE:-omxterm-web}"
+OMXTERM_DEPLOY_WAIT_TIMEOUT="${OMXTERM_DEPLOY_WAIT_TIMEOUT:-120}"
+
+case "${OMXTERM_DEPLOY_WAIT_TIMEOUT}" in
+  ''|*[!0-9]*|0)
+    echo "deploy: OMXTERM_DEPLOY_WAIT_TIMEOUT must be a positive number of seconds." >&2
+    exit 1
+    ;;
+esac
 
 # The maintainer rollout layers the production edge topology (compose.prod.yml)
 # on top of the portable, safe-by-default baseline (compose.yml), so a
@@ -88,6 +96,18 @@ if [ -n "${OMXTERM_COMPOSE_OVERRIDE}" ]; then
   compose_files+=(-f "${OMXTERM_COMPOSE_OVERRIDE}")
 fi
 
-docker compose --project-name omxterm-web \
-  --project-directory "${OMXTERM_DIR}" "${compose_files[@]}" \
-  up -d --build --force-recreate --remove-orphans "${OMXTERM_SERVICE}"
+compose_command=(
+  docker compose
+  --project-name omxterm-web
+  --project-directory "${OMXTERM_DIR}"
+  "${compose_files[@]}"
+)
+
+if ! "${compose_command[@]}" up -d --build --force-recreate --remove-orphans \
+  --wait --wait-timeout "${OMXTERM_DEPLOY_WAIT_TIMEOUT}" \
+  "${OMXTERM_SERVICE}"; then
+  echo "deploy: broker did not become healthy; bounded diagnostics follow." >&2
+  "${compose_command[@]}" ps "${OMXTERM_SERVICE}" >&2 || true
+  "${compose_command[@]}" logs --no-color --tail 80 "${OMXTERM_SERVICE}" >&2 || true
+  exit 1
+fi

@@ -1,7 +1,7 @@
 # Single image: build the web bundle, then run the broker that serves it.
 # The broker runs straight from TypeScript via tsx (matching `npm start`), so
 # devDependencies are kept in the image on purpose — there is no server build step.
-FROM node:24-slim
+FROM node:24.19.0-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
 
 WORKDIR /app
 
@@ -18,6 +18,16 @@ COPY . .
 # Vite build -> apps/web/dist, which the broker serves via OMXTERM_WEB_ROOT.
 RUN npm run build
 
+# The runtime starts Node directly and needs neither npm nor Corepack. Removing
+# package-manager tooling drops unrelated archive/network parsers from the
+# public image while leaving the locked application dependencies untouched.
+RUN rm -rf \
+  /usr/local/bin/corepack \
+  /usr/local/bin/npm \
+  /usr/local/bin/npx \
+  /usr/local/lib/node_modules/corepack \
+  /usr/local/lib/node_modules/npm
+
 # Defaults baked for the container; secrets/origin come from compose env at runtime.
 # NODE_ENV is set after install/build so npm ci still pulls devDeps (tsx, vite).
 ENV NODE_ENV=production
@@ -31,4 +41,6 @@ EXPOSE 3000
 # it does not need root privileges at runtime. The base image provides this user.
 USER node
 
-CMD ["npm", "run", "start", "--workspace", "@omxterm/server"]
+# Keep Node as PID 1 so Docker stop signals reach the broker directly instead of
+# relying on npm's child-process forwarding during session teardown.
+CMD ["node", "--import", "tsx", "apps/server/src/main.ts"]

@@ -56,14 +56,18 @@ setup_sandbox() {
   cat >"${FAKEBIN}/docker" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"${DOCKER_LOG}"
+if [ "\${FAKE_DOCKER_FAIL_UP:-false}" = true ] && [[ " \$* " == *" up "* ]]; then
+  exit 1
+fi
 EOF
   chmod +x "${FAKEBIN}/docker"
   : >"${DOCKER_LOG}"
 
   git init -q --bare "${REMOTE}"
+  git --git-dir="${REMOTE}" symbolic-ref HEAD refs/heads/main
   git init -q "${APP}"
   (
-    cd "${APP}"
+    cd "${APP}" || exit
     git symbolic-ref HEAD refs/heads/main
     echo v1 >app.txt
     git add app.txt
@@ -78,7 +82,7 @@ advance_remote() {
   local work="${SANDBOX}/upstream-work"
   git clone -q "${REMOTE}" "${work}"
   (
-    cd "${work}"
+    cd "${work}" || exit
     echo v2 >>app.txt
     git add app.txt
     git commit -qm "remote change"
@@ -106,6 +110,8 @@ test_clean_uptodate_deploys_app_only() {
   grep -q -- "--project-name omxterm-web" "${DOCKER_LOG}" ||
     fail_test "expected the omxterm-web Compose project"
   grep -q "omxterm-web" "${DOCKER_LOG}" || fail_test "expected the omxterm-web service to be recreated"
+  grep -q -- "--wait --wait-timeout 120" "${DOCKER_LOG}" ||
+    fail_test "expected deploy to wait for the broker healthcheck"
   if grep -qiE "traefik|nginx|caddy" "${DOCKER_LOG}"; then
     fail_test "must not touch the reverse-proxy edge stack"
   fi
@@ -113,6 +119,23 @@ test_clean_uptodate_deploys_app_only() {
     fail_test "must not run 'compose down' on any stack"
   fi
   pass_test "app recreated, edge untouched, nothing stopped"
+}
+
+test_unhealthy_broker_fails_with_bounded_diagnostics() {
+  echo "an unhealthy broker fails deployment with bounded diagnostics"
+  setup_sandbox
+
+  if FAKE_DOCKER_FAIL_UP=true run_deploy; then
+    fail_test "expected non-zero exit when Compose reports an unhealthy broker"
+    return
+  fi
+  grep -q "compose .* ps omxterm-web" "${DOCKER_LOG}" ||
+    fail_test "expected a bounded service status diagnostic"
+  grep -q "compose .* logs --no-color --tail 80 omxterm-web" "${DOCKER_LOG}" ||
+    fail_test "expected bounded broker logs"
+  grep -q "did not become healthy" "${OUT_LOG}" ||
+    fail_test "expected a useful deploy failure message"
+  pass_test "failed closed and printed bounded app-only diagnostics"
 }
 
 test_applies_production_override() {
@@ -153,7 +176,7 @@ test_diverged_branch_fails_without_touching_anything() {
   advance_remote
   # Local commit that the remote does not have -> divergence, no fast-forward.
   (
-    cd "${APP}"
+    cd "${APP}" || exit
     echo local-only >>app.txt
     git add app.txt
     git commit -qm "local change"
@@ -273,6 +296,7 @@ test_docs_keep_portable_compose_project_isolation() {
 }
 
 test_clean_uptodate_deploys_app_only
+test_unhealthy_broker_fails_with_bounded_diagnostics
 test_applies_production_override
 test_behind_remote_fast_forwards
 test_diverged_branch_fails_without_touching_anything

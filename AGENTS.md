@@ -22,6 +22,28 @@ or Hermes CLI adapter unless the PRD is explicitly updated first.
 
 ---
 
+## Specification precedence
+
+For planning, implementation, review, and routine AI audits, evaluate work in
+this order:
+
+1. **Originating PRD/specification and acceptance criteria** — the primary
+   source of product intent, required behavior, omissions, and scope.
+2. **Repository and code standards** — the secondary source for implementation
+   quality, maintainability, testing, and operational safety.
+
+Report spec findings before standards findings. A clean implementation does not
+pass when it misses or contradicts the specification. Conversely, a merged
+issue or implementation does not silently rewrite product intent: when an
+intentional behavior decision changes the PRD, update the PRD and affected docs
+in the same issue/PR so later audits read one coherent source of truth.
+
+Security and safety rules remain mandatory even when a specification is silent;
+raise the conflict explicitly instead of weakening a boundary or inventing an
+undocumented product change.
+
+---
+
 ## Workflow
 
 When no other workflow is defined by the user, follow this default flow:

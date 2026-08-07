@@ -1,3 +1,4 @@
+import { MAX_PRIVATE_KEY_BYTES } from '@omxterm/core/ssh';
 import {
   act,
   cleanup,
@@ -22,7 +23,7 @@ const sshTarget = {
   passphrase: 'fake-passphrase-fixture',
 };
 
-vi.mock('../api', async importOriginal => {
+vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
   return {
     ...actual,
@@ -58,6 +59,20 @@ test('uses the OMXTerm Web identity on the access gate', async () => {
   expect(
     await screen.findByRole('button', { name: 'Unlock OMXTerm Web' }),
   ).toBeInTheDocument();
+});
+
+test('recovers at the access gate when the initial session check fails', async () => {
+  const { checkAuth } = await import('../api');
+  vi.mocked(checkAuth).mockRejectedValueOnce(new Error('network unavailable'));
+
+  render(<App />);
+
+  expect(
+    await screen.findByRole('button', { name: 'Unlock OMXTerm Web' }),
+  ).toBeInTheDocument();
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Could not verify the current session',
+  );
 });
 
 async function reachHostKeyConfirmation() {
@@ -111,6 +126,28 @@ describe('useSshBrokerFlow credential lifetime', () => {
     expect(result.current.error).toBeTruthy();
     expect(result.current.pendingHostKey !== null).toBe(true);
   });
+
+  test('issues only one terminal ticket while host trust is pending', async () => {
+    const { createTerminalTicket } = await import('../api');
+    let resolveTicket!: (ticket: { ticket: string; wsUrl: string }) => void;
+    vi.mocked(createTerminalTicket).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTicket = resolve;
+        }),
+    );
+    const { result } = await reachHostKeyConfirmation();
+
+    await act(async () => {
+      const firstRequest = result.current.handleTrustHostKey();
+      const duplicateRequest = result.current.handleTrustHostKey();
+      expect(createTerminalTicket).toHaveBeenCalledTimes(1);
+      resolveTicket({ ticket: 'ticket-placeholder', wsUrl: '/terminal/ws' });
+      await Promise.all([firstRequest, duplicateRequest]);
+    });
+
+    expect(result.current.step).toBe('terminal');
+  });
 });
 
 describe('ConnectionGate private key masking (#94)', () => {
@@ -120,10 +157,14 @@ describe('ConnectionGate private key masking (#94)', () => {
     return (await screen.findByLabelText('Private key')) as HTMLTextAreaElement;
   }
 
-  test('masks the private key field by default and offers a reveal control', async () => {
+  test('masks the private key field by default and disables browser writing assistance', async () => {
     const privateKeyField = await renderConnectionForm();
 
     expect(privateKeyField).toHaveAttribute('data-masked', 'true');
+    expect(privateKeyField).toHaveAttribute('spellcheck', 'false');
+    expect(privateKeyField).toHaveAttribute('autocomplete', 'off');
+    expect(privateKeyField).toHaveAttribute('autocorrect', 'off');
+    expect(privateKeyField).toHaveAttribute('autocapitalize', 'off');
     expect(
       screen.getByRole('button', { name: /show private key/i }),
     ).toHaveAttribute('aria-pressed', 'false');
@@ -199,5 +240,27 @@ describe('ConnectionGate private key masking (#94)', () => {
     expect(
       screen.getByRole('button', { name: /show private key/i }),
     ).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('rejects an oversized private key file before reading it', async () => {
+    const privateKeyField = await renderConnectionForm();
+    const keyFile = new File(
+      [new Uint8Array(MAX_PRIVATE_KEY_BYTES + 1)],
+      'oversized-key',
+      { type: 'text/plain' },
+    );
+    const readFile = vi.spyOn(keyFile, 'text');
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Load private key file'), {
+        target: { files: [keyFile] },
+      });
+    });
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(privateKeyField).toHaveValue('');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Private key files must be 64 KiB or smaller.',
+    );
   });
 });

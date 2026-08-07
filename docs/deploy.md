@@ -120,8 +120,10 @@ ENV
   mount its parent directory and make it writable by the image's non-root
   `node` user. Check the runtime UID with
   `docker compose run --rm omxterm-web id -u`; the broker fails fast at boot if the
-  path is not writable. Leaving it unset writes metadata-only events to stdout.
-  Keep runtime logs out of the source checkout when practical. Git and Docker
+  path is not writable. A newly created audit file uses owner-only `0600`
+  permissions; when reusing an existing file, verify its permissions yourself.
+  Leaving it unset writes metadata-only events to stdout. Keep runtime logs out
+  of the source checkout when practical. Git and Docker
   both exclude directories named `logs` at any package depth; `.log`, `.jsonl`,
   and `.ndjson` extensions; and rotated or compressed derivatives that continue
   those extensions with `.` or `-` (for example, `.log.1`, `.jsonl.1.gz`, or
@@ -141,7 +143,7 @@ Choose the path that matches where your reverse proxy runs.
 
 ```bash
 cd /opt/omxterm-web
-docker compose up -d --build
+docker compose up -d --build --wait --wait-timeout 120
 docker compose logs -f omxterm-web   # expect: "OMXTerm Web server listening on http://0.0.0.0:3000"
 ```
 
@@ -153,7 +155,7 @@ to the port. On a single-admin host where everything local is as trusted as the
 proxy itself, it is reasonable to set:
 
 ```bash
-# Add to .env, then `docker compose up -d` again to apply.
+# Add to .env, then `docker compose up -d --wait --wait-timeout 120` again to apply.
 OMXTERM_TRUST_PROXY=true
 ```
 
@@ -187,7 +189,8 @@ network:
 
 ```bash
 cd /opt/omxterm-web
-docker compose -f compose.yml -f compose.prod.yml up -d --build
+docker compose -f compose.yml -f compose.prod.yml \
+  up -d --build --wait --wait-timeout 120
 docker compose -f compose.yml -f compose.prod.yml logs -f omxterm-web
 ```
 
@@ -197,7 +200,8 @@ takes effect:
 ```bash
 docker network inspect omxterm-web-edge -f '{{(index .IPAM.Config 0).Subnet}}'
 # Put the printed subnet in .env as OMXTERM_TRUST_PROXY=<subnet>, then:
-docker compose -f compose.yml -f compose.prod.yml up -d
+docker compose -f compose.yml -f compose.prod.yml \
+  up -d --wait --wait-timeout 120
 ```
 
 A reverse proxy running in its own stack is not on `omxterm-web-edge` yet — attach it
@@ -349,14 +353,19 @@ Run the deploy helper. It fast-forwards `main` and rebuilds **only** the
 OMXTerm Web service, leaving the reverse proxy and any other routes running. It
 applies the production override by default, so an update keeps the broker on
 `omxterm-web-edge` for a separate-stack proxy. The helper pins the Compose
-project to `omxterm-web`, matching the checkout and service identity:
+project to `omxterm-web`, matching the checkout and service identity. It waits
+up to 120 seconds for the broker healthcheck and fails with bounded service
+status/log diagnostics instead of treating a started-but-crashing container as
+a successful rollout:
 
 ```bash
 /opt/omxterm-web/scripts/deploy
 ```
 
-It stops before any Docker action when the checkout is dirty or `main` has
-diverged from its upstream, so it never discards local work or rewrites history.
+Set `OMXTERM_DEPLOY_WAIT_TIMEOUT` to another positive number of seconds only
+when a slower host needs it. The helper stops before any Docker action when the
+checkout is dirty or `main` has diverged from its upstream, so it never discards
+local work or rewrites history.
 To deploy the plain portable baseline instead, clear the override:
 
 ```bash
@@ -369,9 +378,10 @@ the proxy), pin its project name:
 ```bash
 cd /opt/omxterm-web
 git fetch origin && git merge --ff-only origin/main
-docker compose --project-name omxterm-web up -d --build omxterm-web                          # portable baseline
+docker compose --project-name omxterm-web up -d --build --wait --wait-timeout 120 omxterm-web # portable baseline
 # or, for the production edge topology:
-docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml up -d --build omxterm-web
+docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml \
+  up -d --build --wait --wait-timeout 120 omxterm-web
 ```
 
 The stores are in-memory, so a rebuild drops active sessions and pending tickets
@@ -384,6 +394,6 @@ Roll back the app service only; the edge stays up throughout.
 ```bash
 cd /opt/omxterm-web
 git checkout <previous-good-sha>       # detached HEAD, non-destructive
-docker compose --project-name omxterm-web up -d --build omxterm-web   # add -f compose.prod.yml for the edge topology
+docker compose --project-name omxterm-web up -d --build --wait --wait-timeout 120 omxterm-web # add -f compose.prod.yml for the edge topology
 # If a proxy config edit caused it, restore the backup you made in step 5.
 ```
