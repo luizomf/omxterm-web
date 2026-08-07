@@ -4,6 +4,7 @@ import type { SshConnectionProfile } from '@omxterm/core/stores';
 import type { ClientChannel } from 'ssh2';
 import {
   normalizeFingerprint,
+  normalizeHostKeyProbeFailure,
   SshConnectError,
   type SshClientDriver,
   type SshShellCallback,
@@ -17,9 +18,39 @@ describe('normalizeFingerprint', () => {
   });
 });
 
+describe('normalizeHostKeyProbeFailure', () => {
+  test.each([
+    {
+      error: Object.assign(new Error('dns detail'), { code: 'ENOTFOUND' }),
+      reason: 'host_key_resolution_failed',
+    },
+    {
+      error: Object.assign(new Error('connection detail'), {
+        code: 'ECONNREFUSED',
+      }),
+      reason: 'host_key_connection_refused',
+    },
+    {
+      error: Object.assign(new Error('timeout detail'), { code: 'ETIMEDOUT' }),
+      reason: 'host_key_probe_timeout',
+    },
+    {
+      error: new Error('server-controlled diagnostic detail'),
+      reason: 'host_key_connection_failed',
+    },
+  ])('maps probe failures to $reason', ({ error, reason }) => {
+    expect(normalizeHostKeyProbeFailure(error)).toBe(reason);
+  });
+});
+
 describe('sshDialHost', () => {
   test('dials the pinned validated IP instead of the hostname so ssh2 never re-resolves (#26)', () => {
-    expect(sshDialHost({ host: 'private-host.example', pinnedAddress: '10.100.0.4' })).toBe('10.100.0.4');
+    expect(
+      sshDialHost({
+        host: 'private-host.example',
+        pinnedAddress: '10.100.0.4',
+      }),
+    ).toBe('10.100.0.4');
   });
 
   test('falls back to the hostname when no IP was pinned (unrestricted/localhost demo)', () => {
@@ -138,7 +169,9 @@ describe('SshTerminalSession lifecycle', () => {
 
     // Attach the rejection handler before firing the deadline so the reject is
     // never momentarily unhandled while fake timers advance.
-    const rejects = expect(connecting).rejects.toMatchObject({ reason: 'ssh_connect_timeout' });
+    const rejects = expect(connecting).rejects.toMatchObject({
+      reason: 'ssh_connect_timeout',
+    });
     await vi.advanceTimersByTimeAsync(5_000);
     await rejects;
     expect(client.destroyCount).toBe(1);
@@ -152,13 +185,15 @@ describe('SshTerminalSession lifecycle', () => {
     // caller never hangs on a dropped dial.
     client.emit('close');
 
-    await expect(connecting).rejects.toMatchObject({ reason: 'ssh_connection_closed' });
+    await expect(connecting).rejects.toMatchObject({
+      reason: 'ssh_connection_closed',
+    });
   });
 
   test('settles connect only once when an error arrives before a late ready', async () => {
     const { session, client } = createSession();
     const closes: string[] = [];
-    session.on('close', reason => closes.push(reason));
+    session.on('close', (reason) => closes.push(reason));
     const connecting = session.connect(profile, { cols: 80, rows: 24 });
 
     client.emit('error', new Error('handshake failed'));
@@ -168,7 +203,9 @@ describe('SshTerminalSession lifecycle', () => {
     // A late ready after the failure must not open a shell or re-settle.
     client.emit('ready');
 
-    await expect(connecting).rejects.toMatchObject({ reason: 'ssh_connection_error' });
+    await expect(connecting).rejects.toMatchObject({
+      reason: 'ssh_connection_error',
+    });
     expect(client.shellCount).toBe(0);
     expect(client.destroyCount).toBe(1);
     expect(closes).toEqual([]);
@@ -177,7 +214,7 @@ describe('SshTerminalSession lifecycle', () => {
   test('resolves once, then routes a later connection close as a close event', async () => {
     const { session, client } = createSession();
     const closes: string[] = [];
-    session.on('close', reason => closes.push(reason));
+    session.on('close', (reason) => closes.push(reason));
 
     const connecting = session.connect(profile, { cols: 80, rows: 24 });
     client.emit('ready');
@@ -199,7 +236,9 @@ describe('SshTerminalSession lifecycle', () => {
     client.emit('ready');
     client.failShell(new Error('channel open failure'));
 
-    await expect(connecting).rejects.toMatchObject({ reason: 'ssh_shell_open_failed' });
+    await expect(connecting).rejects.toMatchObject({
+      reason: 'ssh_shell_open_failed',
+    });
     expect(client.destroyCount).toBe(1);
   });
 });

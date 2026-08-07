@@ -3,6 +3,7 @@ import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import type { AuditLogger } from "@omxterm/core/audit";
 import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
+import { MAX_PRIVATE_KEY_BYTES } from "@omxterm/core/ssh";
 import {
   InMemoryAccessCredentialStore,
   InMemoryAccessRateLimiter,
@@ -30,7 +31,12 @@ import {
   setAuthCookies,
 } from "./cookies";
 import { createAuditSink, JsonlAuditLogger } from "./audit-logger";
-import { probeSshHostKey, SshConnectError, SshTerminalSession } from "./ssh";
+import {
+  normalizeHostKeyProbeFailure,
+  probeSshHostKey,
+  SshConnectError,
+  SshTerminalSession,
+} from "./ssh";
 import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
 import { createTerminalInboundGuard } from "./terminal-inbound-guard";
@@ -45,10 +51,7 @@ const terminalTicketSchema = z.object({
   host: z.string().min(1).max(255),
   port: z.number().int().min(1).max(65535).default(22),
   username: z.string().min(1).max(128),
-  privateKey: z
-    .string()
-    .min(1)
-    .max(64 * 1024),
+  privateKey: z.string().min(1).max(MAX_PRIVATE_KEY_BYTES),
   passphrase: z.string().max(4096).optional(),
   acceptedHostFingerprint: z.string().min(1).max(256),
 });
@@ -58,9 +61,11 @@ type Stores = {
   tickets: InMemoryTerminalTicketStore;
   accessGrantAuditLimiter: InMemoryFixedWindowRateLimiter;
   unauthenticatedRejectionAuditLimiter: InMemoryFixedWindowRateLimiter;
+  authenticatedWsRejectionAuditLimiter: InMemoryFixedWindowRateLimiter;
   accessRateLimiter: InMemoryAccessRateLimiter;
   hostKeyRateLimiter: InMemoryFixedWindowRateLimiter;
   ticketRateLimiter: InMemoryFixedWindowRateLimiter;
+  wsUpgradeRateLimiter: InMemoryFixedWindowRateLimiter;
   sessionConcurrency: InMemoryConcurrencyLimiter;
   wsConcurrency: InMemoryConcurrencyLimiter;
 };
@@ -89,6 +94,20 @@ export const ACCESS_GATE_WINDOW_MS = 60 * 1000;
 export const MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
 export const UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS = 60 * 1000;
 
+// Authenticated upgrade failures used to bypass every post-auth rate limit and
+// write one durable event per short-lived socket. Keep normal ticket use far
+// below a generous attempt budget while bounding both work and rejection logs.
+export const MAX_AUTHENTICATED_WS_UPGRADE_ATTEMPTS_PER_WINDOW = 60;
+export const MAX_AUTHENTICATED_WS_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
+export const AUTHENTICATED_WS_UPGRADE_WINDOW_MS = 60 * 1000;
+
+// Parse only the input envelope each route actually supports. Fastify parses a
+// body before entering the handler, so schema validation alone cannot prevent a
+// public client from making the broker buffer its broad default body limit.
+export const ACCESS_REQUEST_BODY_LIMIT_BYTES = 8 * 1024;
+export const HOST_KEY_REQUEST_BODY_LIMIT_BYTES = 4 * 1024;
+export const TERMINAL_TICKET_REQUEST_BODY_LIMIT_BYTES = 160 * 1024;
+
 // Successful access requests remain usable under rotation, but only this many
 // access_granted records are persisted per direct TCP peer in one fixed window.
 // Using the peer rather than request.ip prevents a trusted-proxy header from
@@ -98,10 +117,14 @@ export const MAX_ACCESS_GRANT_AUDITS_PER_DIRECT_PEER_PER_WINDOW = 10;
 export const ACCESS_GRANT_AUDIT_WINDOW_MS = 60 * 1000;
 
 type BoundedUnauthenticatedRejectionReason =
-  | "bad_origin"
+  "bad_origin" | "rate_limited" | "missing_auth_or_ticket" | "upgrade_error";
+
+type BoundedAuthenticatedWsRejectionReason =
   | "rate_limited"
-  | "missing_auth_or_ticket"
-  | "upgrade_error";
+  | "too_many_ws_connections"
+  | "too_many_active_sessions"
+  | "not_found_expired_or_used"
+  | "session_device_or_origin_mismatch";
 
 // Per-session, per-client, and global caps for authenticated traffic (#30,
 // #126). The access rate
@@ -162,6 +185,7 @@ const UPGRADE_STATUS_TEXT: Record<number, string> = {
   401: "Unauthorized",
   403: "Forbidden",
   409: "Conflict",
+  429: "Too Many Requests",
 };
 
 function rejectUpgrade(socket: Duplex, statusCode: number): void {
@@ -185,10 +209,7 @@ function consumePostAuthBudget(
   sessionId: string,
   clientIp: string,
 ) {
-  return limiter.tryConsumeAll([
-    `session:${sessionId}`,
-    `client:${clientIp}`,
-  ]);
+  return limiter.tryConsumeAll([`session:${sessionId}`, `client:${clientIp}`]);
 }
 
 function authenticateFastifyRequest(
@@ -271,6 +292,11 @@ export async function createOmxtermServer(
       MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
       UNAUTHENTICATED_REJECTION_AUDIT_WINDOW_MS,
     ),
+    authenticatedWsRejectionAuditLimiter: new InMemoryFixedWindowRateLimiter(
+      systemClock,
+      MAX_AUTHENTICATED_WS_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
+      AUTHENTICATED_WS_UPGRADE_WINDOW_MS,
+    ),
     accessRateLimiter: new InMemoryAccessRateLimiter(
       systemClock,
       ACCESS_GATE_MAX_FAILURES,
@@ -288,6 +314,11 @@ export async function createOmxtermServer(
         MAX_TICKETS_PER_WINDOW,
         POST_AUTH_RATE_WINDOW_MS,
       ),
+    wsUpgradeRateLimiter: new InMemoryFixedWindowRateLimiter(
+      systemClock,
+      MAX_AUTHENTICATED_WS_UPGRADE_ATTEMPTS_PER_WINDOW,
+      AUTHENTICATED_WS_UPGRADE_WINDOW_MS,
+    ),
     sessionConcurrency: new InMemoryConcurrencyLimiter(
       deps.maxActiveSessionsPerClient ?? MAX_ACTIVE_SESSIONS_PER_CLIENT,
     ),
@@ -306,9 +337,11 @@ export async function createOmxtermServer(
       stores.accessCredentials,
       stores.accessGrantAuditLimiter,
       stores.unauthenticatedRejectionAuditLimiter,
+      stores.authenticatedWsRejectionAuditLimiter,
       stores.accessRateLimiter,
       stores.hostKeyRateLimiter,
       stores.ticketRateLimiter,
+      stores.wsUpgradeRateLimiter,
     ],
     EXPIRY_SWEEP_INTERVAL_MS,
   );
@@ -384,246 +417,290 @@ export async function createOmxtermServer(
       : { blocked: false };
   }
 
+  function auditBoundedAuthenticatedWsRejection(
+    sessionId: string,
+    origin: string,
+    directPeer: string,
+    reason: BoundedAuthenticatedWsRejectionReason,
+  ): void {
+    const auditKey = `${reason}\0${sessionId}\0${directPeer}`;
+    if (
+      !stores.authenticatedWsRejectionAuditLimiter.tryConsume(auditKey).allowed
+    ) {
+      return;
+    }
+    audit.write({
+      event: "ws_upgrade_rejected",
+      severity: "warn",
+      sessionId,
+      origin,
+      reason,
+    });
+  }
+
   app.get("/health", async () => ({ ok: true }));
 
-  app.post("/api/access", async (request, reply) => {
-    const origin = requestOrigin(request);
-    if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      auditBoundedUnauthenticatedRejection(
-        "access_rejected",
-        request.socket.remoteAddress ?? "unknown",
-        "bad_origin",
+  app.post(
+    "/api/access",
+    { bodyLimit: ACCESS_REQUEST_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const origin = requestOrigin(request);
+      if (!isOriginAllowed(origin, config.allowedOrigins)) {
+        auditBoundedUnauthenticatedRejection(
+          "access_rejected",
+          request.socket.remoteAddress ?? "unknown",
+          "bad_origin",
+        );
+        return reply.code(403).send({ ok: false, message: "Bad Origin." });
+      }
+
+      // request.ip is the real client when OMXTERM_TRUST_PROXY is set behind a
+      // reverse proxy; otherwise it is the socket peer. Without trustProxy in a
+      // proxied deploy all clients would share the proxy's IP bucket (#5).
+      const clientKey = request.ip;
+      const decision = stores.accessRateLimiter.check(clientKey);
+      if (!decision.allowed) {
+        auditBoundedUnauthenticatedRejection(
+          "access_rejected",
+          request.socket.remoteAddress ?? "unknown",
+          "rate_limited",
+        );
+        return reply
+          .code(429)
+          .header("retry-after", Math.ceil(decision.retryAfterMs / 1000))
+          .send({ ok: false, message: "Too many attempts. Try again later." });
+      }
+
+      const parsed = accessSchema.safeParse(request.body);
+      if (
+        !parsed.success ||
+        !safeEqualText(parsed.data.accessToken, config.accessToken)
+      ) {
+        stores.accessRateLimiter.recordFailure(clientKey);
+        audit.write({
+          event: "access_rejected",
+          severity: "warn",
+          origin,
+          reason: "invalid_access_token",
+        });
+        return reply
+          .code(401)
+          .send({ ok: false, message: "Invalid access token." });
+      }
+
+      stores.accessRateLimiter.reset(clientKey);
+      const { rawSessionToken, rawDeviceToken, session } =
+        stores.accessCredentials.create(clientKey);
+      setAuthCookies(
+        reply,
+        {
+          sessionId: session.id,
+          sessionToken: rawSessionToken,
+          deviceToken: rawDeviceToken,
+        },
+        { secure: config.secureCookies },
       );
-      return reply.code(403).send({ ok: false, message: "Bad Origin." });
-    }
-
-    // request.ip is the real client when OMXTERM_TRUST_PROXY is set behind a
-    // reverse proxy; otherwise it is the socket peer. Without trustProxy in a
-    // proxied deploy all clients would share the proxy's IP bucket (#5).
-    const clientKey = request.ip;
-    const decision = stores.accessRateLimiter.check(clientKey);
-    if (!decision.allowed) {
-      auditBoundedUnauthenticatedRejection(
-        "access_rejected",
-        request.socket.remoteAddress ?? "unknown",
-        "rate_limited",
-      );
-      return reply
-        .code(429)
-        .header("retry-after", Math.ceil(decision.retryAfterMs / 1000))
-        .send({ ok: false, message: "Too many attempts. Try again later." });
-    }
-
-    const parsed = accessSchema.safeParse(request.body);
-    if (
-      !parsed.success ||
-      !safeEqualText(parsed.data.accessToken, config.accessToken)
-    ) {
-      stores.accessRateLimiter.recordFailure(clientKey);
-      audit.write({
-        event: "access_rejected",
-        severity: "warn",
-        origin,
-        reason: "invalid_access_token",
-      });
-      return reply
-        .code(401)
-        .send({ ok: false, message: "Invalid access token." });
-    }
-
-    stores.accessRateLimiter.reset(clientKey);
-    const { rawSessionToken, rawDeviceToken, session } =
-      stores.accessCredentials.create(clientKey);
-    setAuthCookies(
-      reply,
-      {
-        sessionId: session.id,
-        sessionToken: rawSessionToken,
-        deviceToken: rawDeviceToken,
-      },
-      { secure: config.secureCookies },
-    );
-    const directPeer = request.socket.remoteAddress ?? "unknown";
-    if (stores.accessGrantAuditLimiter.tryConsume(directPeer).allowed) {
-      audit.write({
-        event: "access_granted",
-        severity: "info",
-        sessionId: session.id,
-        origin,
-      });
-    }
-    return { ok: true };
-  });
+      const directPeer = request.socket.remoteAddress ?? "unknown";
+      if (stores.accessGrantAuditLimiter.tryConsume(directPeer).allowed) {
+        audit.write({
+          event: "access_granted",
+          severity: "info",
+          sessionId: session.id,
+          origin,
+        });
+      }
+      return { ok: true };
+    },
+  );
 
   app.get("/api/me", async (request, reply) => {
     const origin = requestOrigin(request);
     // Same-origin browser GET fetches commonly omit Origin; keep rejecting an
     // explicitly bad Origin while allowing the boot-time auth probe.
-    if (origin !== undefined && !isOriginAllowed(origin, config.allowedOrigins)) {
+    if (
+      origin !== undefined &&
+      !isOriginAllowed(origin, config.allowedOrigins)
+    ) {
       return reply.code(403).send({ ok: false, message: "Bad Origin." });
     }
     const auth = authenticateFastifyRequest(request, stores);
     return { authenticated: Boolean(auth) };
   });
 
-  app.post("/api/ssh/host-key", async (request, reply) => {
-    const origin = requestOrigin(request);
-    if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      return reply.code(403).send({ ok: false, message: "Bad Origin." });
-    }
-    const auth = authenticateFastifyRequest(request, stores);
-    if (!auth)
-      return reply.code(401).send({ ok: false, message: "Unauthorized." });
+  app.post(
+    "/api/ssh/host-key",
+    { bodyLimit: HOST_KEY_REQUEST_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const origin = requestOrigin(request);
+      if (!isOriginAllowed(origin, config.allowedOrigins)) {
+        return reply.code(403).send({ ok: false, message: "Bad Origin." });
+      }
+      const auth = authenticateFastifyRequest(request, stores);
+      if (!auth)
+        return reply.code(401).send({ ok: false, message: "Unauthorized." });
 
-    const rate = consumePostAuthBudget(
-      stores.hostKeyRateLimiter,
-      auth.session.id,
-      request.ip,
-    );
-    if (!rate.allowed) {
-      audit.write({
-        event: "host_key_rejected",
-        severity: "warn",
-        sessionId: auth.session.id,
-        reason: "rate_limited",
-      });
-      return reply
-        .code(429)
-        .header("retry-after", Math.ceil(rate.retryAfterMs / 1000))
-        .send({
-          ok: false,
-          message: "Too many host-key probes. Try again later.",
-        });
-    }
-
-    const parsed = hostKeySchema.safeParse(request.body);
-    if (!parsed.success)
-      return reply
-        .code(400)
-        .send({ ok: false, message: "Invalid SSH target." });
-
-    const egress = await guardSshTarget(
-      parsed.data.host,
-      parsed.data.port,
-      auth.session.id,
-    );
-    if (egress.blocked)
-      return reply
-        .code(403)
-        .send({ ok: false, message: "SSH target is not allowed." });
-
-    try {
-      const result = await probeSshHostKey(
-        egress.pinnedAddress
-          ? { ...parsed.data, pinnedAddress: egress.pinnedAddress }
-          : parsed.data,
+      const rate = consumePostAuthBudget(
+        stores.hostKeyRateLimiter,
+        auth.session.id,
+        request.ip,
       );
+      if (!rate.allowed) {
+        audit.write({
+          event: "host_key_rejected",
+          severity: "warn",
+          sessionId: auth.session.id,
+          reason: "rate_limited",
+        });
+        return reply
+          .code(429)
+          .header("retry-after", Math.ceil(rate.retryAfterMs / 1000))
+          .send({
+            ok: false,
+            message: "Too many host-key probes. Try again later.",
+          });
+      }
+
+      const parsed = hostKeySchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ ok: false, message: "Invalid SSH target." });
+
+      const egress = await guardSshTarget(
+        parsed.data.host,
+        parsed.data.port,
+        auth.session.id,
+      );
+      if (egress.blocked)
+        return reply
+          .code(403)
+          .send({ ok: false, message: "SSH target is not allowed." });
+
+      try {
+        const result = await probeSshHostKey(
+          egress.pinnedAddress
+            ? { ...parsed.data, pinnedAddress: egress.pinnedAddress }
+            : parsed.data,
+        );
+        audit.write({
+          event: "host_key_presented",
+          severity: "info",
+          sessionId: auth.session.id,
+          host: parsed.data.host,
+          port: parsed.data.port,
+        });
+        return { ok: true, fingerprint: result.fingerprint };
+      } catch (error) {
+        // Network/handshake failures (unreachable host, refused/timed-out
+        // connect, hairpin routing gaps) were previously discarded here, so a
+        // failing probe left no trace in the audit log at all.
+        audit.write({
+          event: "host_key_probe_failed",
+          severity: "warn",
+          sessionId: auth.session.id,
+          host: parsed.data.host,
+          port: parsed.data.port,
+          reason: normalizeHostKeyProbeFailure(error),
+        });
+        return reply
+          .code(502)
+          .send({ ok: false, message: "Could not read SSH host key." });
+      }
+    },
+  );
+
+  app.post(
+    "/api/terminal-ticket",
+    { bodyLimit: TERMINAL_TICKET_REQUEST_BODY_LIMIT_BYTES },
+    async (request, reply) => {
+      const origin = requestOrigin(request);
+      if (!isOriginAllowed(origin, config.allowedOrigins)) {
+        return reply.code(403).send({ ok: false, message: "Bad Origin." });
+      }
+      const auth = authenticateFastifyRequest(request, stores);
+      if (!auth)
+        return reply.code(401).send({ ok: false, message: "Unauthorized." });
+
+      const rate = consumePostAuthBudget(
+        stores.ticketRateLimiter,
+        auth.session.id,
+        request.ip,
+      );
+      if (!rate.allowed) {
+        audit.write({
+          event: "ticket_rejected",
+          severity: "warn",
+          sessionId: auth.session.id,
+          reason: "rate_limited",
+        });
+        return reply
+          .code(429)
+          .header("retry-after", Math.ceil(rate.retryAfterMs / 1000))
+          .send({
+            ok: false,
+            message: "Too many ticket requests. Try again later.",
+          });
+      }
+
+      const parsed = terminalTicketSchema.safeParse(request.body);
+      if (!parsed.success)
+        return reply
+          .code(400)
+          .send({ ok: false, message: "Invalid SSH connection profile." });
+
+      const egress = await guardSshTarget(
+        parsed.data.host,
+        parsed.data.port,
+        auth.session.id,
+      );
+      if (egress.blocked)
+        return reply
+          .code(403)
+          .send({ ok: false, message: "SSH target is not allowed." });
+
+      const profile = profileFromBody(parsed.data, egress.pinnedAddress);
+      const issued = stores.tickets.issue({
+        sessionId: auth.session.id,
+        rawDeviceToken: auth.deviceToken,
+        origin: origin ?? "",
+        profile,
+      });
       audit.write({
-        event: "host_key_presented",
+        event: "ticket_issued",
         severity: "info",
         sessionId: auth.session.id,
-        host: parsed.data.host,
-        port: parsed.data.port,
+        origin,
+        host: profile.host,
+        port: profile.port,
       });
-      return { ok: true, fingerprint: result.fingerprint };
-    } catch (error) {
-      // Network/handshake failures (unreachable host, refused/timed-out
-      // connect, hairpin routing gaps) were previously discarded here, so a
-      // failing probe left no trace in the audit log at all.
       audit.write({
-        event: "host_key_probe_failed",
-        severity: "warn",
+        event: "host_key_trusted",
+        severity: "info",
         sessionId: auth.session.id,
-        host: parsed.data.host,
-        port: parsed.data.port,
-        reason: error instanceof Error ? error.message : "unknown_error",
+        host: profile.host,
+        port: profile.port,
       });
-      return reply
-        .code(502)
-        .send({ ok: false, message: "Could not read SSH host key." });
-    }
-  });
-
-  app.post("/api/terminal-ticket", async (request, reply) => {
-    const origin = requestOrigin(request);
-    if (!isOriginAllowed(origin, config.allowedOrigins)) {
-      return reply.code(403).send({ ok: false, message: "Bad Origin." });
-    }
-    const auth = authenticateFastifyRequest(request, stores);
-    if (!auth)
-      return reply.code(401).send({ ok: false, message: "Unauthorized." });
-
-    const rate = consumePostAuthBudget(
-      stores.ticketRateLimiter,
-      auth.session.id,
-      request.ip,
-    );
-    if (!rate.allowed) {
-      audit.write({
-        event: "ticket_rejected",
-        severity: "warn",
-        sessionId: auth.session.id,
-        reason: "rate_limited",
-      });
-      return reply
-        .code(429)
-        .header("retry-after", Math.ceil(rate.retryAfterMs / 1000))
-        .send({
-          ok: false,
-          message: "Too many ticket requests. Try again later.",
-        });
-    }
-
-    const parsed = terminalTicketSchema.safeParse(request.body);
-    if (!parsed.success)
-      return reply
-        .code(400)
-        .send({ ok: false, message: "Invalid SSH connection profile." });
-
-    const egress = await guardSshTarget(
-      parsed.data.host,
-      parsed.data.port,
-      auth.session.id,
-    );
-    if (egress.blocked)
-      return reply
-        .code(403)
-        .send({ ok: false, message: "SSH target is not allowed." });
-
-    const profile = profileFromBody(parsed.data, egress.pinnedAddress);
-    const issued = stores.tickets.issue({
-      sessionId: auth.session.id,
-      rawDeviceToken: auth.deviceToken,
-      origin: origin ?? "",
-      profile,
-    });
-    audit.write({
-      event: "ticket_issued",
-      severity: "info",
-      sessionId: auth.session.id,
-      origin,
-      host: profile.host,
-      port: profile.port,
-    });
-    audit.write({
-      event: "host_key_trusted",
-      severity: "info",
-      sessionId: auth.session.id,
-      host: profile.host,
-      port: profile.port,
-    });
-    return {
-      ok: true,
-      ticket: issued.rawTicket,
-      wsUrl: "/terminal/ws",
-      expiresInSeconds: 60,
-    };
-  });
+      return {
+        ok: true,
+        ticket: issued.rawTicket,
+        wsUrl: "/terminal/ws",
+        expiresInSeconds: 60,
+      };
+    },
+  );
 
   const wss = new WebSocketServer({
     noServer: true,
     perMessageDeflate: false,
     maxPayload: 64 * 1024,
+  });
+  app.addHook("preClose", async () => {
+    // Upgraded sockets are outside Fastify's request lifecycle. Terminate them
+    // before close resolves so each normal WebSocket close path tears down its
+    // SSH session and finishes audit writes before deployment can replace the
+    // process or a test can remove its sink.
+    for (const client of wss.clients) client.terminate();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
   });
 
   app.server.on("upgrade", (req, socket, head) => {
@@ -679,32 +756,45 @@ export async function createOmxtermServer(
       }
       const activeSessionId = session.id;
       sessionId = activeSessionId;
+      const directPeer = req.socket.remoteAddress ?? "unknown";
+      const upgradeRate = stores.wsUpgradeRateLimiter.tryConsumeAll([
+        `session:${activeSessionId}`,
+        `peer:${directPeer}`,
+      ]);
+      if (!upgradeRate.allowed) {
+        auditBoundedAuthenticatedWsRejection(
+          activeSessionId,
+          origin,
+          directPeer,
+          "rate_limited",
+        );
+        rejectUpgrade(socket, 429);
+        return;
+      }
 
       // Cap concurrent connections before consuming the single-use ticket (#30), so
       // a capacity rejection doesn't burn the ticket the user just minted. Acquire
       // the global slot first, then the per-session one, releasing the global if the
       // per-session cap is hit.
       if (!stores.wsConcurrency.tryAcquire(GLOBAL_WS_KEY)) {
-        audit.write({
-          event: "ws_upgrade_rejected",
-          severity: "warn",
-          sessionId,
+        auditBoundedAuthenticatedWsRejection(
+          activeSessionId,
           origin,
-          reason: "too_many_ws_connections",
-        });
+          directPeer,
+          "too_many_ws_connections",
+        );
         rejectUpgrade(socket, 409);
         return;
       }
       globalSlotAcquired = true;
       if (!stores.sessionConcurrency.tryAcquire(activeSessionId)) {
         releaseConnectionSlots();
-        audit.write({
-          event: "ws_upgrade_rejected",
-          severity: "warn",
-          sessionId,
+        auditBoundedAuthenticatedWsRejection(
+          activeSessionId,
           origin,
-          reason: "too_many_active_sessions",
-        });
+          directPeer,
+          "too_many_active_sessions",
+        );
         rejectUpgrade(socket, 409);
         return;
       }
@@ -724,13 +814,12 @@ export async function createOmxtermServer(
       });
       if (!grant.ok) {
         releaseConnectionSlots();
-        audit.write({
-          event: "ws_upgrade_rejected",
-          severity: "warn",
-          sessionId,
+        auditBoundedAuthenticatedWsRejection(
+          activeSessionId,
           origin,
-          reason: grant.reason,
-        });
+          directPeer,
+          grant.reason,
+        );
         rejectUpgrade(socket, 403);
         return;
       }
@@ -907,9 +996,7 @@ export async function createOmxtermServer(
         ws.terminate();
       });
 
-      ws.on("close", () =>
-        closeTerminalSession("websocket_closed", "info"),
-      );
+      ws.on("close", () => closeTerminalSession("websocket_closed", "info"));
 
       void terminal
         .connect(context.grant.profile, { cols: 120, rows: 34 })

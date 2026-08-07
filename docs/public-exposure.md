@@ -37,6 +37,12 @@ full request flow; this is the abuse-control summary:
   at 30 per minute for both the session and `request.ip`. A new login cannot
   reset the client budget. Over the limit returns `429` with `Retry-After` and
   an audit event (`host_key_rejected` / `ticket_rejected`).
+- **Authenticated WebSocket upgrade limit**: each valid session and direct TCP
+  peer gets 60 upgrade attempts per 60-second fixed window before capacity or
+  ticket lookup. Excess attempts return `429`. Invalid/replayed-ticket,
+  capacity, and rate-limit audit events are independently capped at 10 per
+  normalized reason/session/direct-peer window, so an authenticated browser
+  cannot amplify durable logs with short-lived upgrade sockets.
 - **Concurrency caps**: 5 active SSH sessions per browser session, and 50
   active WebSocket connections globally. Exceeding either returns `409`
   before the single-use ticket is consumed, with a `ws_upgrade_rejected`

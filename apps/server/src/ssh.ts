@@ -14,18 +14,52 @@ export type HostKeyProbeResult = {
   fingerprint: string;
 };
 
+export type HostKeyProbeFailureReason =
+  | 'host_key_probe_timeout'
+  | 'host_key_resolution_failed'
+  | 'host_key_connection_refused'
+  | 'host_key_connection_failed';
+
+/**
+ * Maps network/SSH diagnostics to a closed metadata set. Raw error prose can
+ * contain unstable target-controlled details and does not belong in audit logs.
+ */
+export function normalizeHostKeyProbeFailure(
+  error: unknown,
+): HostKeyProbeFailureReason {
+  if (!(error instanceof Error)) return 'host_key_connection_failed';
+  const code = (error as NodeJS.ErrnoException).code;
+  if (
+    code === 'ETIMEDOUT' ||
+    error.message === 'Timed out while probing SSH host key.'
+  ) {
+    return 'host_key_probe_timeout';
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return 'host_key_resolution_failed';
+  }
+  if (code === 'ECONNREFUSED') return 'host_key_connection_refused';
+  return 'host_key_connection_failed';
+}
+
 // The egress allowlist (#4) validated a specific resolved IP at request time;
 // dialing that pinned address instead of re-resolving the hostname closes the
 // DNS-rebinding window between check and dial (#26). ssh2 has no SNI/virtual
 // hosting, so dialing by IP is equivalent for the host-key check, which compares
 // fingerprints regardless of the string dialed. Unrestricted mode pins nothing,
 // so the dial falls back to the hostname (localhost demo).
-export function sshDialHost(target: { host: string; pinnedAddress?: string }): string {
+export function sshDialHost(target: {
+  host: string;
+  pinnedAddress?: string;
+}): string {
   return target.pinnedAddress ?? target.host;
 }
 
 function fingerprintHostKey(key: Buffer): string {
-  const digest = createHash('sha256').update(key).digest('base64').replace(/=+$/u, '');
+  const digest = createHash('sha256')
+    .update(key)
+    .digest('base64')
+    .replace(/=+$/u, '');
   return `SHA256:${digest}`;
 }
 
@@ -33,7 +67,10 @@ export function normalizeFingerprint(fingerprint: string): string {
   return fingerprint.trim().replace(/=+$/u, '');
 }
 
-export function probeSshHostKey(input: HostKeyProbeInput, timeoutMs = 10_000): Promise<HostKeyProbeResult> {
+export function probeSshHostKey(
+  input: HostKeyProbeInput,
+  timeoutMs = 10_000,
+): Promise<HostKeyProbeResult> {
   return new Promise((resolve, reject) => {
     const client = new Client();
     let settled = false;
@@ -92,7 +129,11 @@ export type SshConnectFailureReason =
 export class SshConnectError extends Error {
   readonly reason: SshConnectFailureReason;
 
-  constructor(reason: SshConnectFailureReason, message: string, options?: ErrorOptions) {
+  constructor(
+    reason: SshConnectFailureReason,
+    message: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = 'SshConnectError';
     this.reason = reason;
@@ -107,7 +148,10 @@ type SshShellOptions = {
   height: number;
 };
 
-export type SshShellCallback = (error: Error | undefined, channel: ClientChannel) => void;
+export type SshShellCallback = (
+  error: Error | undefined,
+  channel: ClientChannel,
+) => void;
 
 // The slice of the ssh2 Client the session drives. Injecting a factory for this
 // (instead of `new Client()` inline) is the smallest seam that lets tests script
@@ -151,7 +195,10 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
     this.#connectDeadlineMs = deps.connectDeadlineMs ?? CONNECT_DEADLINE_MS;
   }
 
-  connect(profile: SshConnectionProfile, size: { cols: number; rows: number }): Promise<void> {
+  connect(
+    profile: SshConnectionProfile,
+    size: { cols: number; rows: number },
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
       let deadline: ReturnType<typeof setTimeout>;
@@ -176,19 +223,33 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
       };
 
       deadline = setTimeout(() => {
-        finishError(new SshConnectError('ssh_connect_timeout', 'Timed out while establishing the SSH session.'));
+        finishError(
+          new SshConnectError(
+            'ssh_connect_timeout',
+            'Timed out while establishing the SSH session.',
+          ),
+        );
       }, this.#connectDeadlineMs);
 
       this.#cancelConnect = () => {
-        finishError(new SshConnectError('ssh_session_cancelled', 'The SSH session was cancelled before it was ready.'));
+        finishError(
+          new SshConnectError(
+            'ssh_session_cancelled',
+            'The SSH session was cancelled before it was ready.',
+          ),
+        );
       };
 
       this.#client.on('error', (error) => {
         if (!settled) {
           finishError(
-            new SshConnectError('ssh_connection_error', 'The SSH connection failed before the session was ready.', {
-              cause: error,
-            }),
+            new SshConnectError(
+              'ssh_connection_error',
+              'The SSH connection failed before the session was ready.',
+              {
+                cause: error,
+              },
+            ),
           );
           return;
         }
@@ -199,13 +260,19 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
 
       this.#client.on('close', () => {
         if (!settled) {
-          finishError(new SshConnectError('ssh_connection_closed', 'The SSH connection closed before the session was ready.'));
+          finishError(
+            new SshConnectError(
+              'ssh_connection_closed',
+              'The SSH connection closed before the session was ready.',
+            ),
+          );
           return;
         }
         // destroy() after a failed/cancelled attempt also emits close. Only a
         // connection that reached an attached shell represents a live session
         // whose close belongs on the runtime event path.
-        if (!this.#closed && this.#channel) this.emit('close', 'ssh_connection_closed');
+        if (!this.#closed && this.#channel)
+          this.emit('close', 'ssh_connection_closed');
       });
 
       this.#client.on('ready', () => {
@@ -218,7 +285,13 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
             return;
           }
           if (error) {
-            finishError(new SshConnectError('ssh_shell_open_failed', 'Could not open the SSH shell.', { cause: error }));
+            finishError(
+              new SshConnectError(
+                'ssh_shell_open_failed',
+                'Could not open the SSH shell.',
+                { cause: error },
+              ),
+            );
             return;
           }
           this.#attachChannel(channel);
@@ -307,7 +380,10 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
       keepaliveCountMax: 3,
       hostVerifier: (key: Buffer) => {
         if (!Buffer.isBuffer(key)) return false;
-        return normalizeFingerprint(fingerprintHostKey(key)) === normalizeFingerprint(profile.acceptedHostFingerprint);
+        return (
+          normalizeFingerprint(fingerprintHostKey(key)) ===
+          normalizeFingerprint(profile.acceptedHostFingerprint)
+        );
       },
     };
     if (profile.passphrase) config.passphrase = profile.passphrase;
