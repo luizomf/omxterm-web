@@ -17,6 +17,7 @@ import {
 } from "./server";
 import { JsonlAuditLogger } from "./audit-logger";
 import type { AuditEvent, AuditLogger } from "@omxterm/core/audit";
+import { MAX_PRIVATE_KEY_BYTES } from "@omxterm/core/ssh";
 import type { ServerConfig } from "./config";
 
 const baseConfig: ServerConfig = {
@@ -91,6 +92,75 @@ describe("request body limits", () => {
       }
     },
   );
+
+  test("parses worst-case JSON escaping for every schema-valid string envelope", async () => {
+    const escapedCodeUnit = "\\u0000";
+    const requests = [
+      {
+        url: "/api/access",
+        limit: ACCESS_REQUEST_BODY_LIMIT_BYTES,
+        body: `{"accessToken":"${escapedCodeUnit.repeat(4096)}"}`,
+      },
+      {
+        url: "/api/ssh/host-key",
+        limit: HOST_KEY_REQUEST_BODY_LIMIT_BYTES,
+        body: `{"host":"${escapedCodeUnit.repeat(255)}","port":65535}`,
+      },
+      {
+        url: "/api/terminal-ticket",
+        limit: TERMINAL_TICKET_REQUEST_BODY_LIMIT_BYTES,
+        body: `{"host":"${escapedCodeUnit.repeat(255)}","port":65535,"username":"${escapedCodeUnit.repeat(128)}","privateKey":"${escapedCodeUnit.repeat(MAX_PRIVATE_KEY_BYTES)}","passphrase":"${escapedCodeUnit.repeat(4096)}","acceptedHostFingerprint":"${escapedCodeUnit.repeat(256)}"}`,
+      },
+    ];
+    const app = await createOmxtermServer(baseConfig);
+
+    try {
+      for (const request of requests) {
+        expect(Buffer.byteLength(request.body)).toBeLessThanOrEqual(
+          request.limit,
+        );
+        const response = await app.inject({
+          method: "POST",
+          url: request.url,
+          headers: {
+            origin: baseConfig.allowedOrigins[0],
+            "content-type": "application/json",
+          },
+          payload: request.body,
+        });
+        expect(response.statusCode).not.toBe(413);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("rejects a private key whose UTF-8 representation exceeds 64 KiB", async () => {
+    const app = await createOmxtermServer(baseConfig);
+    try {
+      const cookie = await loginCookieHeader(app, baseConfig);
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/terminal-ticket",
+        headers: { origin: baseConfig.allowedOrigins[0], cookie },
+        payload: {
+          host: "127.0.0.1",
+          port: 22,
+          username: "test-user",
+          privateKey: "é".repeat(MAX_PRIVATE_KEY_BYTES / 2 + 1),
+          acceptedHostFingerprint: "SHA256:test",
+        },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        ok: false,
+        message: "Invalid SSH connection profile.",
+      });
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe("POST /api/access", () => {
@@ -646,6 +716,20 @@ describe("WebSocket upgrade boundary", () => {
           .slice(MAX_AUTHENTICATED_WS_UPGRADE_ATTEMPTS_PER_WINDOW)
           .every((response) => /^HTTP\/1\.1 429 /.test(response)),
       ).toBe(true);
+
+      // Fresh access sessions must not reset either the direct peer's upgrade
+      // budget or its bounded audit-write budget.
+      for (let rotation = 0; rotation < 15; rotation++) {
+        const rotatedCookie = await loginCookieHeader(app, baseConfig);
+        const response = await sendRawHttpRequest(
+          port,
+          rawWebSocketUpgradeRequest(
+            `/terminal/ws?ticket=rotated-fake-ticket-${rotation}`,
+            rotatedCookie,
+          ),
+        );
+        expect(response).toMatch(/^HTTP\/1\.1 429 /);
+      }
 
       const upgradeRejections = events.filter(
         (event) => event.event === "ws_upgrade_rejected",

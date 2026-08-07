@@ -42,18 +42,37 @@ import { createOutputBackpressure } from "./terminal-backpressure";
 import { createTerminalInboundGuard } from "./terminal-inbound-guard";
 import { startWebSocketHeartbeat } from "./websocket-heartbeat";
 
-const accessSchema = z.object({ accessToken: z.string().min(1).max(4096) });
+const MAX_ACCESS_TOKEN_CODE_UNITS = 4096;
+const MAX_HOST_CODE_UNITS = 255;
+const MAX_USERNAME_CODE_UNITS = 128;
+const MAX_PASSPHRASE_CODE_UNITS = 4096;
+const MAX_FINGERPRINT_CODE_UNITS = 256;
+
+const accessSchema = z.object({
+  accessToken: z.string().min(1).max(MAX_ACCESS_TOKEN_CODE_UNITS),
+});
 const hostKeySchema = z.object({
-  host: z.string().min(1).max(255),
+  host: z.string().min(1).max(MAX_HOST_CODE_UNITS),
   port: z.number().int().min(1).max(65535).default(22),
 });
 const terminalTicketSchema = z.object({
-  host: z.string().min(1).max(255),
+  host: z.string().min(1).max(MAX_HOST_CODE_UNITS),
   port: z.number().int().min(1).max(65535).default(22),
-  username: z.string().min(1).max(128),
-  privateKey: z.string().min(1).max(MAX_PRIVATE_KEY_BYTES),
-  passphrase: z.string().max(4096).optional(),
-  acceptedHostFingerprint: z.string().min(1).max(256),
+  username: z.string().min(1).max(MAX_USERNAME_CODE_UNITS),
+  privateKey: z
+    .string()
+    .min(1)
+    .max(MAX_PRIVATE_KEY_BYTES)
+    .refine(
+      (privateKey) =>
+        Buffer.byteLength(privateKey, "utf8") <= MAX_PRIVATE_KEY_BYTES,
+      { message: "Private key exceeds the UTF-8 byte limit." },
+    ),
+  passphrase: z.string().max(MAX_PASSPHRASE_CODE_UNITS).optional(),
+  acceptedHostFingerprint: z
+    .string()
+    .min(1)
+    .max(MAX_FINGERPRINT_CODE_UNITS),
 });
 
 type Stores = {
@@ -101,12 +120,26 @@ export const MAX_AUTHENTICATED_WS_UPGRADE_ATTEMPTS_PER_WINDOW = 60;
 export const MAX_AUTHENTICATED_WS_REJECTION_AUDITS_PER_REASON_PER_WINDOW = 10;
 export const AUTHENTICATED_WS_UPGRADE_WINDOW_MS = 60 * 1000;
 
-// Parse only the input envelope each route actually supports. Fastify parses a
-// body before entering the handler, so schema validation alone cannot prevent a
-// public client from making the broker buffer its broad default body limit.
-export const ACCESS_REQUEST_BODY_LIMIT_BYTES = 8 * 1024;
-export const HOST_KEY_REQUEST_BODY_LIMIT_BYTES = 4 * 1024;
-export const TERMINAL_TICKET_REQUEST_BODY_LIMIT_BYTES = 160 * 1024;
+// Parse only the input envelope each route actually supports. JSON can encode
+// one UTF-16 code unit as a six-byte `\uXXXX` escape, so the parser envelope
+// must cover that worst case before Zod applies decoded string/UTF-8 limits.
+// A small fixed allowance covers property names, punctuation, and the port.
+const MAX_JSON_BYTES_PER_STRING_CODE_UNIT = 6;
+const JSON_OBJECT_OVERHEAD_BYTES = 1024;
+export const ACCESS_REQUEST_BODY_LIMIT_BYTES =
+  MAX_ACCESS_TOKEN_CODE_UNITS * MAX_JSON_BYTES_PER_STRING_CODE_UNIT +
+  JSON_OBJECT_OVERHEAD_BYTES;
+export const HOST_KEY_REQUEST_BODY_LIMIT_BYTES =
+  MAX_HOST_CODE_UNITS * MAX_JSON_BYTES_PER_STRING_CODE_UNIT +
+  JSON_OBJECT_OVERHEAD_BYTES;
+export const TERMINAL_TICKET_REQUEST_BODY_LIMIT_BYTES =
+  (MAX_PRIVATE_KEY_BYTES +
+    MAX_HOST_CODE_UNITS +
+    MAX_USERNAME_CODE_UNITS +
+    MAX_PASSPHRASE_CODE_UNITS +
+    MAX_FINGERPRINT_CODE_UNITS) *
+    MAX_JSON_BYTES_PER_STRING_CODE_UNIT +
+  JSON_OBJECT_OVERHEAD_BYTES;
 
 // Successful access requests remain usable under rotation, but only this many
 // access_granted records are persisted per direct TCP peer in one fixed window.
@@ -423,7 +456,7 @@ export async function createOmxtermServer(
     directPeer: string,
     reason: BoundedAuthenticatedWsRejectionReason,
   ): void {
-    const auditKey = `${reason}\0${sessionId}\0${directPeer}`;
+    const auditKey = `${reason}\0${directPeer}`;
     if (
       !stores.authenticatedWsRejectionAuditLimiter.tryConsume(auditKey).allowed
     ) {

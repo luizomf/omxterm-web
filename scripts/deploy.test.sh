@@ -64,6 +64,7 @@ EOF
   : >"${DOCKER_LOG}"
 
   git init -q --bare "${REMOTE}"
+  git --git-dir="${REMOTE}" symbolic-ref HEAD refs/heads/main
   git init -q "${APP}"
   (
     cd "${APP}" || exit

@@ -115,11 +115,11 @@ The broker refuses to start with a weak gate. `loadConfig`
 - `OMXTERM_WEB_ROOT` — optional path to the built web SPA. When set, the broker
   serves the SPA itself (single origin); unset in dev, where Vite serves it.
 
-Fastify also applies route-specific JSON body limits before handlers run: 8 KiB
-for access, 4 KiB for host-key probes, and 160 KiB for terminal-ticket requests.
-Those envelopes cover the validated fields (including a 64 KiB private key and
-worst-case JSON escaping) without buffering the framework's much broader default
-on public routes.
+Fastify also applies route-specific JSON body limits before handlers run: 25 KiB
+for access, about 2.5 KiB for host-key probes, and about 413 KiB for
+terminal-ticket requests. The limits are derived from each schema's maximum
+string lengths plus worst-case JSON `\uXXXX` escaping. After parsing, the private
+key is independently capped at 64 KiB of UTF-8 data.
 
 ### 1. Access gate — `POST /api/access`
 
@@ -349,8 +349,9 @@ When the socket closes, the SSH channel and client are torn down and a
 **destroy-on-disconnect**: a dropped tab does not leave an orphan SSH session
 running. Process shutdown follows the same boundary: Docker delivers
 `SIGTERM` directly to Node, the broker terminates upgraded sockets, and
-`app.close()` waits for their close paths before the process exits (with a
-10-second emergency deadline). There is no reconnect/resume in the MVP.
+`app.close()` waits for their close paths. An unref'ed 10-second hard deadline
+remains armed after Fastify closes, so a stalled SSH transport cannot keep the
+process alive indefinitely. There is no reconnect/resume in the MVP.
 
 ---
 
@@ -401,11 +402,12 @@ conservative audit budgets, while the failed-token limiter still uses the
 configured real `request.ip`.
 
 Authenticated WebSocket rejections have a separate bound: at most 10 durable
-records for each normalized reason, session, and direct TCP peer in the same
-60-second fixed-window model. Upgrade work itself stops after 60 attempts per
-session and direct peer, so fake/replayed tickets cannot turn one authenticated
-browser into an unbounded socket or audit-log amplifier. Later attempts still
-fail closed with 429 before capacity or ticket work.
+records for each normalized reason and direct TCP peer in the same 60-second
+fixed-window model. The audit key deliberately excludes the rotatable session
+id. Upgrade work itself stops after 60 attempts per session and direct peer, so
+fake/replayed tickets or fresh sessions cannot turn one authenticated peer into
+an unbounded socket or audit-log amplifier. Later attempts still fail closed
+with 429 before capacity or ticket work.
 
 Successful rotation has a separate `access_granted` budget: at most 10 records
 per direct TCP peer in each 60-second fixed window. A valid login beyond that

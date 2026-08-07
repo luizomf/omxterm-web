@@ -1,5 +1,6 @@
 import { loadConfig } from './config';
 import { createOmxtermServer } from './server';
+import { closeServerWithinDeadline } from './shutdown';
 
 const SHUTDOWN_DEADLINE_MS = 10_000;
 
@@ -10,29 +11,14 @@ let shutdownStarted = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
-  const forceExit = setTimeout(() => {
-    process.stderr.write(
-      `${JSON.stringify({ level: 'error', msg: 'shutdown_timeout', signal })}\n`,
-    );
-    process.exit(1);
-  }, SHUTDOWN_DEADLINE_MS);
-  forceExit.unref();
-
-  try {
-    await app.close();
-    clearTimeout(forceExit);
-  } catch (error) {
-    clearTimeout(forceExit);
-    process.stderr.write(
-      `${JSON.stringify({
-        level: 'error',
-        msg: 'shutdown_failed',
-        signal,
-        error: error instanceof Error ? error.message : 'unknown_error',
-      })}\n`,
-    );
-    process.exitCode = 1;
-  }
+  await closeServerWithinDeadline(signal, () => app.close(), {
+    deadlineMs: SHUTDOWN_DEADLINE_MS,
+    writeError: (message) => process.stderr.write(message),
+    forceExit: (code) => process.exit(code),
+    markFailure: () => {
+      process.exitCode = 1;
+    },
+  });
 }
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
