@@ -22,7 +22,7 @@ Closes #
 ## Checklist
 
 - [ ] Commits are conventional (`type(scope): description`)
-- [ ] Code is formatted (`npx --no-install prettier --check .`)
+- [ ] Changed lines pass the repository whitespace check (`npm run format:check`)
 - [ ] Type-checks pass (`npm run typecheck`)
 - [ ] Relevant tests pass (`npm run test:run`)
 - [ ] New behavior has tests (when practical)
