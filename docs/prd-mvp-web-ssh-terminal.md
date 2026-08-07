@@ -64,11 +64,12 @@ dashboards, no gratuitous metrics.
     tools like vim, top, less, htop, tmux, and nano behave properly.
 12. As a developer, I want terminal input to go to the SSH session and terminal
     output to render through xterm.js, so that normal shell interaction works.
-13. As a developer, I want visible connection states, so that I can tell whether
-    the terminal is disconnected, connecting, waiting for host-key trust,
-    connected, closing, or errored.
-14. As a developer, I want an explicit disconnect/end-session control, so that I
-    can intentionally close the SSH session.
+13. As a developer, I want connection states available from the terminal's
+    explicit toolbar reveal control, so that I can check whether the terminal is
+    disconnected, connecting, waiting for host-key trust, connected, closing,
+    or errored without permanently giving up terminal space.
+14. As a developer, I want an explicit disconnect/end-session control in that
+    revealable toolbar, so that I can intentionally close the SSH session.
 15. As a product owner, I want destroy-on-disconnect behavior in the MVP, so
     that dropped sockets do not leave surprise SSH sessions running.
 16. As a product owner, I want short-lived single-use WebSocket tickets, so that
@@ -174,8 +175,10 @@ dashboards, no gratuitous metrics.
   ANSI or semantic success only.
 - Initial UI flow: access gate, connection gate, host-key confirmation, focused
   terminal view.
-- After connection, the terminal should occupy most of the UI with a minimal
-  top/status bar.
+- After connection, the terminal should occupy most of the UI. The top/status
+  toolbar and touch keyboard toolbar start hidden independently, with explicit
+  `+` reveal controls; revealing the top toolbar exposes connection status and
+  the end-session control.
 - Example commands: `whoami`, `hostname`, `pwd`, `uname -a`, `date`, `ls`,
   `echo "$SSH_CONNECTION"`, and an ANSI color printf to prove terminal
   rendering.
@@ -234,7 +237,9 @@ Modules to test:
   - renders with a fake transport adapter;
   - sends input via the adapter when xterm emits data;
   - sends resize via the adapter when layout changes;
-  - shows major states by accessible state/role rather than brittle copy;
+  - keeps both terminal toolbars hidden initially and reveals them through their
+    independent accessible controls;
+  - shows major states through the revealed status UI rather than brittle copy;
   - has no dependency on SSH/auth/ticket modules.
 
 Testing tools:
