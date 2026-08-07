@@ -41,8 +41,9 @@ full request flow; this is the abuse-control summary:
   peer gets 60 upgrade attempts per 60-second fixed window before capacity or
   ticket lookup. Excess attempts return `429`. Invalid/replayed-ticket,
   capacity, and rate-limit audit events are independently capped at 10 per
-  normalized reason/session/direct-peer window, so an authenticated browser
-  cannot amplify durable logs with short-lived upgrade sockets.
+  normalized reason/direct-peer window regardless of session rotation, so an
+  authenticated browser cannot amplify durable logs with short-lived upgrade
+  sockets.
 - **Concurrency caps**: 5 active SSH sessions per browser session, and 50
   active WebSocket connections globally. Exceeding either returns `409`
   before the single-use ticket is consumed, with a `ws_upgrade_rejected`

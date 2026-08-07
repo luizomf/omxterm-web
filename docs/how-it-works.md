@@ -252,8 +252,8 @@ the raw socket without ever creating a WebSocket
 4. **Authenticated upgrade budget.** Each session and direct TCP peer may make
    60 upgrade attempts in a 60-second fixed window. The limit runs before
    capacity acquisition or ticket lookup; excess attempts return 429, and each
-   authenticated rejection reason persists at most 10 audit events per
-   session/direct-peer window.
+   authenticated rejection reason persists at most 10 audit events per direct
+   peer window, regardless of session rotation.
 5. **Capacity caps** (`InMemoryConcurrencyLimiter`). A global limit on live
    WebSocket connections and a per-session limit on concurrent SSH sessions are
    acquired _before_ the ticket is consumed (so a capacity rejection doesn't
