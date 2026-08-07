@@ -35,6 +35,8 @@ Think: nerd in a tuxedo, not Matrix-green Bootstrap.
 
 ## Local development
 
+Use Node.js `22.12+` or the tested Node.js 24 LTS line with npm 10 or newer.
+
 ```bash
 cp .env.example .env
 # Set OMXTERM_ACCESS_TOKEN in .env to a strong value before the first run; the
@@ -55,9 +57,11 @@ Open `http://localhost:5173`.
 Useful checks:
 
 ```bash
+npm run format:check
 npm run typecheck
 npm run test:run
 npm run build
+npm audit --omit=dev
 ```
 
 ### Disposable browser-to-SSH E2E
@@ -173,7 +177,8 @@ app-scoped rollout (reverse proxy in its own stack, reached over a shared Docker
 network) layers `compose.prod.yml` on top:
 
 ```bash
-docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml up -d --build
+docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml \
+  up -d --build --wait --wait-timeout 120
 ```
 
 For a step-by-step container rollout behind a reverse proxy (Docker, Compose,

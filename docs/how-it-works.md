@@ -104,15 +104,22 @@ The broker refuses to start with a weak gate. `loadConfig`
   IP/CIDR allowlist; leave it unset on a directly exposed server, where
   `X-Forwarded-*` headers are spoofable.
 - `OMXTERM_AUDIT_LOG` — optional path for the JSONL audit log. When set, the
-  broker creates the parent directory and proves the path is writable **once at
-  startup**, failing fast with a useful boot error if it cannot. When unset,
-  audit events go to stdout. After boot, a sink write that fails (e.g. the disk
+  broker creates the parent directory, creates a new log with owner-only `0600`
+  permissions, and proves the path is writable **once at startup**, failing fast
+  with a useful boot error if it cannot. Existing file permissions remain an
+  operator responsibility. When unset, audit events go to stdout. After boot, a sink write that fails (e.g. the disk
   fills) is contained — it is reported once to stderr and never escapes a
   request/upgrade/WebSocket/SSH handler. The stdout sink additionally drops
   events while it is under backpressure (rather than buffering without bound),
   reporting the onset once; see the audit-log section below.
 - `OMXTERM_WEB_ROOT` — optional path to the built web SPA. When set, the broker
   serves the SPA itself (single origin); unset in dev, where Vite serves it.
+
+Fastify also applies route-specific JSON body limits before handlers run: 25 KiB
+for access, about 2.5 KiB for host-key probes, and about 413 KiB for
+terminal-ticket requests. The limits are derived from each schema's maximum
+string lengths plus worst-case JSON `\uXXXX` escaping. After parsing, the private
+key is independently capped at 64 KiB of UTF-8 data.
 
 ### 1. Access gate — `POST /api/access`
 
@@ -242,13 +249,18 @@ the raw socket without ever creating a WebSocket
 2. **Path** must be `/terminal/ws`.
 3. **Cookies** (session + device) must validate, and a `ticket` query param must
    be present, else 401.
-4. **Capacity caps** (`InMemoryConcurrencyLimiter`). A global limit on live
+4. **Authenticated upgrade budget.** Each session and direct TCP peer may make
+   60 upgrade attempts in a 60-second fixed window. The limit runs before
+   capacity acquisition or ticket lookup; excess attempts return 429, and each
+   authenticated rejection reason persists at most 10 audit events per direct
+   peer window, regardless of session rotation.
+5. **Capacity caps** (`InMemoryConcurrencyLimiter`). A global limit on live
    WebSocket connections and a per-session limit on concurrent SSH sessions are
    acquired _before_ the ticket is consumed (so a capacity rejection doesn't
    burn the single-use ticket), else `409` plus a `ws_upgrade_rejected` audit
    event (reason `too_many_ws_connections` or `too_many_active_sessions`). Both
    slots are released when the socket closes.
-5. **Consume the ticket.** `consume` rejects a ticket that is missing, expired,
+6. **Consume the ticket.** `consume` rejects a ticket that is missing, expired,
    or already used, and then checks that the session id, Origin, and
    device-token hash match what the ticket was issued for. On success it stamps
    `usedAt` and **deletes the ticket immediately** — a replay finds nothing.
@@ -335,7 +347,11 @@ handler remains write-only and continues to discard clipboard writes above
 When the socket closes, the SSH channel and client are torn down and a
 `session_ended` audit event (with byte counts) is written. This is
 **destroy-on-disconnect**: a dropped tab does not leave an orphan SSH session
-running. There is no reconnect/resume in the MVP.
+running. Process shutdown follows the same boundary: Docker delivers
+`SIGTERM` directly to Node, the broker terminates upgraded sockets, and
+`app.close()` waits for their close paths. An unref'ed 10-second hard deadline
+remains armed after Fastify closes, so a stalled SSH transport cannot keep the
+process alive indefinitely. There is no reconnect/resume in the MVP.
 
 ---
 
@@ -361,8 +377,10 @@ content. The broker writes JSONL events
 as: `access_granted` / `access_rejected` (with a normalized reason like
 `rate_limited` or `invalid_access_token`), `host_key_presented`,
 `host_key_rejected` and `ticket_rejected` (post-auth rate limits, reason
-`rate_limited`), `ssh_egress_blocked` (with the blocked host/port and reason),
-`ticket_issued`, `ws_upgrade_rejected` (with reason, including
+`rate_limited`), `host_key_probe_failed` (with a closed reason such as timeout,
+resolution failure, connection refused, or generic connection failure),
+`ssh_egress_blocked` (with the blocked host/port and reason), `ticket_issued`,
+`ws_upgrade_rejected` (with reason, including
 `too_many_ws_connections` and `too_many_active_sessions` for the capacity caps),
 `ticket_consumed`, `session_started`, `resize`, `terminal_flood` (a
 per-connection inbound flood was closed, with a normalized reason like
@@ -382,6 +400,14 @@ separate fixed window and are not part of those four audit budgets. Behind a
 reverse proxy, all connections from that proxy intentionally share the four
 conservative audit budgets, while the failed-token limiter still uses the
 configured real `request.ip`.
+
+Authenticated WebSocket rejections have a separate bound: at most 10 durable
+records for each normalized reason and direct TCP peer in the same 60-second
+fixed-window model. The audit key deliberately excludes the rotatable session
+id. Upgrade work itself stops after 60 attempts per session and direct peer, so
+fake/replayed tickets or fresh sessions cannot turn one authenticated peer into
+an unbounded socket or audit-log amplifier. Later attempts still fail closed
+with 429 before capacity or ticket work.
 
 Successful rotation has a separate `access_granted` budget: at most 10 records
 per direct TCP peer in each 60-second fixed window. A valid login beyond that
@@ -416,9 +442,9 @@ assuming it is automatically public-safe.
 
 The sink is deliberately simple for the MVP, and its two backends stay bounded
 in different ways — neither keeps an in-memory queue that can grow without limit.
-The **file sink** (`OMXTERM_AUDIT_LOG`) appends **synchronously**, so the OS
-write buffer paces the writer (natural backpressure) and there is nothing to
-accumulate. **stdout** (the default) is an **asynchronous** stream, so it has no
+The **file sink** (`OMXTERM_AUDIT_LOG`) creates new files as `0600` and appends
+**synchronously**, so the OS write buffer paces the writer (natural backpressure)
+and there is nothing to accumulate. **stdout** (the default) is an **asynchronous** stream, so it has no
 such natural bound: when its buffer fills, `write()` returns `false` and further
 writes would keep buffering unboundedly. The stdout sink therefore switches to
 **dropping audit events while congested** and resumes on the next `drain`. The

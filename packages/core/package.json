@@ -8,6 +8,7 @@
     "./protocol": "./src/protocol.ts",
     "./stores": "./src/stores.ts",
     "./sweeper": "./src/sweeper.ts",
+    "./ssh": "./src/ssh.ts",
     "./terminal": "./src/terminal.ts",
     "./theme": "./src/theme.ts"
   },

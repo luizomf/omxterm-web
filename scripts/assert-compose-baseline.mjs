@@ -27,6 +27,7 @@ if (!broker) {
 }
 
 const networks = config.networks ?? {};
+assertBrokerHealthcheck(broker);
 
 if (mode === "baseline") {
   assertLoopbackOnlyPublish(broker);
@@ -55,6 +56,25 @@ function isLoopbackHost(hostIp) {
   if (typeof hostIp !== "string") return false;
   const value = hostIp.trim().toLowerCase();
   return value === "::1" || value === "localhost" || value.startsWith("127.");
+}
+
+function assertBrokerHealthcheck(service) {
+  const healthcheck = service.healthcheck;
+  const command = healthcheck?.test;
+  if (
+    !Array.isArray(command) ||
+    command[0] !== "CMD" ||
+    !command.some(
+      (part) => typeof part === "string" && part.includes("/health"),
+    )
+  ) {
+    fail(
+      "omxterm-web has no executable /health probe; deploy cannot distinguish a started container from a ready broker",
+    );
+  }
+  if (!Number.isInteger(healthcheck.retries) || healthcheck.retries <= 0) {
+    fail("omxterm-web healthcheck must use a positive retry bound");
+  }
 }
 
 function assertLoopbackOnlyPublish(service) {

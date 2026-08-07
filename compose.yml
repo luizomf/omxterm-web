@@ -43,6 +43,18 @@ services:
     # proxy even though ports below still publish correctly.
     environment:
       OMXTERM_SERVER_HOST: "0.0.0.0"
+    # The deploy helper waits on this probe instead of treating `up -d` as proof
+    # that the broker survived startup and can serve requests.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
     # Host side pinned to loopback so the broker is reachable only through a
     # reverse proxy you deliberately place in front of it, not on the LAN or the
     # public internet.

@@ -18,7 +18,11 @@ export type AuditFailureReporter = (event: string, cause: unknown) => void;
 // once, not per event" and fail-fast contracts are testable without real IO.
 export type AuditFileSystem = {
   mkdirSync: (dir: string, options: { recursive: true }) => void;
-  appendFileSync: (path: string, data: string) => void;
+  appendFileSync: (
+    path: string,
+    data: string,
+    options?: { mode: number },
+  ) => void;
 };
 
 const nodeAuditFileSystem: AuditFileSystem = { mkdirSync, appendFileSync };
@@ -44,7 +48,10 @@ function describeError(cause: unknown): string {
   return String(cause);
 }
 
-export function reportAuditFailureToStderr(event: string, cause: unknown): void {
+export function reportAuditFailureToStderr(
+  event: string,
+  cause: unknown,
+): void {
   const diagnostic = {
     ts: new Date().toISOString(),
     level: 'error',
@@ -68,7 +75,9 @@ export function createFileAuditSink(
 ): AuditSink {
   try {
     fileSystem.mkdirSync(dirname(logPath), { recursive: true });
-    fileSystem.appendFileSync(logPath, '');
+    // Audit metadata includes target and session timing. Restrict newly created
+    // files even when the host process has a permissive default umask.
+    fileSystem.appendFileSync(logPath, '', { mode: 0o600 });
   } catch (cause) {
     throw new AuditSinkError(
       `OMXTERM_AUDIT_LOG points at "${logPath}", which is not writable ` +
