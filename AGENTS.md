@@ -27,10 +27,19 @@ Evaluate planning, implementation, and review in this order:
 2. Repository architecture, security boundaries, and documented decisions.
 3. The engineering rules in this file.
 
-A clean implementation does not pass if it misses the specification. A merged
-issue or implementation also does not silently rewrite product intent. When an
-intentional decision changes behavior, update the PRD and affected docs in the
-same issue/PR.
+Specifications, acceptance criteria, security documentation, ADRs, and
+explicitly resolved decisions define expected behavior. Code and tests implement
+and provide evidence for that contract; their current state does not silently
+override it. A clean implementation does not pass if it misses the documented
+intent.
+
+When documentation, tests, intent-bearing comments, and implementation disagree,
+do not guess or normalize one to another. Trace the originating requirement or
+decision, surface the conflict, and resolve intent before changing behavior.
+Report contract findings before implementation or style findings. If an
+intentional decision changes behavior, update the governing docs, tests, and
+comments in the same issue/PR; never rewrite documentation merely to rationalize
+existing code.
 
 Security rules remain mandatory when a specification is silent. Surface a
 conflict instead of weakening a boundary or inventing behavior.
@@ -94,9 +103,12 @@ issue -> branch -> implementation and tests -> conventional commits -> PR
    being intentionally deferred.
 2. Pick or create the issue, then create a dedicated branch. Do not commit
    directly to `main`.
-3. Make the smallest complete change that satisfies the issue. Keep commits
-   focused and use conventional commit messages.
-4. Open a PR whose body includes `closes #N`.
+3. Make the smallest complete change that satisfies the issue. Keep every PR
+   small enough for meaningful human review. If work becomes too large, split it
+   into independently testable behavior slices; do not hide broad refactors in
+   feature work.
+4. Keep commits focused and use conventional commit messages. Open a PR whose
+   body includes `closes #N`.
 5. Review the exact PR diff and run the applicable quality gates.
 6. Merge only with `gh pr merge --squash --delete-branch`. Do not use merge
    commits or rebase merges.
@@ -140,8 +152,13 @@ Write code that is easy to understand, test, and safely change:
   Inject those dependencies at testable boundaries.
 - Preserve useful error context and the original cause. Never swallow errors
   silently.
-- Comment non-obvious reasons, security constraints, and upstream workarounds;
-  do not narrate obvious code.
+- Use comments to preserve non-obvious intent: why code exists, the constraint
+  or tradeoff behind it, and what could break if it changes. Never narrate what
+  the code already says.
+- Preserve intent-bearing comments unless their rationale is proven obsolete;
+  update them when the constraint or behavior changes. Before removing code that
+  appears unnecessary, inspect related docs, tests, issues/PRs, and Git history
+  for the reason it exists.
 - Prefer a practical, maintainable solution over pattern purity. If the design
   is hard to explain, simplify it before adding another layer.
 
@@ -151,7 +168,8 @@ without fixing the cause or documenting a narrow, necessary exception.
 
 ## Testing rules
 
-Tests are regression protection, not an implementation target:
+Tests are executable evidence of the behavioral contract and regression
+protection—not authority to redefine intent or an implementation target:
 
 - Every behavior change needs coverage. Every bug fix needs a regression test
   that would fail without the fix.
@@ -198,11 +216,13 @@ real root lint command and CI gate in the same change.
 
 ## Documentation and completion
 
-Keep documentation synchronized in the same PR when changing the security
-model, request flow, public API, configuration, environment variables, setup, or
-deployment. Use the existing documentation locations rather than creating a
-new dumping ground. Code artifacts and contributor documentation are in
-English.
+Keep governing documentation and intent-bearing comments synchronized in the
+same PR when behavior or its constraints change. This includes the security
+model, request flow, public API, configuration, environment variables, setup,
+and deployment. A change is incomplete while affected docs or comments still
+describe the previous behavior or rationale. Use the existing documentation
+locations rather than creating a new dumping ground. Code artifacts and
+contributor documentation are in English.
 
 Before finishing:
 
