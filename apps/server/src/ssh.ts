@@ -1,8 +1,21 @@
-import type { SshConnectionProfile } from '@omxterm/core/stores';
-import { createHash } from 'node:crypto';
+import {
+  releaseSshConnectionCredentials,
+  type SshConnectionProfile,
+} from '@omxterm/core/stores';
 import { EventEmitter } from 'node:events';
-import { Client, type ClientChannel, type ConnectConfig } from 'ssh2';
+import { Client } from 'ssh2';
+import { fingerprintHostKey } from './ssh-host-key';
+import {
+  Ssh2Establishment,
+  sshDialHost,
+  type SshEstablishment,
+  type SshEstablishmentEvent,
+  type SshTerminalChannel,
+} from './ssh2-establishment';
 import { createUtf8StreamDecoder } from './terminal-output-decoder';
+
+export { normalizeFingerprint } from './ssh-host-key';
+export { sshDialHost } from './ssh2-establishment';
 
 export type HostKeyProbeInput = {
   host: string;
@@ -40,31 +53,6 @@ export function normalizeHostKeyProbeFailure(
   }
   if (code === 'ECONNREFUSED') return 'host_key_connection_refused';
   return 'host_key_connection_failed';
-}
-
-// The egress allowlist (#4) validated a specific resolved IP at request time;
-// dialing that pinned address instead of re-resolving the hostname closes the
-// DNS-rebinding window between check and dial (#26). ssh2 has no SNI/virtual
-// hosting, so dialing by IP is equivalent for the host-key check, which compares
-// fingerprints regardless of the string dialed. Unrestricted mode pins nothing,
-// so the dial falls back to the hostname (localhost demo).
-export function sshDialHost(target: {
-  host: string;
-  pinnedAddress?: string;
-}): string {
-  return target.pinnedAddress ?? target.host;
-}
-
-function fingerprintHostKey(key: Buffer): string {
-  const digest = createHash('sha256')
-    .update(key)
-    .digest('base64')
-    .replace(/=+$/u, '');
-  return `SHA256:${digest}`;
-}
-
-export function normalizeFingerprint(fingerprint: string): string {
-  return fingerprint.trim().replace(/=+$/u, '');
 }
 
 export function probeSshHostKey(
@@ -140,35 +128,8 @@ export class SshConnectError extends Error {
   }
 }
 
-type SshShellOptions = {
-  term: string;
-  cols: number;
-  rows: number;
-  width: number;
-  height: number;
-};
-
-export type SshShellCallback = (
-  error: Error | undefined,
-  channel: ClientChannel,
-) => void;
-
-// The slice of the ssh2 Client the session drives. Injecting a factory for this
-// (instead of `new Client()` inline) is the smallest seam that lets tests script
-// ready/error/close/shell orderings deterministically (#76). Returns are `unknown`
-// so the real Client stays structurally assignable without re-declaring overloads.
-export type SshClientDriver = {
-  on(event: 'ready', listener: () => void): unknown;
-  on(event: 'error', listener: (error: Error) => void): unknown;
-  on(event: 'close', listener: () => void): unknown;
-  connect(config: ConnectConfig): unknown;
-  shell(options: SshShellOptions, callback: SshShellCallback): unknown;
-  end(): unknown;
-  destroy(): unknown;
-};
-
 export type SshTerminalSessionDeps = {
-  createClient?: () => SshClientDriver;
+  createEstablishment?: () => SshEstablishment;
   connectDeadlineMs?: number;
 };
 
@@ -177,12 +138,11 @@ export type SshTerminalSessionDeps = {
 // readiness, so a hostile server can authenticate and answer keepalives while
 // stalling PTY/shell allocation forever; this deadline is the backstop (#76).
 const CONNECT_DEADLINE_MS = 20_000;
-const SSH_READY_TIMEOUT_MS = 15_000;
 
 export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
-  readonly #client: SshClientDriver;
+  readonly #establishment: SshEstablishment;
   readonly #connectDeadlineMs: number;
-  #channel: ClientChannel | null = null;
+  #channel: SshTerminalChannel | null = null;
   #closed = false;
   #clientDisposed = false;
   // Set while a connect() is in flight; calling it aborts the pending dial and
@@ -191,16 +151,23 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
 
   constructor(deps: SshTerminalSessionDeps = {}) {
     super();
-    this.#client = (deps.createClient ?? (() => new Client()))();
+    this.#establishment = (
+      deps.createEstablishment ?? (() => new Ssh2Establishment())
+    )();
     this.#connectDeadlineMs = deps.connectDeadlineMs ?? CONNECT_DEADLINE_MS;
   }
 
+  /**
+   * Takes ownership of `profile` for one connection attempt. Callers must not
+   * read or reuse it after invoking this method.
+   */
   connect(
     profile: SshConnectionProfile,
     size: { cols: number; rows: number },
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let phase: 'authenticating' | 'authenticated' = 'authenticating';
       let deadline: ReturnType<typeof setTimeout>;
 
       const settle = () => {
@@ -216,10 +183,76 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
       const finishError = (error: SshConnectError) => {
         if (settled) return;
         settle();
-        // Abortive teardown so a half-open dial never lingers past connect()
-        // (a graceful end() lets a stalling server keep the socket alive).
+        // Abortive teardown releases adapter-owned authentication references
+        // before the failed/cancelled attempt becomes observable.
         this.#disposeClient(true);
         reject(error);
+      };
+      const handleEstablishmentEvent = (event: SshEstablishmentEvent) => {
+        switch (event.type) {
+          case 'authenticated':
+            if (!settled) phase = 'authenticated';
+            return;
+          case 'shell-opened':
+            // Cancelled or timed out while the shell was opening: discard the
+            // late channel instead of wiring a session nobody is listening to.
+            if (settled) {
+              event.channel.close();
+              return;
+            }
+            if (phase !== 'authenticated') {
+              event.channel.close();
+              finishError(
+                new SshConnectError(
+                  'ssh_connection_error',
+                  'The SSH shell opened before authentication completed.',
+                ),
+              );
+              return;
+            }
+            this.#attachChannel(event.channel);
+            finishOk();
+            return;
+          case 'shell-open-failed':
+            finishError(
+              new SshConnectError(
+                'ssh_shell_open_failed',
+                'Could not open the SSH shell.',
+                { cause: event.error },
+              ),
+            );
+            return;
+          case 'connection-error':
+            if (!settled) {
+              finishError(
+                new SshConnectError(
+                  'ssh_connection_error',
+                  'The SSH connection failed before the session was ready.',
+                  { cause: event.error },
+                ),
+              );
+              return;
+            }
+            // A live session errored after shell establishment: surface it as a
+            // runtime error, not a connect rejection.
+            if (this.#channel) this.emit('error', event.error);
+            return;
+          case 'connection-closed':
+            if (!settled) {
+              finishError(
+                new SshConnectError(
+                  'ssh_connection_closed',
+                  'The SSH connection closed before the session was ready.',
+                ),
+              );
+              return;
+            }
+            // abort() after a failed attempt also closes ssh2. Only a connection
+            // with an attached shell belongs on the runtime event path.
+            if (!this.#closed && this.#channel) {
+              this.emit('close', 'ssh_connection_closed');
+            }
+        }
       };
 
       deadline = setTimeout(() => {
@@ -240,66 +273,22 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
         );
       };
 
-      this.#client.on('error', (error) => {
-        if (!settled) {
-          finishError(
-            new SshConnectError(
-              'ssh_connection_error',
-              'The SSH connection failed before the session was ready.',
-              {
-                cause: error,
-              },
-            ),
-          );
-          return;
-        }
-        // A live session errored after it was established: surface it as a
-        // runtime error, not a connect rejection.
-        if (this.#channel) this.emit('error', error);
-      });
-
-      this.#client.on('close', () => {
-        if (!settled) {
-          finishError(
-            new SshConnectError(
-              'ssh_connection_closed',
-              'The SSH connection closed before the session was ready.',
-            ),
-          );
-          return;
-        }
-        // destroy() after a failed/cancelled attempt also emits close. Only a
-        // connection that reached an attached shell represents a live session
-        // whose close belongs on the runtime event path.
-        if (!this.#closed && this.#channel)
-          this.emit('close', 'ssh_connection_closed');
-      });
-
-      this.#client.on('ready', () => {
-        if (settled) return;
-        this.#client.shell(shellOptions(size), (error, channel) => {
-          // Cancelled or timed out while the shell was opening: discard the
-          // late channel instead of wiring a session nobody is listening to.
-          if (settled) {
-            channel?.close();
-            return;
-          }
-          if (error) {
-            finishError(
-              new SshConnectError(
-                'ssh_shell_open_failed',
-                'Could not open the SSH shell.',
-                { cause: error },
-              ),
-            );
-            return;
-          }
-          this.#attachChannel(channel);
-          finishOk();
-        });
-      });
-
-      this.#client.connect(this.#buildConnectConfig(profile));
+      try {
+        this.#establishment.start(profile, size, handleEstablishmentEvent);
+      } catch (error) {
+        finishError(
+          new SshConnectError(
+            'ssh_connection_error',
+            'The SSH connection failed before the session was ready.',
+            { cause: error },
+          ),
+        );
+      } finally {
+        // The production adapter releases this before raw ssh2 connect work;
+        // this fallback keeps the public ownership contract true for every
+        // injected adapter and every synchronous throw.
+        releaseSshConnectionCredentials(profile);
+      }
     });
   }
 
@@ -343,7 +332,7 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
     this.#disposeClient(false);
   }
 
-  #attachChannel(channel: ClientChannel): void {
+  #attachChannel(channel: SshTerminalChannel): void {
     this.#channel = channel;
     // One decoder per stream so a multi-byte UTF-8 char split across chunks is
     // reassembled instead of becoming U+FFFD boxes (#11).
@@ -363,40 +352,9 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
     if (this.#clientDisposed) return;
     this.#clientDisposed = true;
     if (abortive) {
-      this.#client.destroy();
+      this.#establishment.abort();
       return;
     }
-    this.#client.end();
+    this.#establishment.end();
   }
-
-  #buildConnectConfig(profile: SshConnectionProfile): ConnectConfig {
-    const config: ConnectConfig = {
-      host: sshDialHost(profile),
-      port: profile.port,
-      username: profile.username,
-      privateKey: profile.privateKey,
-      readyTimeout: SSH_READY_TIMEOUT_MS,
-      keepaliveInterval: 30_000,
-      keepaliveCountMax: 3,
-      hostVerifier: (key: Buffer) => {
-        if (!Buffer.isBuffer(key)) return false;
-        return (
-          normalizeFingerprint(fingerprintHostKey(key)) ===
-          normalizeFingerprint(profile.acceptedHostFingerprint)
-        );
-      },
-    };
-    if (profile.passphrase) config.passphrase = profile.passphrase;
-    return config;
-  }
-}
-
-function shellOptions(size: { cols: number; rows: number }): SshShellOptions {
-  return {
-    term: 'xterm-256color',
-    cols: size.cols,
-    rows: size.rows,
-    width: 0,
-    height: 0,
-  };
 }

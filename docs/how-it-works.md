@@ -26,7 +26,7 @@ defends each of those with one specific mechanism:
 | The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
 | You connect to an impostor server     | **Host-key fingerprint** shown first, then re-verified at connect time                                                                                   |
 | One client exhausts the broker        | **Bounded live state + post-auth limits** — five access credential pairs per client, probe/ticket rate caps, and connection caps                       |
-| The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed                                                                       |
+| The app becomes a credential vault    | Private key **never persisted** — OMXTerm-owned references are released at SSH user-authentication completion                                             |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript                                                                                    |
 
 The boundary OMXTerm Web promises is **safe brokering**. It does _not_ decide
@@ -292,12 +292,33 @@ the profile's key (and passphrase, if any). Two things matter here:
 - **A remote PTY is allocated** via `shell` (`xterm-256color`, initial 120×34),
   so full-screen tools like `vim`, `htop`, and `tmux` behave.
 
-After `SshTerminalSession.connect` resolves, the bridge no longer needs the raw
-secret in the WebSocket grant. The server immediately clears
-`profile.privateKey` and the optional `profile.passphrase` from that grant, so a
-successful terminal session does not keep those string references alive until the
-socket closes. Like any JavaScript string scrub, this removes references and
-shortens the GC window; it does not overwrite already-allocated V8 heap bytes.
+`SshTerminalSession.connect` takes ownership of the one-attempt connection
+profile. After the narrow ssh2 adapter has copied the authentication inputs into
+its connection configuration, it immediately clears the private-key and
+passphrase fields on the consumed grant/profile. The broker caller neither reuses
+that profile nor coordinates secret cleanup.
+
+ssh2's `ready` event represents **SSH user-authentication success**, not an open
+terminal. The adapter models that authenticated milestone separately from shell
+completion: it deletes the private-key and passphrase fields from the
+OMXTerm-owned authentication configuration before requesting the PTY/shell. A
+target that authenticates and then stalls shell allocation can therefore keep
+the connection attempt pending only until the establishment deadline; it cannot
+prolong those OMXTerm-owned references. Synchronous key-parse failure, host-key
+rejection, authentication rejection, timeout, browser cancellation, and
+connection close release the same application-owned references before the
+attempt settles.
+
+This is deliberately a **reference-release** guarantee, not memory
+zeroization. The locked ssh2 1.17.0 client copies the raw private key into its
+own client configuration and retains a parsed private key in authentication
+closures; stock ssh2 exposes no supported disposal hook for those
+**dependency-owned** references, so they may remain for the SSH client lifetime.
+OMXTerm Web does not reflect into ssh2 internals or mutate undocumented handlers
+to clear them. JavaScript strings are immutable, and V8 may retain prior
+stack/register/JIT or garbage-collector copies; immediate collection, native or
+OpenSSL allocations, swap, process dumps, and a compromised broker host are not
+claimed to be erased or protected.
 
 From here the broker bridges the small JSON terminal protocol
 ([`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts)):
@@ -357,15 +378,18 @@ process alive indefinitely. There is no reconnect/resume in the MVP.
 
 ## The four secrets, and where they live
 
-| Secret               | Created at    | Stored as                         | Lives until                 | Travels in                  |
-| -------------------- | ------------- | --------------------------------- | --------------------------- | --------------------------- |
-| Access session token | step 1        | SHA-256 hash, server memory       | 12h TTL                     | `HttpOnly` cookie           |
-| Device token         | step 1        | SHA-256 hash, server memory       | 12h TTL                     | `HttpOnly` cookie           |
-| Terminal ticket      | step 3        | SHA-256 hash, server memory       | 60s / single use            | URL query param, once       |
-| Private key          | typed by user | in memory inside the ticket grant | until SSH connect succeeds  | request body, once (step 3) |
+| Secret               | Created at    | Stored as                                       | Lives until                                      | Travels in                  |
+| -------------------- | ------------- | ----------------------------------------------- | ------------------------------------------------ | --------------------------- |
+| Access session token | step 1        | SHA-256 hash, server memory                     | 12h TTL                                          | `HttpOnly` cookie           |
+| Device token         | step 1        | SHA-256 hash, server memory                     | 12h TTL                                          | `HttpOnly` cookie           |
+| Terminal ticket      | step 3        | SHA-256 hash, server memory                     | 60s / single use                                 | URL query param, once       |
+| Private key          | typed by user | ticket grant, then SSH authentication config    | OMXTerm refs: user auth; ssh2 refs: client lifetime | request body, once (step 3) |
 
-The private key and optional passphrase are never written to disk, never logged,
-and are cleared from the consumed grant once the SSH bridge is ready.
+The private key and optional passphrase are never written to disk or logged.
+The consumed grant/profile releases them when establishment takes ownership;
+the OMXTerm-owned authentication configuration releases them at user-auth
+completion, before PTY/shell allocation. The dependency/V8 limitations above
+still apply.
 
 ---
 
@@ -489,7 +513,8 @@ store, a stronger account model, and mature backpressure/lifecycle handling.
 | ---------------------------------------------- | ------------------------------------------------------------------- |
 | HTTP routes, WS upgrade, bridge                | [`apps/server/src/server.ts`](../apps/server/src/server.ts)         |
 | Sessions, device tokens, tickets, rate limiter | [`packages/core/src/stores.ts`](../packages/core/src/stores.ts)     |
-| Host-key probe + SSH session + `hostVerifier`  | [`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)               |
+| Host-key probe + SSH terminal session          | [`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)               |
+| ssh2 establishment + credential ownership      | [`apps/server/src/ssh2-establishment.ts`](../apps/server/src/ssh2-establishment.ts) |
 | Cookie names and flags                         | [`apps/server/src/cookies.ts`](../apps/server/src/cookies.ts)       |
 | Config and access-token validation             | [`apps/server/src/config.ts`](../apps/server/src/config.ts)         |
 | Terminal protocol codec                        | [`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts) |
