@@ -13,6 +13,7 @@ import {
   Ssh2Establishment,
   type Ssh2ClientDriver,
   type Ssh2ShellCallback,
+  type SshEstablishment,
 } from './ssh2-establishment';
 
 describe('normalizeFingerprint', () => {
@@ -158,6 +159,48 @@ class FakeSshClient extends EventEmitter implements Ssh2ClientDriver {
   }
 }
 
+function diagnosticGraphContains(value: unknown, needle: string): boolean {
+  const pending: unknown[] = [value];
+  const seen = new WeakSet<object>();
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === 'string') {
+      if (current.includes(needle)) return true;
+      continue;
+    }
+    if (
+      current === null ||
+      (typeof current !== 'object' && typeof current !== 'function')
+    ) {
+      continue;
+    }
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    if (ArrayBuffer.isView(current)) {
+      const bytes = Buffer.from(
+        current.buffer,
+        current.byteOffset,
+        current.byteLength,
+      );
+      if (bytes.toString('utf8').includes(needle)) return true;
+    }
+    if (current instanceof Map) {
+      for (const [key, entry] of current) pending.push(key, entry);
+    }
+    if (current instanceof Set) {
+      for (const entry of current) pending.push(entry);
+    }
+    for (const key of Reflect.ownKeys(current)) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor && 'value' in descriptor) pending.push(descriptor.value);
+    }
+  }
+
+  return false;
+}
+
 function fakeChannel(writeResult = true): ClientChannel {
   const channel = new EventEmitter() as EventEmitter & {
     stderr: EventEmitter;
@@ -278,6 +321,91 @@ describe('SshTerminalSession lifecycle', () => {
       });
     },
   );
+
+  test('normalizes real ssh2 parser diagnostics before rejecting malformed credentials', async () => {
+    const privateKeyMarker = 'LEAK-MARKER-123';
+    const passphraseMarker = 'PASSPHRASE-MARKER-456';
+    const malformedPayload = Buffer.concat([
+      Buffer.from(privateKeyMarker),
+      Buffer.alloc(16),
+    ]).toString('base64');
+    const privateKey = [
+      '-----BEGIN OPENSSH PRIVATE KEY-----',
+      malformedPayload,
+      '-----END OPENSSH PRIVATE KEY-----',
+    ].join('\n');
+    const rawParserError = utils.parseKey(privateKey, passphraseMarker);
+    expect(
+      rawParserError instanceof Error &&
+        rawParserError.message.includes(privateKeyMarker),
+    ).toBe(true);
+    const ownedProfile: SshConnectionProfile = {
+      ...profile,
+      privateKey,
+      passphrase: passphraseMarker,
+    };
+    const session = new SshTerminalSession();
+
+    const rejection = await session
+      .connect(ownedProfile, { cols: 80, rows: 24 })
+      .catch((error: unknown) => error);
+
+    expect(rejection instanceof SshConnectError).toBe(true);
+    if (!(rejection instanceof SshConnectError)) return;
+    expect({
+      name: rejection.name,
+      reason: rejection.reason,
+      message: rejection.message,
+    }).toEqual({
+      name: 'SshConnectError',
+      reason: 'ssh_connection_error',
+      message: 'The SSH connection failed before the session was ready.',
+    });
+    expect(diagnosticGraphContains(rejection, privateKeyMarker)).toBe(false);
+    expect(diagnosticGraphContains(rejection, passphraseMarker)).toBe(false);
+    expect(Boolean(ownedProfile.privateKey || ownedProfile.passphrase)).toBe(
+      false,
+    );
+  });
+
+  test('does not mutate a profile after establishment takes ownership', async () => {
+    let ownershipTransferred = false;
+    let writesAfterTransfer = 0;
+    const ownedProfile: SshConnectionProfile = {
+      ...profile,
+      privateKey: 'single-owner-test-private-key',
+      passphrase: 'single-owner-test-passphrase',
+    };
+    const transferredProfile = new Proxy(ownedProfile, {
+      set(target, property, value) {
+        if (ownershipTransferred) writesAfterTransfer += 1;
+        return Reflect.set(target, property, value);
+      },
+    });
+    const establishment: SshEstablishment = {
+      start() {
+        ownedProfile.privateKey = '';
+        ownedProfile.passphrase = '';
+        ownershipTransferred = true;
+      },
+      abort() {},
+      end() {},
+    };
+    const session = new SshTerminalSession({
+      createEstablishment: () => establishment,
+    });
+    const connecting = session.connect(transferredProfile, {
+      cols: 80,
+      rows: 24,
+    });
+
+    expect(writesAfterTransfer).toBe(0);
+
+    session.close();
+    await expect(connecting).rejects.toMatchObject({
+      reason: 'ssh_session_cancelled',
+    });
+  });
 
   test('releases credentials before a synchronous key-parse failure settles', async () => {
     const { session, client } = createSession();

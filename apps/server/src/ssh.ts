@@ -1,7 +1,4 @@
-import {
-  releaseSshConnectionCredentials,
-  type SshConnectionProfile,
-} from '@omxterm/core/stores';
+import type { SshConnectionProfile } from '@omxterm/core/stores';
 import { EventEmitter } from 'node:events';
 import { Client } from 'ssh2';
 import { fingerprintHostKey } from './ssh-host-key';
@@ -106,7 +103,8 @@ export type SshTerminalSessionEvents = {
 
 // Normalized, credential-free reasons a connect attempt can fail with. They are
 // safe to audit and to surface to the client without leaking anything about the
-// key, passphrase, or target internals (#76).
+// key, passphrase, or target internals (#76). Raw dependency errors are never
+// attached as causes because parser diagnostics can echo submitted key bytes.
 export type SshConnectFailureReason =
   | 'ssh_connect_timeout'
   | 'ssh_connection_error'
@@ -117,12 +115,8 @@ export type SshConnectFailureReason =
 export class SshConnectError extends Error {
   readonly reason: SshConnectFailureReason;
 
-  constructor(
-    reason: SshConnectFailureReason,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
+  constructor(reason: SshConnectFailureReason, message: string) {
+    super(message);
     this.name = 'SshConnectError';
     this.reason = reason;
   }
@@ -218,7 +212,6 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
               new SshConnectError(
                 'ssh_shell_open_failed',
                 'Could not open the SSH shell.',
-                { cause: event.error },
               ),
             );
             return;
@@ -228,14 +221,15 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
                 new SshConnectError(
                   'ssh_connection_error',
                   'The SSH connection failed before the session was ready.',
-                  { cause: event.error },
                 ),
               );
               return;
             }
-            // A live session errored after shell establishment: surface it as a
-            // runtime error, not a connect rejection.
-            if (this.#channel) this.emit('error', event.error);
+            // A live session errored after shell establishment: surface only a
+            // normalized runtime error, never raw dependency diagnostics.
+            if (this.#channel) {
+              this.emit('error', new Error('The SSH connection failed.'));
+            }
             return;
           case 'connection-closed':
             if (!settled) {
@@ -275,19 +269,13 @@ export class SshTerminalSession extends EventEmitter<SshTerminalSessionEvents> {
 
       try {
         this.#establishment.start(profile, size, handleEstablishmentEvent);
-      } catch (error) {
+      } catch {
         finishError(
           new SshConnectError(
             'ssh_connection_error',
             'The SSH connection failed before the session was ready.',
-            { cause: error },
           ),
         );
-      } finally {
-        // The production adapter releases this before raw ssh2 connect work;
-        // this fallback keeps the public ownership contract true for every
-        // injected adapter and every synchronous throw.
-        releaseSshConnectionCredentials(profile);
       }
     });
   }

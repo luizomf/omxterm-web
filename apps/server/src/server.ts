@@ -1024,6 +1024,10 @@ export async function createOmxtermServer(
 
       ws.on("close", () => closeTerminalSession("websocket_closed", "info"));
 
+      // connect() consumes the one-attempt profile. Capture only audit-safe
+      // metadata before transfer and never read or mutate the profile afterward.
+      const targetHost = context.grant.profile.host;
+      const targetPort = context.grant.profile.port;
       void terminal
         .connect(context.grant.profile, { cols: 120, rows: 34 })
         .then(() => {
@@ -1031,8 +1035,8 @@ export async function createOmxtermServer(
             event: "session_started",
             severity: "info",
             sessionId: context.session.id,
-            host: context.grant.profile.host,
-            port: context.grant.profile.port,
+            host: targetHost,
+            port: targetPort,
           });
           send({ type: "ready", sessionId: terminalSessionId });
         })
@@ -1041,8 +1045,8 @@ export async function createOmxtermServer(
             event: "session_connect_failed",
             severity: "warn",
             sessionId: context.session.id,
-            host: context.grant.profile.host,
-            port: context.grant.profile.port,
+            host: targetHost,
+            port: targetPort,
             reason:
               error instanceof SshConnectError
                 ? error.reason

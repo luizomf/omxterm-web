@@ -23,16 +23,17 @@ export type SshTerminalChannel = SshReadableStream & {
 
 export type SshEstablishmentEvent =
   | { type: 'authenticated' }
-  | { type: 'connection-error'; error: Error }
+  | { type: 'connection-error' }
   | { type: 'connection-closed' }
   | { type: 'shell-opened'; channel: SshTerminalChannel }
-  | { type: 'shell-open-failed'; error: Error };
+  | { type: 'shell-open-failed' };
 
 export type SshEstablishment = {
   /**
-   * Takes ownership of the one-attempt profile. The adapter releases all
-   * OMXTerm-owned credential references before reporting `authenticated`, and
-   * therefore before requesting the shell.
+   * Takes ownership of the one-attempt profile upon invocation. Every adapter
+   * must release its credential references before reporting `authenticated`,
+   * before any failure settles, and before throwing synchronously. The caller
+   * must never access or mutate the profile after this method is invoked.
    */
   start(
     profile: SshConnectionProfile,
@@ -57,8 +58,9 @@ export type Ssh2ShellCallback = (
 ) => void;
 
 // True-external seam: only this adapter knows ssh2's event names, ConnectConfig,
-// callback shape, and ClientChannel type. Tests substitute the locked client at
-// this seam; SshTerminalSession depends only on the local lifecycle above.
+// callback shape, ClientChannel type, and raw errors. Tests substitute the locked
+// client at this seam; the local lifecycle exposes only normalized failure kinds
+// because parser diagnostics can contain submitted credential bytes.
 export type Ssh2ClientDriver = {
   on(event: 'ready', listener: () => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
@@ -84,7 +86,7 @@ export class Ssh2Establishment implements SshEstablishment {
   constructor(deps: Ssh2EstablishmentDeps = {}) {
     this.#client = (deps.createClient ?? (() => new Client()))();
     this.#client.on('ready', () => this.#handleAuthenticated());
-    this.#client.on('error', (error) => this.#handleConnectionError(error));
+    this.#client.on('error', () => this.#handleConnectionError());
     this.#client.on('close', () => this.#handleConnectionClose());
   }
 
@@ -94,6 +96,7 @@ export class Ssh2Establishment implements SshEstablishment {
     onEvent: (event: SshEstablishmentEvent) => void,
   ): void {
     if (this.#onEvent) {
+      releaseSshConnectionCredentials(profile);
       throw new Error('An SSH establishment adapter supports one attempt.');
     }
 
@@ -107,11 +110,11 @@ export class Ssh2Establishment implements SshEstablishment {
       // as soon as their values have moved into this attempt's auth config.
       releaseSshConnectionCredentials(profile);
       this.#client.connect(this.#authenticationConfig);
-    } catch (error) {
+    } catch {
       releaseSshConnectionCredentials(profile);
       this.#releaseAuthenticationConfig();
       this.#active = false;
-      throw error;
+      throw new Error('SSH establishment failed.');
     }
   }
 
@@ -147,26 +150,20 @@ export class Ssh2Establishment implements SshEstablishment {
           return;
         }
         if (error) {
-          this.#emit({ type: 'shell-open-failed', error });
+          this.#emit({ type: 'shell-open-failed' });
           return;
         }
         this.#emit({ type: 'shell-opened', channel });
       });
-    } catch (error) {
-      this.#emit({
-        type: 'shell-open-failed',
-        error:
-          error instanceof Error
-            ? error
-            : new Error('The SSH shell request failed.'),
-      });
+    } catch {
+      this.#emit({ type: 'shell-open-failed' });
     }
   }
 
-  #handleConnectionError(error: Error): void {
+  #handleConnectionError(): void {
     if (!this.#active) return;
     this.#releaseAuthenticationConfig();
-    this.#emit({ type: 'connection-error', error });
+    this.#emit({ type: 'connection-error' });
   }
 
   #handleConnectionClose(): void {

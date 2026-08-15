@@ -295,8 +295,9 @@ the profile's key (and passphrase, if any). Two things matter here:
 `SshTerminalSession.connect` takes ownership of the one-attempt connection
 profile. After the narrow ssh2 adapter has copied the authentication inputs into
 its connection configuration, it immediately clears the private-key and
-passphrase fields on the consumed grant/profile. The broker caller neither reuses
-that profile nor coordinates secret cleanup.
+passphrase fields on the consumed grant/profile. Ownership transfer is one-way:
+the broker captures only safe host/port audit metadata before the call and
+neither reads nor mutates the profile afterward.
 
 ssh2's `ready` event represents **SSH user-authentication success**, not an open
 terminal. The adapter models that authenticated milestone separately from shell
@@ -307,7 +308,10 @@ the connection attempt pending only until the establishment deadline; it cannot
 prolong those OMXTerm-owned references. Synchronous key-parse failure, host-key
 rejection, authentication rejection, timeout, browser cancellation, and
 connection close release the same application-owned references before the
-attempt settles.
+attempt settles. Raw ssh2 parser, authentication, and shell errors stop at the
+external-dependency adapter because malformed-key diagnostics can echo submitted
+bytes. Rejected connection errors expose only a stable normalized reason and
+message, without the raw dependency error as a cause.
 
 This is deliberately a **reference-release** guarantee, not memory
 zeroization. The locked ssh2 1.17.0 client copies the raw private key into its
