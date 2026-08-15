@@ -61,8 +61,13 @@ npm run format:check
 npm run typecheck
 npm run test:run
 npm run build
-npm audit --omit=dev
+npm run audit:dependencies
 ```
+
+The dependency audit checks the complete lockfile because the production image
+installs development dependencies and uses `tsx` to start the broker. This also
+audits build- and test-only packages conservatively; inclusion does not mean
+those packages execute in production.
 
 ### Disposable browser-to-SSH E2E
 
