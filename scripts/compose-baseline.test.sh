@@ -43,18 +43,19 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
-# Resolve configs in a throwaway project dir with .env copied straight from
-# .env.example — the exact starting point a fresh clone runs with (README's
-# `cp .env.example .env`). In particular .env.example ships
-# OMXTERM_SERVER_HOST=127.0.0.1 (the right default for local `npm run dev`),
-# so resolving against it, rather than an empty file, is what actually catches
-# that value leaking into the container and shadowing the Dockerfile's
-# OMXTERM_SERVER_HOST=0.0.0.0 bind.
+# Resolve configs in a throwaway project dir. Start with the equivalent of an
+# existing pre-#181 .env: all documented settings except the newly introduced
+# resource values. This proves Compose's `${VAR:-default}` migration path rather
+# than accidentally sourcing the same values from .env.example. A second pass
+# below copies .env.example verbatim to cover the documented fresh-clone path.
+# Both retain OMXTERM_SERVER_HOST=127.0.0.1 (the right direct-dev default), which
+# also proves Compose still overrides the container bind to 0.0.0.0.
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 cp "${REPO_ROOT}/compose.yml" "${WORK}/compose.yml"
 cp "${REPO_ROOT}/compose.prod.yml" "${WORK}/compose.prod.yml"
-cp "${REPO_ROOT}/.env.example" "${WORK}/.env"
+grep -Ev '^OMXTERM_BROKER_(MEMORY|PIDS|NOFILE)_LIMIT=' \
+  "${REPO_ROOT}/.env.example" >"${WORK}/.env"
 unset OMXTERM_BROKER_MEMORY_LIMIT OMXTERM_BROKER_PIDS_LIMIT OMXTERM_BROKER_NOFILE_LIMIT
 
 # Resolve the merged config for the given -f list, then assert the named contract
@@ -76,15 +77,24 @@ check_config() {
   fi
 }
 
-echo "portable baseline (compose.yml alone)"
+echo "existing .env without resource keys (Compose fallbacks)"
 check_config \
-  "fresh-clone config resolves against .env.example; applies finite 512 MiB/256 PID/4096 nofile broker limits; publishes only to loopback; pins the container to OMXTERM_SERVER_HOST=0.0.0.0 despite .env.example's 127.0.0.1; restart unless-stopped; no external network, pinned address, or global container_name" \
+  "portable baseline supplies finite 512 MiB/256 PID/4096 nofile fallbacks; publishes only to loopback; pins the container to OMXTERM_SERVER_HOST=0.0.0.0 despite .env's 127.0.0.1; restart unless-stopped; no external network, pinned address, or global container_name" \
   baseline 536870912 256 4096 \
   -f "${WORK}/compose.yml"
-
-echo "production override (compose.yml + compose.prod.yml)"
 check_config \
-  "override merges, inherits the finite broker limits, joins the external shared network at 10.210.0.10, and restores the production restart: always policy" \
+  "production path inherits the same finite fallbacks, joins the external shared network at 10.210.0.10, and restores restart: always" \
+  prod 536870912 256 4096 \
+  -f "${WORK}/compose.yml" -f "${WORK}/compose.prod.yml"
+
+echo "fresh-clone .env.example values (both paths)"
+cp "${REPO_ROOT}/.env.example" "${WORK}/.env"
+check_config \
+  "portable fresh-clone config renders the documented resource values" \
+  baseline 536870912 256 4096 \
+  -f "${WORK}/compose.yml"
+check_config \
+  "production fresh-clone config inherits the documented resource values" \
   prod 536870912 256 4096 \
   -f "${WORK}/compose.yml" -f "${WORK}/compose.prod.yml"
 

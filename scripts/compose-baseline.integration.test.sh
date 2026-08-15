@@ -34,6 +34,11 @@ set -uo pipefail
 REPO_ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")"
 HEALTH_TIMEOUT_SECONDS="${OMXTERM_IT_HEALTH_TIMEOUT:-90}"
 
+# This integration proves the documented defaults. Supported operator overrides
+# inherited from the invoking shell must not change its expected runtime contract;
+# override rendering is covered separately by compose-baseline.test.sh.
+unset OMXTERM_BROKER_MEMORY_LIMIT OMXTERM_BROKER_PIDS_LIMIT OMXTERM_BROKER_NOFILE_LIMIT
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "compose-baseline.integration.test.sh: docker not found, skipping"
   exit 0
