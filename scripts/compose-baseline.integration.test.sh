@@ -4,8 +4,9 @@
 #
 # The descriptor guard (compose-baseline.test.sh) only validates the *resolved*
 # config; it cannot catch a baseline that resolves fine but fails to build,
-# start, or serve. This script proves the documented fresh-clone path end to
-# end: build the image, start the broker, hit /health, tear everything down.
+# apply its broker resource ceilings, start, or serve. This script proves the
+# documented fresh-clone path end to end: build the image, start the broker with
+# its memory/PID/nofile limits, hit /health, tear everything down.
 #
 # It is deliberately NOT part of `npm run test:scripts` — building the image
 # takes minutes and needs a Docker daemon. Run it explicitly:
@@ -118,6 +119,36 @@ case "${body}" in
     ;;
 esac
 
+echo "verifying runtime resource ceilings"
+container_id="$("${COMPOSE[@]}" ps -q omxterm-web)"
+if [ -z "${container_id}" ]; then
+  echo "  FAIL: no running container id for omxterm-web"
+  exit 1
+fi
+if ! docker inspect --format '{{json .HostConfig}}' "${container_id}" | node -e '
+  let input = "";
+  process.stdin.on("data", (chunk) => { input += chunk; });
+  process.stdin.on("end", () => {
+    const hostConfig = JSON.parse(input);
+    const nofile = hostConfig.Ulimits?.find((limit) => limit.Name === "nofile");
+    if (hostConfig.Memory !== 512 * 1024 * 1024) {
+      throw new Error(`memory limit is ${hostConfig.Memory}; expected 536870912 bytes`);
+    }
+    if (hostConfig.PidsLimit !== 256) {
+      throw new Error(`PID limit is ${hostConfig.PidsLimit}; expected 256`);
+    }
+    if (nofile?.Soft !== 4096 || nofile?.Hard !== 4096) {
+      throw new Error(
+        `nofile soft/hard limits are ${nofile?.Soft ?? "unset"}/${nofile?.Hard ?? "unset"}; expected 4096/4096`,
+      );
+    }
+  });
+'; then
+  echo "  FAIL: running broker does not enforce the default resource ceilings"
+  exit 1
+fi
+echo "  ok: broker enforces 512 MiB memory, 256 PIDs, and 4096/4096 nofile"
+
 echo "verifying non-root runtime user"
 if ! runtime_uid="$("${COMPOSE[@]}" exec -T omxterm-web id -u)"; then
   echo "  FAIL: could not read the broker runtime UID"
@@ -142,4 +173,4 @@ if ! "${COMPOSE[@]}" down --volumes --remove-orphans --rmi local >"${WORK}/down.
   exit 1
 fi
 
-echo "compose-baseline.integration.test.sh: build/start/health/teardown passed"
+echo "compose-baseline.integration.test.sh: build/start/resource-limits/health/teardown passed"

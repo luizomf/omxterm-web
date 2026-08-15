@@ -181,8 +181,18 @@ docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml \
   up -d --build --wait --wait-timeout 120
 ```
 
+Both paths impose finite broker-container defaults of 512 MiB memory, 256
+PIDs/tasks, and 4096 open files. Operators can tune them without source edits
+through the non-secret `OMXTERM_BROKER_MEMORY_LIMIT`,
+`OMXTERM_BROKER_PIDS_LIMIT`, and `OMXTERM_BROKER_NOFILE_LIMIT` values in `.env`.
+The ceilings do not raise the broker's application concurrency caps. Resource
+exhaustion can fail work or terminate/restart the process; because all sessions
+and tickets are in memory, a restart loses them and OMXTerm Web does not resume
+terminal sessions.
+
 For a step-by-step container rollout behind a reverse proxy (Docker, Compose,
-Traefik, basic auth), see `docs/deploy.md`.
+Traefik, basic auth), including resource sizing and exhaustion behavior, see
+`docs/deploy.md`.
 
 ## Architecture notes
 

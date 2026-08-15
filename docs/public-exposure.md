@@ -81,6 +81,22 @@ All of this is real protection against a misbehaving or malicious
 **browser client** that has (or is trying to get) a session. It is not
 protection against everything that can reach a public port.
 
+## Compose contains the broker, not the edge
+
+The tracked portable and production Compose paths also apply finite, adjustable
+memory, PID/task, and open-file ceilings to the broker container. This is a
+process-wide backstop for a runaway broker or dependency; it does not change the
+application limits above. Defaults and non-secret overrides are documented in
+[`deploy.md`](./deploy.md#broker-container-resource-ceilings).
+
+Resource exhaustion is not a recovery feature. It can make new work fail, leave
+the container unhealthy, or terminate the broker. If a restart policy starts a
+new process, every live terminal is disconnected and the process-local access
+sessions, device credentials, and pending tickets are gone; there is no session
+resume. These ceilings do not constrain the separately managed reverse proxy,
+the host, or traffic that is exhausted before reaching the broker, so edge and
+host-wide protection remain separate operator responsibilities.
+
 ## What these controls do not protect against
 
 Be precise about the boundary, because it is easy to over-read "rate
