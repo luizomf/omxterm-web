@@ -54,6 +54,13 @@ const WEAK_ACCESS_TOKENS = new Set([
 const STRONG_TOKEN_HINT =
   'Generate a strong random token, e.g. "openssl rand -base64 32".';
 
+// ECMAScript trim omits U+0085 NEXT LINE even though Unicode classifies it as
+// White_Space. Match the Unicode property plus U+FEFF (which ECMAScript treats
+// as whitespace) so boundary padding cannot depend on runtime trim semantics.
+const ALL_TOKEN_WHITESPACE = /^[\p{White_Space}\uFEFF]+$/u;
+const TOKEN_BOUNDARY_WHITESPACE =
+  /(?:^[\p{White_Space}\uFEFF])|(?:[\p{White_Space}\uFEFF]$)/u;
+
 function hasWeakAccessTokenPrimitive(token: string): boolean {
   const normalizedToken = token.toLowerCase();
 
@@ -89,13 +96,12 @@ export function resolveWebRoot(value: string | undefined): string | undefined {
 }
 
 export function validateAccessToken(token: string): string {
-  const trimmedToken = token.trim();
-  if (trimmedToken.length === 0) {
+  if (ALL_TOKEN_WHITESPACE.test(token)) {
     throw new Error(
       `OMXTERM_ACCESS_TOKEN must not be all whitespace. ${STRONG_TOKEN_HINT}`,
     );
   }
-  if (token !== trimmedToken) {
+  if (TOKEN_BOUNDARY_WHITESPACE.test(token)) {
     throw new Error(
       `OMXTERM_ACCESS_TOKEN must not start or end with whitespace. ${STRONG_TOKEN_HINT}`,
     );
@@ -107,7 +113,7 @@ export function validateAccessToken(token: string): string {
   }
   if (token.length < MIN_ACCESS_TOKEN_LENGTH) {
     throw new Error(
-      `OMXTERM_ACCESS_TOKEN must be at least ${MIN_ACCESS_TOKEN_LENGTH} characters; ` +
+      `OMXTERM_ACCESS_TOKEN must be at least ${MIN_ACCESS_TOKEN_LENGTH} UTF-16 code units; ` +
         `got ${token.length}. ${STRONG_TOKEN_HINT}`,
     );
   }

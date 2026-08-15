@@ -82,7 +82,7 @@ The broker refuses to start with a weak gate. `loadConfig`
 - `OMXTERM_ACCESS_TOKEN` — **required**. `validateAccessToken` rejects
   all-whitespace values, leading/trailing whitespace, case-insensitive known
   weak values (`change-me`, `password`, …), their exact repetitions, and
-  anything shorter than 24 characters. The generated token text from the
+  anything shorter than 24 UTF-16 code units. The generated token text from the
   documented random-token command is accepted and returned byte-for-byte for
   the exact runtime comparison, so a disguised placeholder cannot be shipped by
   accident.

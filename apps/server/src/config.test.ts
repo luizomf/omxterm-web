@@ -22,24 +22,33 @@ describe('validateAccessToken', () => {
     );
   });
 
-  test('rejects an all-whitespace token without exposing its value', () => {
-    const submittedToken = ' '.repeat(24);
+  test.each([
+    { kind: 'ASCII spaces', submittedToken: ' '.repeat(24) },
+    { kind: 'Unicode NEXT LINE', submittedToken: '\u0085'.repeat(24) },
+    { kind: 'byte-order marks', submittedToken: '\uFEFF'.repeat(24) },
+  ])('rejects all-$kind tokens without exposing their value', ({ submittedToken }) => {
     const validationError = captureValidationError(submittedToken);
 
     expect(validationError).toBeDefined();
     expect(validationError?.message).not.toContain(submittedToken);
   });
 
-  test('rejects leading whitespace', () => {
-    expect(() =>
-      validateAccessToken(`\t${SYNTHETIC_DOCUMENTED_BASE64_TOKEN}`),
-    ).toThrow(/OMXTERM_ACCESS_TOKEN/);
-  });
-
-  test('rejects trailing whitespace', () => {
-    expect(() =>
-      validateAccessToken(`${SYNTHETIC_DOCUMENTED_BASE64_TOKEN}\n`),
-    ).toThrow(/OMXTERM_ACCESS_TOKEN/);
+  test.each([
+    { boundary: 'leading tab', token: `\t${SYNTHETIC_DOCUMENTED_BASE64_TOKEN}` },
+    {
+      boundary: 'leading Unicode NEXT LINE',
+      token: `\u0085${SYNTHETIC_DOCUMENTED_BASE64_TOKEN}`,
+    },
+    {
+      boundary: 'trailing newline',
+      token: `${SYNTHETIC_DOCUMENTED_BASE64_TOKEN}\n`,
+    },
+    {
+      boundary: 'trailing Unicode NEXT LINE',
+      token: `${SYNTHETIC_DOCUMENTED_BASE64_TOKEN}\u0085`,
+    },
+  ])('rejects $boundary whitespace', ({ token }) => {
+    expect(() => validateAccessToken(token)).toThrow(/OMXTERM_ACCESS_TOKEN/);
   });
 
   test('rejects known weak placeholders regardless of case or padding', () => {
@@ -75,6 +84,13 @@ describe('validateAccessToken', () => {
     const token = 'x'.repeat(24);
 
     expect(validateAccessToken(token)).toBe(token);
+  });
+
+  test('preserves the existing UTF-16 code-unit minimum semantics', () => {
+    const twelveCodePointToken = '🔐'.repeat(12);
+
+    expect(twelveCodePointToken).toHaveLength(24);
+    expect(validateAccessToken(twelveCodePointToken)).toBe(twelveCodePointToken);
   });
 });
 
