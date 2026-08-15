@@ -39,7 +39,8 @@ function getRequiredEnv(name: string): string {
 const MIN_ACCESS_TOKEN_LENGTH = 24;
 
 // Defaults and placeholders that would turn the access gate into an open SSH
-// proxy if shipped as-is. Compared case-insensitively against the trimmed token.
+// proxy if shipped as-is. Compared case-insensitively after boundary whitespace
+// validation.
 const WEAK_ACCESS_TOKENS = new Set([
   "change-me",
   "changeme",
@@ -52,6 +53,24 @@ const WEAK_ACCESS_TOKENS = new Set([
 
 const STRONG_TOKEN_HINT =
   'Generate a strong random token, e.g. "openssl rand -base64 32".';
+
+function hasWeakAccessTokenPrimitive(token: string): boolean {
+  const normalizedToken = token.toLowerCase();
+
+  // Every vocabulary entry is already primitive. Matching one or more complete
+  // copies therefore rejects only tokens whose shortest primitive is known weak.
+  for (const weakToken of WEAK_ACCESS_TOKENS) {
+    if (
+      normalizedToken.length >= weakToken.length &&
+      normalizedToken.length % weakToken.length === 0 &&
+      normalizedToken ===
+        weakToken.repeat(normalizedToken.length / weakToken.length)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // In production the broker serves the built SPA itself (single origin, so the
 // browser's relative /api and same-origin wss just work). Opt-in: unset in dev,
@@ -70,7 +89,18 @@ export function resolveWebRoot(value: string | undefined): string | undefined {
 }
 
 export function validateAccessToken(token: string): string {
-  if (WEAK_ACCESS_TOKENS.has(token.trim().toLowerCase())) {
+  const trimmedToken = token.trim();
+  if (trimmedToken.length === 0) {
+    throw new Error(
+      `OMXTERM_ACCESS_TOKEN must not be all whitespace. ${STRONG_TOKEN_HINT}`,
+    );
+  }
+  if (token !== trimmedToken) {
+    throw new Error(
+      `OMXTERM_ACCESS_TOKEN must not start or end with whitespace. ${STRONG_TOKEN_HINT}`,
+    );
+  }
+  if (hasWeakAccessTokenPrimitive(token)) {
     throw new Error(
       `OMXTERM_ACCESS_TOKEN is set to a known weak value. ${STRONG_TOKEN_HINT}`,
     );
