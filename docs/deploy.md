@@ -48,7 +48,10 @@ How the proxy reaches the broker depends on where the proxy runs:
   shared `omxterm-web-edge` network and forward to `http://omxterm-web:3000`.
 
 The broker serves the SPA only when `OMXTERM_WEB_ROOT` is set (the image sets it
-to `/app/apps/web/dist`). Left unset — as in local dev — Vite serves the web.
+to `/app/apps/web/dist`). At boot it canonicalizes that root and requires a
+readable regular non-symlink `index.html`; invalid roots stop startup. Hidden URL
+path segments are denied before static serving or SPA fallback. Left unset — as
+in local dev — Vite serves the web.
 
 ### Example environment
 
