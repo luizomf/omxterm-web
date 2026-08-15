@@ -23,7 +23,7 @@ defends each of those with one specific mechanism:
 | Anyone reaching the URL gets a shell  | **Access gate** token, rate-limited, timing-safe compare                                                                                                 |
 | A cookie alone authorizes the socket  | **Single-use, 60s terminal ticket** bound to session + device + Origin                                                                                   |
 | Another site opens the socket for you | **Exact Origin check** on every SSH call and on the WebSocket upgrade                                                                                    |
-| The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
+| The broker is aimed at internal hosts | **Exact-family SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the first canonical validated IP is **pinned** unchanged — blocks SSRF and DNS rebinding |
 | You connect to an impostor server     | **User compares the fingerprint with an independent trusted source** before the broker re-verifies it at connect time                                  |
 | One client exhausts the broker        | **Bounded live state + post-auth limits** — five access credential pairs per client, probe/ticket rate caps, and connection caps                       |
 | The app becomes a credential vault    | Private key **never persisted** — known OMXTerm- and ssh2-owned authentication references are released at SSH user-authentication completion              |
@@ -93,10 +93,11 @@ The broker refuses to start with a weak gate. `loadConfig`
 - `OMXTERM_SERVER_HOST` — bind address. Default `127.0.0.1` (loopback only; the
   broker is not on the LAN unless you opt in).
 - `OMXTERM_SSH_ALLOWED_CIDR` — optional SSH egress allowlist (SSRF guard).
-  Comma-separated IPv4/IPv6 CIDRs (a bare address is a single host) that the
-  broker may connect to. `parseSshEgressAllowlist` validates entries at boot and
-  rejects both the wildcard and an allow-all `/0` range. Unset means
-  unrestricted (single-user/localhost); once set it is default-deny, so
+  Comma-separated unscoped IPv4/IPv6 CIDRs (a bare address is a single host) that
+  the broker may connect to. `parseSshEgressAllowlist` validates entries at boot
+  and rejects the wildcard, an allow-all `/0`, scoped IPv6, and IPv4-mapped IPv6.
+  Configure a mapped target with its equivalent IPv4 CIDR/address instead. Unset
+  means unrestricted (single-user/localhost); once set it is default-deny, so
   loopback, link-local (`169.254.169.254` metadata), and the public internet are
   blocked unless listed. Set it before using the broker as a jump host on a
   shared network.
@@ -198,13 +199,17 @@ bucket); over the cap returns `429` with `Retry-After` and a
 `host_key_rejected` audit event, so rotating sessions cannot drive unbounded
 outbound handshakes. It then runs the **SSH egress check**
 (`checkSshEgress` — resolves the host and rejects with `403` plus an
-`ssh_egress_blocked` audit event when an allowlist is configured and the target
-falls outside it), and only then probes the target. When the target is allowed,
-the broker **pins the validated IP** (`sshDialHost`) and dials that address
-rather than the hostname, so `ssh2` never re-resolves and a DNS rebind between
-the check and the dial cannot redirect the connection (#26). The hostname is
-kept for audit only; in unrestricted mode nothing is resolved, so the dial falls
-back to the hostname (localhost demo).
+`ssh_egress_blocked` audit event when an allowlist is configured and any target
+result is invalid or falls outside it), and only then probes the target. The
+check validates each original address and resolver-family value before
+canonicalization, rejects scoped IPv6, converts IPv4-mapped IPv6 to dotted IPv4
+and checks it only against IPv4 policy, and requires every result to pass its
+exact-family policy. Resolver order is retained. When the target is allowed, the
+broker **pins the first canonical validated IP** (`sshDialHost`) and carries that
+exact scalar into the probe rather than the hostname, so `ssh2` never re-resolves
+and a DNS rebind between the check and the dial cannot redirect the connection
+(#26). The hostname is kept for audit only; in unrestricted mode nothing is
+resolved, so the dial falls back to the hostname (localhost demo).
 
 `probeSshHostKey` ([`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)) opens
 an ssh2 connection with a throwaway username, grabs the host key inside
@@ -234,10 +239,12 @@ step 2. This is the **only** request that carries the private key.
 After the same Origin + auth checks, the same **per-session and per-client IP
 rate limit** (30 tickets/minute for each bucket — over the cap returns `429`
 with `Retry-After` and a `ticket_rejected` audit event), and the same **SSH
-egress check** (so a ticket
-is never issued for a target outside the allowlist — the validated IP is pinned
-into the stored profile so the WebSocket connect dials exactly what was checked,
-#26), `InMemoryTerminalTicketStore.issue` mints a **terminal ticket**
+egress check**. The ticket request resolves independently from the earlier probe
+request; it does not couple separate HTTP requests to one address. A ticket is
+never issued unless all current results pass, and the first canonical approved
+address is pinned into the stored profile so the WebSocket connect dials exactly
+what this request checked (#26). `InMemoryTerminalTicketStore.issue` then mints
+a **terminal ticket**
 ([`packages/core/src/stores.ts`](../packages/core/src/stores.ts)):
 
 - random opaque value, stored as a SHA-256 hash;
@@ -301,8 +308,9 @@ file pipe.
 
 With the grant in hand, `SshTerminalSession.connect`
 ([`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)) finally dials the SSH
-target — the **pinned IP** from the egress check, not the hostname (#26) — with
-the profile's key (and passphrase, if any). Two things matter here:
+target — the exact **canonical pinned IP** selected by the ticket request's
+egress check, not the hostname (#26) — with the profile's key (and passphrase,
+if any). Two things matter here:
 
 - **The fingerprint is re-verified for real.** `hostVerifier` recomputes the
   fingerprint of the key the server actually presents and compares it to the
@@ -462,7 +470,9 @@ as: `access_granted` / `access_rejected` (with a normalized reason like
 `host_key_rejected` and `ticket_rejected` (post-auth rate limits, reason
 `rate_limited`), `host_key_probe_failed` (with a closed reason such as timeout,
 resolution failure, connection refused, or generic connection failure),
-`ssh_egress_blocked` (with the blocked host/port and reason), `ticket_issued`,
+`ssh_egress_blocked` (with the blocked host/port and a closed reason for
+resolution failure/emptiness, invalid resolver shape/address/family, family
+mismatch, scoped IPv6, or outside-policy target), `ticket_issued`,
 `ws_upgrade_rejected` (with reason, including
 `too_many_ws_connections` and `too_many_active_sessions` for the capacity caps),
 `ticket_consumed`, `session_started`, `resize`, `terminal_flood` (a

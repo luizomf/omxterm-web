@@ -18,7 +18,7 @@ sequence diagram of the request/response flow.
  │  SSH form           │ ─HTTP─►│  POST /api/ssh/host-key    │ ─SSH──►│  host key    │
  │  host-key screen    │        │  POST /api/terminal-ticket │        │              │
  │  terminal UI        │ ◄─WSS─►│  GET  /terminal/ws         │ ◄─────►│  PTY shell   │
- │                     │        │  ssh2 client (pinned IP)   │        │              │
+ │                     │        │  ssh2 (canonical IP pin)   │        │              │
  │  cookies: session,  │        │                            │        │  privileges  │
  │  device (HttpOnly)  │        │  in-memory: sessions,      │        │  decided     │
  │                     │        │  tickets, limits, audit    │        │  here        │

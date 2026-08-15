@@ -37,7 +37,11 @@ import {
   SshConnectError,
   SshTerminalSession,
 } from "./ssh";
-import { checkSshEgress, resolveHostAddresses } from "./ssh-egress-policy";
+import {
+  checkSshEgress,
+  resolveHostAddresses,
+  type HostResolver,
+} from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
 import { createTerminalInboundGuard } from "./terminal-inbound-guard";
 import { startWebSocketHeartbeat } from "./websocket-heartbeat";
@@ -331,9 +335,16 @@ export type ServerDependencies = {
   // Injected state lets HTTP-boundary tests assert the live session/device
   // cardinality after adversarial successful-login rotation.
   accessCredentials?: InMemoryAccessCredentialStore;
+  // Injected store lets HTTP-boundary tests consume the ticket through the same
+  // public store interface that the WebSocket upgrade uses.
+  tickets?: InMemoryTerminalTicketStore;
   // Injected so the rotation regression can inspect the production limiter
   // through its expiry contract without exposing server internals.
   ticketRateLimiter?: InMemoryFixedWindowRateLimiter;
+  // True-external DNS/SSH seams. Production uses the system resolver and ssh2
+  // probe; behavior tests use deterministic adapters without network access.
+  hostResolver?: HostResolver;
+  hostKeyProbe?: typeof probeSshHostKey;
   // Test seams for proving slot reclamation without waiting for the production
   // heartbeat or opening all 50 production slots.
   websocketHeartbeatIntervalMs?: number;
@@ -358,7 +369,7 @@ export async function createOmxtermServer(
         12 * 60 * 60 * 1000,
         MAX_ACCESS_SESSIONS_PER_CLIENT,
       ),
-    tickets: new InMemoryTerminalTicketStore(),
+    tickets: deps.tickets ?? new InMemoryTerminalTicketStore(),
     accessGrantAuditLimiter: new InMemoryFixedWindowRateLimiter(
       systemClock,
       MAX_ACCESS_GRANT_AUDITS_PER_DIRECT_PEER_PER_WINDOW,
@@ -491,9 +502,9 @@ export async function createOmxtermServer(
 
   // SSRF egress guard (#4): resolve the target and reject before any SSH dial
   // when an allowlist is configured. On block it audits and returns
-  // `{ blocked: true }`; on allow it returns the validated IP to pin into the
-  // dial — dialing that exact address instead of letting ssh2 re-resolve closes
-  // the DNS-rebinding window between this check and the dial (#26). Unrestricted
+  // `{ blocked: true }`; on allow it returns the first canonical validated IP
+  // to pin into the dial. Dialing that exact scalar instead of re-resolving
+  // closes the DNS-rebinding window between check and dial (#26). Unrestricted
   // mode resolves nothing, so there is no pin and the dial keeps using the
   // hostname (localhost demo).
   async function guardSshTarget(
@@ -504,7 +515,7 @@ export async function createOmxtermServer(
     const decision = await checkSshEgress(
       host,
       config.sshEgressPolicy,
-      resolveHostAddresses,
+      deps.hostResolver ?? resolveHostAddresses,
     );
     if (!decision.allowed) {
       audit.write({
@@ -517,9 +528,9 @@ export async function createOmxtermServer(
       });
       return { blocked: true };
     }
-    // Pin the first validated address; the egress check already proved every
-    // resolved address is in the allowlist. Probe and connect resolve
-    // independently, so a multi-A-record host with distinct keys can pin
+    // Pin the first canonical validated address; the egress check already proved
+    // every result is valid and in its exact-family allowlist. Probe and connect
+    // resolve independently, so a multi-address host with distinct keys can pin
     // different IPs — the host-key fingerprint then mismatches and the connect
     // fails safe. Empty in unrestricted mode, where the dial keeps the hostname.
     const pinnedAddress = decision.addresses[0];
@@ -688,7 +699,7 @@ export async function createOmxtermServer(
           .send({ ok: false, message: "SSH target is not allowed." });
 
       try {
-        const result = await probeSshHostKey(
+        const result = await (deps.hostKeyProbe ?? probeSshHostKey)(
           egress.pinnedAddress
             ? { ...parsed.data, pinnedAddress: egress.pinnedAddress }
             : parsed.data,

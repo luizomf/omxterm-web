@@ -114,10 +114,12 @@ ENV
   if this is false while binding to a non-loopback host (the image binds
   `0.0.0.0`), so you cannot ship cookies in the clear by accident.
 - `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist (default-deny SSRF guard).
-  Set it to the range(s) of hosts the broker is allowed to SSH into — for
-  example your private network or VPN subnet — so it cannot be aimed at loopback,
-  cloud metadata, or the public internet. `10.0.0.0/24` above is a placeholder;
-  use your own.
+  Set it to unscoped IPv4/IPv6 ranges the broker may SSH into — for example your
+  private network or VPN subnet — so it cannot be aimed at loopback, cloud
+  metadata, or the public internet. Scoped IPv6 and IPv4-mapped IPv6 entries
+  fail at boot; write mapped targets as their equivalent IPv4 CIDR/address.
+  Every resolver result must pass its exact-family policy. `10.0.0.0/24` above
+  is a placeholder; use your own.
 - `OMXTERM_TRUST_PROXY` — left for step 3 because its correct value depends on
   the topology. Leaving it unset is a valid boot state (the broker starts fine),
   so there is no placeholder to crash on — you set it and re-run `up`.
