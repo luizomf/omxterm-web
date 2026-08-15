@@ -176,8 +176,9 @@ Required for a non-loopback deploy:
   to keep others).
 - `OMXTERM_SERVER_HOST` — `0.0.0.0` (or the proxy-facing interface) so the proxy
   can reach it.
-- `OMXTERM_SSH_ALLOWED_CIDR` — the egress allowlist for the hosts the broker may
-  SSH into (see issue #4).
+- `OMXTERM_SSH_ALLOWED_CIDR` — the unscoped IPv4/IPv6 egress allowlist for the
+  hosts the broker may SSH into. Mapped IPv6 entries are rejected; configure
+  their equivalent IPv4 policy instead (see issue #4).
 
 In production the broker can also serve the built web SPA itself (one origin) by
 setting `OMXTERM_WEB_ROOT` to the web build output; the Docker image does this

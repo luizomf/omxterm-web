@@ -245,9 +245,9 @@ export class Ssh2Establishment implements SshEstablishment {
   }
 }
 
-// The egress allowlist (#4) validated a specific resolved IP at request time;
-// dialing that pinned address instead of re-resolving the hostname closes the
-// DNS-rebinding window between check and dial (#26). ssh2 has no SNI/virtual
+// The egress allowlist (#4) validated one canonical resolved IP at request time;
+// dialing that exact pinned scalar instead of re-resolving the hostname closes
+// the DNS-rebinding window between check and dial (#26). ssh2 has no SNI/virtual
 // hosting, so dialing by IP is equivalent for the host-key check, which compares
 // fingerprints regardless of the string dialed. Unrestricted mode pins nothing,
 // so the dial falls back to the hostname (localhost demo).
