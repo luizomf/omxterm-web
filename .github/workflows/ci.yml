@@ -40,8 +40,8 @@ jobs:
         if: github.event_name == 'push'
         run: git show --check --format= HEAD
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev
+      - name: Audit locked dependencies
+        run: npm run audit:dependencies
 
       - name: Type-check
         run: npm run typecheck
