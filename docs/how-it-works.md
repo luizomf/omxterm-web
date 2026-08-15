@@ -24,7 +24,7 @@ defends each of those with one specific mechanism:
 | A cookie alone authorizes the socket  | **Single-use, 60s terminal ticket** bound to session + device + Origin                                                                                   |
 | Another site opens the socket for you | **Exact Origin check** on every SSH call and on the WebSocket upgrade                                                                                    |
 | The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
-| You connect to an impostor server     | **Host-key fingerprint** shown first, then re-verified at connect time                                                                                   |
+| You connect to an impostor server     | **User compares the fingerprint with an independent trusted source** before the broker re-verifies it at connect time                                  |
 | One client exhausts the broker        | **Bounded live state + post-auth limits** — five access credential pairs per client, probe/ticket rate caps, and connection caps                       |
 | The app becomes a credential vault    | Private key **never persisted** — held in memory only until the ticket is consumed                                                                       |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript                                                                                    |
@@ -50,7 +50,7 @@ Browser                          Broker (Fastify + ws)                 SSH targe
   | 2. POST /api/ssh/host-key -------->| Origin + auth check                |
   |                                    |---- probe host key (no login) ---->|
   |    fingerprint  <------------------|<--- server host key ---------------|
-  |  (user eyeballs SHA256:... fingerprint and accepts)                     |
+  |  (user compares SHA256:... with an independent trusted source)           |
   |                                    |                                    |
   | 3. POST /api/terminal-ticket ----->| Origin + auth check                |
   |    (host, user, key, fingerprint)  | issue ticket (single-use, 60s)     |
@@ -182,9 +182,10 @@ still validate — the UI uses it to skip the gate on reload.
 
 ### 2. Host-key confirmation — `POST /api/ssh/host-key`
 
-Before trusting a server, you should look at its fingerprint. The browser sends
-`{ host, port }`; the server first runs the **Origin check** (`isOriginAllowed`
-— an exact match against the `OMXTERM_ALLOWED_ORIGIN` allowlist) and the cookie
+Before trusting a server, authenticate its fingerprint through an independent
+trusted source. The browser sends `{ host, port }`; the server first runs the
+**Origin check** (`isOriginAllowed` — an exact match against the
+`OMXTERM_ALLOWED_ORIGIN` allowlist) and the cookie
 auth check. An authenticated probe is then **rate-limited per session and
 per client IP** (`InMemoryFixedWindowRateLimiter`, 30 probes/minute for each
 bucket); over the cap returns `429` with `Retry-After` and a
@@ -205,9 +206,18 @@ an ssh2 connection with a throwaway username, grabs the host key inside
 so it never authenticates** — it just reads the key and hangs up. The
 fingerprint comes back to the browser, which shows it to the user.
 
-The user eyeballs it (against what they know the server's key to be) and
-accepts. There is no persistent `known_hosts` in the MVP: trust is **per session
-only**, and the UI is honest about that.
+This probe only collects the key offered on the broker's current network path;
+it does not authenticate that key by itself. The user compares its fingerprint
+with an expected value obtained through a source they already trust, such as the
+target's trusted console, trusted provider host-key metadata, or a previously
+authenticated administrative channel. A network scan such as `ssh-keyscan` is
+also current-path collection. If the scan and probe share a potentially
+intercepted path, the same man-in-the-middle can substitute both keys, so
+matching observations do not detect the interception.
+
+The user should accept only after the independently obtained value matches.
+There is no persistent `known_hosts` in the MVP: trust is **per session only**,
+and the UI is honest about that.
 
 ### 3. Terminal ticket — `POST /api/terminal-ticket`
 
