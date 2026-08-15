@@ -60,13 +60,17 @@ export type Ssh2ShellCallback = (
 // True-external seam: only this adapter knows ssh2's event names, ConnectConfig,
 // callback shape, ClientChannel type, and raw errors. Tests substitute the locked
 // client at this seam; the local lifecycle exposes only normalized failure kinds
-// because parser diagnostics can contain submitted credential bytes.
+// because parser diagnostics can contain submitted credential bytes. The two
+// disposal methods are OMXTerm's exact-version adaptation contract, not upstream
+// ssh2 API, and start() validates their runtime presence before transferring data.
 export type Ssh2ClientDriver = {
   on(event: 'ready', listener: () => void): unknown;
   on(event: 'error', listener: (error: Error) => void): unknown;
   on(event: 'close', listener: () => void): unknown;
   connect(config: ConnectConfig): unknown;
   shell(options: SshShellOptions, callback: Ssh2ShellCallback): unknown;
+  disposeAuthMaterial(): boolean;
+  isAuthMaterialDisposed(): boolean;
   end(): unknown;
   destroy(): unknown;
 };
@@ -82,9 +86,12 @@ export class Ssh2Establishment implements SshEstablishment {
   #shellSize: { cols: number; rows: number } | null = null;
   #active = false;
   #shellRequested = false;
+  #clientDisposed = false;
 
   constructor(deps: Ssh2EstablishmentDeps = {}) {
-    this.#client = (deps.createClient ?? (() => new Client()))();
+    this.#client = (
+      deps.createClient ?? (() => new Client() as unknown as Ssh2ClientDriver)
+    )();
     this.#client.on('ready', () => this.#handleAuthenticated());
     this.#client.on('error', () => this.#handleConnectionError());
     this.#client.on('close', () => this.#handleConnectionClose());
@@ -98,6 +105,10 @@ export class Ssh2Establishment implements SshEstablishment {
     if (this.#onEvent) {
       releaseSshConnectionCredentials(profile);
       throw new Error('An SSH establishment adapter supports one attempt.');
+    }
+    if (!hasAuthMaterialDispositionContract(this.#client)) {
+      releaseSshConnectionCredentials(profile);
+      throw new Error('SSH establishment failed.');
     }
 
     this.#active = true;
@@ -113,6 +124,7 @@ export class Ssh2Establishment implements SshEstablishment {
     } catch {
       releaseSshConnectionCredentials(profile);
       this.#releaseAuthenticationConfig();
+      this.#disposeDependencyAuthMaterial();
       this.#active = false;
       throw new Error('SSH establishment failed.');
     }
@@ -121,17 +133,33 @@ export class Ssh2Establishment implements SshEstablishment {
   abort(): void {
     this.#active = false;
     this.#releaseAuthenticationConfig();
-    this.#client.destroy();
+    this.#disposeDependencyAuthMaterial();
+    this.#destroyClient();
   }
 
   end(): void {
     this.#active = false;
     this.#releaseAuthenticationConfig();
+    this.#disposeDependencyAuthMaterial();
+    if (this.#clientDisposed) return;
+    this.#clientDisposed = true;
     this.#client.end();
   }
 
   #handleAuthenticated(): void {
     if (!this.#active) return;
+    // The pinned ssh2 adaptation must have released every audited dependency
+    // reference before its ready event. Refuse the session if that runtime
+    // evidence is absent rather than exposing an unsafe authenticated boundary.
+    if (!this.#dependencyAuthMaterialDisposed()) {
+      this.#active = false;
+      this.#releaseAuthenticationConfig();
+      this.#disposeDependencyAuthMaterial();
+      this.#destroyClient();
+      this.#emit({ type: 'connection-error' });
+      return;
+    }
+
     // ssh2's ready event is SSH user-authentication success. Release the
     // application-owned auth config before exposing that milestone, then
     // request PTY/shell as a separate lifecycle step.
@@ -163,13 +191,46 @@ export class Ssh2Establishment implements SshEstablishment {
   #handleConnectionError(): void {
     if (!this.#active) return;
     this.#releaseAuthenticationConfig();
+    if (!this.#disposeDependencyAuthMaterial()) {
+      this.#active = false;
+      this.#destroyClient();
+    }
     this.#emit({ type: 'connection-error' });
   }
 
   #handleConnectionClose(): void {
     if (!this.#active) return;
     this.#releaseAuthenticationConfig();
+    if (!this.#disposeDependencyAuthMaterial()) {
+      this.#active = false;
+      this.#destroyClient();
+    }
     this.#emit({ type: 'connection-closed' });
+  }
+
+  #dependencyAuthMaterialDisposed(): boolean {
+    try {
+      return this.#client.isAuthMaterialDisposed() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  #disposeDependencyAuthMaterial(): boolean {
+    try {
+      return (
+        this.#client.disposeAuthMaterial() === true &&
+        this.#client.isAuthMaterialDisposed() === true
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  #destroyClient(): void {
+    if (this.#clientDisposed) return;
+    this.#clientDisposed = true;
+    this.#client.destroy();
   }
 
   #releaseAuthenticationConfig(): void {
@@ -216,6 +277,16 @@ function buildConnectConfig(profile: SshConnectionProfile): ConnectConfig {
     config.passphrase = profile.passphrase;
   }
   return config;
+}
+
+function hasAuthMaterialDispositionContract(
+  client: Ssh2ClientDriver,
+): boolean {
+  const candidate = client as Partial<Ssh2ClientDriver>;
+  return (
+    typeof candidate.disposeAuthMaterial === 'function' &&
+    typeof candidate.isAuthMaterialDisposed === 'function'
+  );
 }
 
 function shellOptions(size: { cols: number; rows: number }): SshShellOptions {

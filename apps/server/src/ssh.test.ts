@@ -15,6 +15,7 @@ import {
   type Ssh2ShellCallback,
   type SshEstablishment,
 } from './ssh2-establishment';
+import { generateValidatedEd25519KeyPair } from './ssh-test-key-generation';
 
 describe('normalizeFingerprint', () => {
   test('trims padding and whitespace for session fingerprint comparison', () => {
@@ -83,6 +84,7 @@ class FakeSshClient extends EventEmitter implements Ssh2ClientDriver {
   authenticationInputParsed: boolean | undefined;
   parseAuthenticationInput = false;
   connectError: Error | null = null;
+  authMaterialDisposed = false;
   #connectConfig: ConnectConfig | null = null;
   #expectedAuthenticationInput: {
     privateKey: string;
@@ -92,6 +94,7 @@ class FakeSshClient extends EventEmitter implements Ssh2ClientDriver {
 
   connect(config: ConnectConfig): this {
     this.connectCount += 1;
+    this.authMaterialDisposed = false;
     this.#connectConfig = config;
     if (this.#expectedAuthenticationInput) {
       this.authenticationInputMatched =
@@ -122,6 +125,24 @@ class FakeSshClient extends EventEmitter implements Ssh2ClientDriver {
     return Boolean(
       this.#connectConfig?.privateKey || this.#connectConfig?.passphrase,
     );
+  }
+
+  disposeAuthMaterial(): boolean {
+    if (this.#connectConfig) {
+      delete this.#connectConfig.privateKey;
+      delete this.#connectConfig.passphrase;
+    }
+    this.authMaterialDisposed = true;
+    return true;
+  }
+
+  isAuthMaterialDisposed(): boolean {
+    return this.authMaterialDisposed;
+  }
+
+  emitAuthenticated(): void {
+    this.disposeAuthMaterial();
+    this.emit('ready');
   }
 
   expectAuthenticationInput(
@@ -219,7 +240,7 @@ async function establishedSession(channel: ClientChannel): Promise<{
 }> {
   const { session, client } = createSession();
   const connecting = session.connect({ ...profile }, { cols: 80, rows: 24 });
-  client.emit('ready');
+  client.emitAuthenticated();
   client.openShell(channel);
   await connecting;
   return { session, client };
@@ -241,6 +262,28 @@ function createSession(overrides: { connectDeadlineMs?: number } = {}): {
 describe('SshTerminalSession lifecycle', () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  test('refuses to expose authentication without dependency disposal evidence', () => {
+    const client = new FakeSshClient();
+    const establishment = new Ssh2Establishment({
+      createClient: () => client,
+    });
+    const events: string[] = [];
+    const ownedProfile: SshConnectionProfile = {
+      ...profile,
+      privateKey: 'runtime-evidence-test-key',
+    };
+
+    establishment.start(ownedProfile, { cols: 80, rows: 24 }, (event) => {
+      events.push(event.type);
+    });
+    client.emit('ready');
+
+    expect(events).toEqual(['connection-error']);
+    expect(client.shellCount).toBe(0);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
+    expect(client.destroyCount).toBe(1);
   });
 
   test('releases application-owned credentials at authentication before a stalled shell allocation', async () => {
@@ -269,12 +312,13 @@ describe('SshTerminalSession lifecycle', () => {
         ),
       ).toBe(false);
 
-      client.emit('ready');
+      client.emitAuthenticated();
       await Promise.resolve();
 
       expect(client.shellCount).toBe(1);
       expect(client.retainedAuthenticationCredentialsAtShellOpen).toBe(false);
       expect(client.retainsAuthenticationCredentials()).toBe(false);
+      expect(client.isAuthMaterialDisposed()).toBe(true);
       expect(settled).toBe(false);
     } finally {
       session.close();
@@ -289,13 +333,7 @@ describe('SshTerminalSession lifecycle', () => {
     'preserves $keyKind OpenSSH input and its optional passphrase at the ssh2 seam',
     async ({ encrypted }) => {
       const passphrase = encrypted ? 'generated-test-passphrase' : undefined;
-      const generated = encrypted
-        ? utils.generateKeyPairSync('ed25519', {
-            passphrase: passphrase ?? '',
-            cipher: 'aes256-ctr',
-            rounds: 16,
-          })
-        : utils.generateKeyPairSync('ed25519');
+      const generated = generateValidatedEd25519KeyPair({ passphrase });
       const { session, client } = createSession();
       client.parseAuthenticationInput = true;
       client.expectAuthenticationInput(generated.private, passphrase);
@@ -430,6 +468,7 @@ describe('SshTerminalSession lifecycle', () => {
       false,
     );
     expect(client.retainsAuthenticationCredentials()).toBe(false);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
     const diagnostic =
       error instanceof Error
         ? `${error.name}:${error.message}:${error.cause instanceof Error ? error.cause.message : ''}`
@@ -463,6 +502,7 @@ describe('SshTerminalSession lifecycle', () => {
       false,
     );
     expect(client.retainsAuthenticationCredentials()).toBe(false);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
   });
 
   test('releases credentials before authentication rejection settles', async () => {
@@ -486,6 +526,7 @@ describe('SshTerminalSession lifecycle', () => {
       false,
     );
     expect(client.retainsAuthenticationCredentials()).toBe(false);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
   });
 
   test('releases credentials and destroys the client when the browser cancels before authentication', async () => {
@@ -510,6 +551,7 @@ describe('SshTerminalSession lifecycle', () => {
       false,
     );
     expect(client.retainsAuthenticationCredentials()).toBe(false);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
     expect(client.destroyCount).toBe(1);
   });
 
@@ -521,7 +563,7 @@ describe('SshTerminalSession lifecycle', () => {
       { cols: 80, rows: 24 },
     );
 
-    client.emit('ready');
+    client.emitAuthenticated();
     expect(client.shellCount).toBe(1);
 
     // Attach the rejection handler before firing the deadline so the reject is
@@ -557,6 +599,7 @@ describe('SshTerminalSession lifecycle', () => {
       false,
     );
     expect(client.retainsAuthenticationCredentials()).toBe(false);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
     expect(client.destroyCount).toBe(1);
   });
 
@@ -583,6 +626,7 @@ describe('SshTerminalSession lifecycle', () => {
       false,
     );
     expect(client.retainsAuthenticationCredentials()).toBe(false);
+    expect(client.isAuthMaterialDisposed()).toBe(true);
   });
 
   test('settles connect only once when an error arrives before a late ready', async () => {
@@ -618,7 +662,7 @@ describe('SshTerminalSession lifecycle', () => {
       { ...profile },
       { cols: 80, rows: 24 },
     );
-    client.emit('ready');
+    client.emitAuthenticated();
     client.openShell(fakeChannel());
 
     await expect(connecting).resolves.toBeUndefined();
@@ -637,7 +681,7 @@ describe('SshTerminalSession lifecycle', () => {
       { cols: 80, rows: 24 },
     );
 
-    client.emit('ready');
+    client.emitAuthenticated();
     client.failShell(new Error('channel open failure'));
 
     await expect(connecting).rejects.toMatchObject({

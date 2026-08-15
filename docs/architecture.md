@@ -36,9 +36,14 @@ sequence diagram of the request/response flow.
 - The private key/passphrase are not persisted by the MVP. SSH establishment
   owns the one-attempt profile, releases OMXTerm-owned credential references at
   user-authentication completion, and only then requests the PTY/shell.
-- Reference release is not memory zeroization: immutable strings and V8 copies
-  may remain, and stock ssh2 1.17.0 can retain dependency-owned raw/parsed key
-  material for the SSH client lifetime.
+- The repository's exact-version ssh2 1.17.0 adaptation releases its audited
+  raw configuration, authentication-closure, current-authentication, parsed-key,
+  and generated private-PEM references before authentication readiness crosses
+  into the broker. The adapter refuses readiness without runtime disposal
+  evidence.
+- Reference release is not memory zeroization: immutable strings and prior V8
+  copies may remain; immediate garbage collection, native/OpenSSL allocations,
+  dumps, swap, and secure byte erasure are not promised.
 - SSH host key trust is explicit per session; persistent `known_hosts` is out of
   MVP scope.
 - Remote privileges are controlled by the SSH target, not by OMXTerm Web.
