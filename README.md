@@ -179,7 +179,10 @@ Required for a non-loopback deploy:
 
 In production the broker can also serve the built web SPA itself (one origin) by
 setting `OMXTERM_WEB_ROOT` to the web build output; the Docker image does this
-for you. Locally, leave it unset and Vite serves the web.
+for you. The broker canonicalizes that root and refuses to start unless it is a
+directory with a readable regular non-symlink `index.html`. Dotfiles and content
+below hidden directories are never served or used as SPA fallback paths. Locally,
+leave the root unset and Vite serves the web.
 
 Security headers (CSP and friends) are applied via `@fastify/helmet`. See
 `.env.example` for every variable and `docs/how-it-works.md` for the security

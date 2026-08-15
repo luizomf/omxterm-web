@@ -221,6 +221,13 @@ const UPGRADE_STATUS_TEXT: Record<number, string> = {
   429: "Too Many Requests",
 };
 
+const ROUTE_NOT_FOUND_BODY = {
+  error: "Not Found",
+  message: "Route not found.",
+  statusCode: 404,
+} as const;
+const RESERVED_SERVER_PATHS = ["/api", "/health", "/terminal"] as const;
+
 function rejectUpgrade(socket: Duplex, statusCode: number): void {
   const statusText = UPGRADE_STATUS_TEXT[statusCode] ?? "Forbidden";
   socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\n\r\n`);
@@ -235,6 +242,48 @@ function normalizeOriginHeader(
 
 function requestOrigin(request: FastifyRequest): string | undefined {
   return normalizeOriginHeader(request.headers.origin);
+}
+
+function normalizePolicyPathname(
+  encodedPathname: string,
+): string | undefined {
+  try {
+    // Compare URL path semantics, not literal static filenames: decode encoded
+    // separators, normalize backslashes, and restore exactly one leading slash.
+    const decodedPathname = decodeURIComponent(encodedPathname).replaceAll(
+      "\\",
+      "/",
+    );
+    return `/${decodedPathname.replace(/^\/+/u, "")}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeRequestPathname(requestUrl: string): string | undefined {
+  // find-my-way ends routing at the earliest raw delimiter. Split first so an
+  // encoded delimiter such as %23 remains pathname data after decoding.
+  let pathnameEnd = requestUrl.length;
+  for (const delimiter of ["?", "#"]) {
+    const delimiterStart = requestUrl.indexOf(delimiter);
+    if (delimiterStart !== -1 && delimiterStart < pathnameEnd) {
+      pathnameEnd = delimiterStart;
+    }
+  }
+  return normalizePolicyPathname(requestUrl.slice(0, pathnameEnd));
+}
+
+function hasHiddenPathSegment(pathname: string): boolean {
+  return pathname
+    .split(/[\\/]/u)
+    .some((segment) => segment.startsWith("."));
+}
+
+function isReservedServerPath(pathname: string): boolean {
+  return RESERVED_SERVER_PATHS.some(
+    (namespace) =>
+      pathname === namespace || pathname.startsWith(`${namespace}/`),
+  );
 }
 
 function consumePostAuthBudget(
@@ -382,11 +431,45 @@ export async function createOmxtermServer(
   await app.register(helmet);
   await app.register(cookie);
   // Serve the built SPA from the broker in production so it shares the API's
-  // origin (#52). The /api routes and the /terminal/ws upgrade are matched
-  // first, so this only answers the SPA shell and its assets. Unset in dev,
-  // where Vite serves the web and proxies the API.
+  // origin (#52). Server-owned namespaces stay authoritative, and hidden path
+  // segments are rejected before static serving or client-route fallback.
+  // Unset in dev, where Vite serves the web and proxies the API.
   if (config.webRoot) {
-    await app.register(fastifyStatic, { root: config.webRoot });
+    // allowedPath denials call the not-found handler. Retain only request
+    // identity so the SPA fallback cannot turn a denied static path into 200.
+    const deniedStaticRequests = new WeakSet<FastifyRequest>();
+    app.addHook("onRequest", async (request, reply) => {
+      const requestPath = decodeRequestPathname(request.url);
+      if (requestPath === undefined || hasHiddenPathSegment(requestPath)) {
+        return reply.code(404).send(ROUTE_NOT_FOUND_BODY);
+      }
+    });
+    await app.register(fastifyStatic, {
+      root: config.webRoot,
+      dotfiles: "deny",
+      allowedPath: (pathname, _root, request) => {
+        const policyPath = decodeRequestPathname(pathname);
+        const allowed =
+          policyPath !== undefined &&
+          !hasHiddenPathSegment(policyPath) &&
+          !isReservedServerPath(policyPath);
+        if (!allowed) deniedStaticRequests.add(request);
+        return allowed;
+      },
+    });
+    app.setNotFoundHandler((request, reply) => {
+      const requestPath = decodeRequestPathname(request.url);
+      if (
+        !deniedStaticRequests.has(request) &&
+        requestPath !== undefined &&
+        !hasHiddenPathSegment(requestPath) &&
+        !isReservedServerPath(requestPath) &&
+        (request.method === "GET" || request.method === "HEAD")
+      ) {
+        return reply.sendFile("index.html");
+      }
+      return reply.code(404).send(ROUTE_NOT_FOUND_BODY);
+    });
   }
   app.addHook("onClose", async () => {
     stopExpirySweeper();
