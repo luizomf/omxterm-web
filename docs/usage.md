@@ -62,19 +62,28 @@ blank form.
 ### 3. Confirm the host-key fingerprint
 
 Before logging in, OMXTerm Web probes the server's SSH host key and shows you its
-**SHA256 fingerprint** alongside the `host:port` you entered. This is how you
-catch a man-in-the-middle or a wrong host: you confirm the server is who you
-think it is before the private key is ever used.
+**SHA256 fingerprint** alongside the `host:port` you entered. The probe collects
+the key offered on the broker's current network path; displaying that key does
+not authenticate the server by itself.
 
-Compare the displayed fingerprint with the one you trust. You can read your
-server's fingerprint with:
+First obtain the expected fingerprint through an independent source you already
+trust, such as the target's trusted console, trusted host-key metadata in the
+provider control panel, or a previously authenticated administrative channel.
+Compare that trusted value with the fingerprint OMXTerm Web displays. Press
+**Trust for this session** only when the values match; if you cannot obtain an
+independent value or anything looks off, press **Back**.
+
+You can use `ssh-keyscan` to collect the key offered over the scanning
+machine's current network path:
 
 ```bash
-ssh-keyscan -p 22 example.com | ssh-keygen -lf -
+ssh-keyscan -p 22 ssh.example.net | ssh-keygen -lf -
 ```
 
-The `SHA256:...` value it prints must match what the screen shows. If it does,
-press **Trust for this session**; if anything looks off, press **Back**.
+This is collection, not independent authentication. If the scan and OMXTerm
+Web's probe traverse the same potentially intercepted path, a man-in-the-middle
+can present the same substituted key to both. Their agreement therefore does
+not detect that interception and must not be the basis for trusting the key.
 
 This trust is **per session only** — the MVP has no persistent `known_hosts`, so
 you will confirm the fingerprint again next time.
