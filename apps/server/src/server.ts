@@ -244,15 +244,33 @@ function requestOrigin(request: FastifyRequest): string | undefined {
   return normalizeOriginHeader(request.headers.origin);
 }
 
-function decodeRequestPathname(requestUrl: string): string | undefined {
-  const queryStart = requestUrl.indexOf("?");
-  const encodedPathname =
-    queryStart === -1 ? requestUrl : requestUrl.slice(0, queryStart);
+function normalizePolicyPathname(
+  encodedPathname: string,
+): string | undefined {
   try {
-    return decodeURIComponent(encodedPathname);
+    // Compare URL path semantics, not literal static filenames: decode encoded
+    // separators, normalize backslashes, and restore exactly one leading slash.
+    const decodedPathname = decodeURIComponent(encodedPathname).replaceAll(
+      "\\",
+      "/",
+    );
+    return `/${decodedPathname.replace(/^\/+/u, "")}`;
   } catch {
     return undefined;
   }
+}
+
+function decodeRequestPathname(requestUrl: string): string | undefined {
+  // find-my-way ends routing at the earliest raw delimiter. Split first so an
+  // encoded delimiter such as %23 remains pathname data after decoding.
+  let pathnameEnd = requestUrl.length;
+  for (const delimiter of ["?", "#"]) {
+    const delimiterStart = requestUrl.indexOf(delimiter);
+    if (delimiterStart !== -1 && delimiterStart < pathnameEnd) {
+      pathnameEnd = delimiterStart;
+    }
+  }
+  return normalizePolicyPathname(requestUrl.slice(0, pathnameEnd));
 }
 
 function hasHiddenPathSegment(pathname: string): boolean {
@@ -417,6 +435,9 @@ export async function createOmxtermServer(
   // segments are rejected before static serving or client-route fallback.
   // Unset in dev, where Vite serves the web and proxies the API.
   if (config.webRoot) {
+    // allowedPath denials call the not-found handler. Retain only request
+    // identity so the SPA fallback cannot turn a denied static path into 200.
+    const deniedStaticRequests = new WeakSet<FastifyRequest>();
     app.addHook("onRequest", async (request, reply) => {
       const requestPath = decodeRequestPathname(request.url);
       if (requestPath === undefined || hasHiddenPathSegment(requestPath)) {
@@ -426,12 +447,20 @@ export async function createOmxtermServer(
     await app.register(fastifyStatic, {
       root: config.webRoot,
       dotfiles: "deny",
-      allowedPath: (pathname) =>
-        !hasHiddenPathSegment(pathname) && !isReservedServerPath(pathname),
+      allowedPath: (pathname, _root, request) => {
+        const policyPath = decodeRequestPathname(pathname);
+        const allowed =
+          policyPath !== undefined &&
+          !hasHiddenPathSegment(policyPath) &&
+          !isReservedServerPath(policyPath);
+        if (!allowed) deniedStaticRequests.add(request);
+        return allowed;
+      },
     });
     app.setNotFoundHandler((request, reply) => {
       const requestPath = decodeRequestPathname(request.url);
       if (
+        !deniedStaticRequests.has(request) &&
         requestPath !== undefined &&
         !hasHiddenPathSegment(requestPath) &&
         !isReservedServerPath(requestPath) &&

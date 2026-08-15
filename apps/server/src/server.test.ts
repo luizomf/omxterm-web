@@ -90,6 +90,40 @@ describe("SPA static serving", () => {
     expect(clientRoute.body).toBe(SYNTHETIC_SPA_INDEX);
   });
 
+  test("keeps raw-fragment protected paths out of the SPA fallback", async () => {
+    const app = await startSpaServer();
+    const port = await listenOnLoopback(app);
+    const rawGet = (path: string) =>
+      [
+        `GET ${path} HTTP/1.1`,
+        "Host: 127.0.0.1",
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n");
+
+    for (const protectedPath of [
+      "/api#missing",
+      "/health/details#missing",
+      "/terminal#missing",
+    ]) {
+      const response = await sendRawHttpRequest(port, rawGet(protectedPath));
+
+      expect(response).toMatch(/^HTTP\/1\.1 404 /);
+      expect(response).not.toContain(SYNTHETIC_SPA_INDEX);
+    }
+
+    for (const clientPath of ["/connect#confirm", "/api%23missing"]) {
+      const clientFallback = await sendRawHttpRequest(
+        port,
+        rawGet(clientPath),
+      );
+
+      expect(clientFallback).toMatch(/^HTTP\/1\.1 200 /);
+      expect(clientFallback).toContain(SYNTHETIC_SPA_INDEX);
+    }
+  });
+
   test("keeps API routes authoritative instead of using static files or the SPA fallback", async () => {
     const apiShadowBody = "synthetic static API shadow";
     mkdirSync(join(fixtureRoot, "api"));
@@ -106,6 +140,65 @@ describe("SPA static serving", () => {
     expect(unknownApiRoute.statusCode).toBe(404);
     expect(unknownApiRoute.body).not.toContain(apiShadowBody);
     expect(unknownApiRoute.body).not.toContain(SYNTHETIC_SPA_INDEX);
+  });
+
+  test("denies encoded-separator static shadows for server-owned and hidden paths", async () => {
+    const staticShadows = [
+      {
+        requestPath: "/api%2fclient-route",
+        fileName: "api%2fclient-route",
+        body: "synthetic encoded API shadow",
+      },
+      {
+        requestPath: "/health%2fdetails",
+        fileName: "health%2fdetails",
+        body: "synthetic encoded health shadow",
+      },
+      {
+        requestPath: "/terminal%2fws",
+        fileName: "terminal%2fws",
+        body: "synthetic encoded terminal shadow",
+      },
+      {
+        requestPath: "/%2fapi%2fdouble-leading",
+        fileName: "%2fapi%2fdouble-leading",
+        body: "synthetic encoded leading-slash shadow",
+      },
+      {
+        requestPath: "/assets%2f.synthetic-private%2fpublic.txt",
+        fileName: "assets%2f.synthetic-private%2fpublic.txt",
+        body: "synthetic encoded hidden shadow",
+      },
+    ];
+    for (const shadow of staticShadows) {
+      writeFileSync(join(fixtureRoot, shadow.fileName), shadow.body);
+    }
+    const app = await startSpaServer();
+
+    for (const shadow of staticShadows) {
+      const response = await app.inject({
+        method: "GET",
+        url: shadow.requestPath,
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.body).not.toContain(shadow.body);
+      expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
+    }
+  });
+
+  test("does not SPA-fallback after malformed static-policy encoding", async () => {
+    const malformedBody = "synthetic malformed static shadow";
+    writeFileSync(join(fixtureRoot, "synthetic-malformed%"), malformedBody);
+    const app = await startSpaServer();
+    const response = await app.inject({
+      method: "GET",
+      url: "/synthetic-malformed%25",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).not.toContain(malformedBody);
+    expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
   });
 
   test("keeps terminal security routing out of the SPA fallback", async () => {
@@ -132,14 +225,20 @@ describe("SPA static serving", () => {
     const hiddenBody = "synthetic hidden deployment file";
     writeFileSync(join(fixtureRoot, ".synthetic-config"), hiddenBody);
     const app = await startSpaServer();
-    const response = await app.inject({
-      method: "GET",
-      url: "/.synthetic-config",
-    });
 
-    expect([403, 404]).toContain(response.statusCode);
-    expect(response.body).not.toContain(hiddenBody);
-    expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
+    for (const hiddenPath of [
+      "/.synthetic-config",
+      "/%2esynthetic-config",
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url: hiddenPath,
+      });
+
+      expect([403, 404]).toContain(response.statusCode);
+      expect(response.body).not.toContain(hiddenBody);
+      expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
+    }
   });
 
   test("denies content below a hidden directory without falling back to the SPA", async () => {
