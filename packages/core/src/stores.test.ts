@@ -75,7 +75,7 @@ describe('in-memory stores', () => {
     expect(tickets.consume({ rawTicket: issued.rawTicket, sessionId: session.id, deviceToken: rawDeviceToken, origin: 'https://app.example' }).ok).toBe(false);
   });
 
-  test('sweepExpired drops an unconsumed ticket and overwrites its key material', () => {
+  test('sweepExpired drops an unconsumed ticket and releases its credential references', () => {
     const clock = createClock();
     const tickets = new InMemoryTerminalTicketStore(clock, 60_000);
     const issued = tickets.issue({

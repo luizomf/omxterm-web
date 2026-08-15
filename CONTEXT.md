@@ -37,7 +37,8 @@ sandbox commands executed on the SSH target.
 
 A set of SSH connection inputs such as host, port, username, private key, and
 optional passphrase. For the MVP, a connection profile is submitted for one
-connection attempt and is not saved by the product.
+connection attempt, ownership transfers into SSH establishment, and callers do
+not reuse or save it.
 
 ### Broker
 
