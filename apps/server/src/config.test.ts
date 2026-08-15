@@ -1,6 +1,15 @@
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { resolveWebRoot, validateAccessToken } from './config';
 
 const SYNTHETIC_DOCUMENTED_BASE64_TOKEN =
@@ -95,18 +104,88 @@ describe('validateAccessToken', () => {
 });
 
 describe('resolveWebRoot', () => {
+  let fixtureRoot: string;
+
+  beforeEach(() => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'omxterm-web-root-'));
+  });
+
+  afterEach(() => {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
   test('returns undefined when unset, so dev keeps serving the web from Vite', () => {
     expect(resolveWebRoot(undefined)).toBeUndefined();
     expect(resolveWebRoot('')).toBeUndefined();
   });
 
-  test('returns the absolute path for an existing directory', () => {
-    expect(resolveWebRoot(tmpdir())).toBe(resolve(tmpdir()));
+  test('canonicalizes a root symlink whose target is a usable SPA directory', () => {
+    const builtSpa = join(fixtureRoot, 'dist');
+    const configuredRoot = join(fixtureRoot, 'current');
+    mkdirSync(builtSpa);
+    writeFileSync(join(builtSpa, 'index.html'), '<main>synthetic SPA</main>');
+    symlinkSync(builtSpa, configuredRoot, 'dir');
+
+    expect(resolveWebRoot(configuredRoot)).toBe(realpathSync(builtSpa));
   });
 
-  test('throws with the offending path when the directory does not exist', () => {
-    const missing = resolve(tmpdir(), 'omxterm-web-root-does-not-exist');
-    expect(() => resolveWebRoot(missing)).toThrow(/OMXTERM_WEB_ROOT/);
-    expect(() => resolveWebRoot(missing)).toThrow(missing);
+  test('rejects a configured root that is a regular file', () => {
+    const fileRoot = join(fixtureRoot, 'not-a-directory');
+    writeFileSync(fileRoot, 'synthetic public content');
+
+    expect(() => resolveWebRoot(fileRoot)).toThrow(/OMXTERM_WEB_ROOT/);
+  });
+
+  test('rejects a directory without index.html', () => {
+    const emptyRoot = join(fixtureRoot, 'empty-dist');
+    mkdirSync(emptyRoot);
+
+    expect(() => resolveWebRoot(emptyRoot)).toThrow(/OMXTERM_WEB_ROOT/);
+  });
+
+  test('rejects a non-regular index.html', () => {
+    const builtSpa = join(fixtureRoot, 'dist-with-directory-index');
+    mkdirSync(join(builtSpa, 'index.html'), { recursive: true });
+
+    expect(() => resolveWebRoot(builtSpa)).toThrow(/OMXTERM_WEB_ROOT/);
+  });
+
+  test('rejects index.html when it is a symlink', () => {
+    const builtSpa = join(fixtureRoot, 'dist-with-symlink-index');
+    const indexTarget = join(fixtureRoot, 'synthetic-index.html');
+    mkdirSync(builtSpa);
+    writeFileSync(indexTarget, '<main>synthetic SPA</main>');
+    symlinkSync(indexTarget, join(builtSpa, 'index.html'));
+
+    expect(() => resolveWebRoot(builtSpa)).toThrow(/OMXTERM_WEB_ROOT/);
+  });
+
+  test('rejects an unreadable index.html', () => {
+    const builtSpa = join(fixtureRoot, 'dist-with-unreadable-index');
+    const indexPath = join(builtSpa, 'index.html');
+    mkdirSync(builtSpa);
+    writeFileSync(indexPath, '<main>synthetic SPA</main>');
+    chmodSync(indexPath, 0o000);
+
+    try {
+      expect(() => resolveWebRoot(builtSpa)).toThrow(/OMXTERM_WEB_ROOT/);
+    } finally {
+      chmodSync(indexPath, 0o600);
+    }
+  });
+
+  test('rejects a missing path without disclosing the configured value', () => {
+    const missing = join(fixtureRoot, 'synthetic-dist-that-is-absent');
+    let failure: unknown;
+
+    try {
+      resolveWebRoot(missing);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/OMXTERM_WEB_ROOT/);
+    expect((failure as Error).message).not.toContain(missing);
   });
 });
