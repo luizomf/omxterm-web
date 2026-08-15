@@ -31,6 +31,16 @@ services:
     # sticks across daemon restarts/reboots. The maintainer's production rollout
     # overrides this to `always` in compose.prod.yml (issue #108).
     restart: unless-stopped
+    # Container-level backstops complement, but never raise, the broker's
+    # application concurrency limits. The production override layers on this
+    # service and inherits the same finite defaults and non-secret .env
+    # overrides. See docs/deploy.md for sizing and exhaustion semantics.
+    mem_limit: ${OMXTERM_BROKER_MEMORY_LIMIT:-512m}
+    pids_limit: ${OMXTERM_BROKER_PIDS_LIMIT:-256}
+    ulimits:
+      nofile:
+        soft: ${OMXTERM_BROKER_NOFILE_LIMIT:-4096}
+        hard: ${OMXTERM_BROKER_NOFILE_LIMIT:-4096}
     env_file: .env
     # `environment:` here wins over `env_file:` for the same key (Compose
     # precedence), so this pins the container's bind address regardless of what

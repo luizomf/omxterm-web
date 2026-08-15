@@ -9,6 +9,10 @@
 //              joins the broker at its firewall-allowlisted address on the
 //              pre-created shared network used by the separate-stack proxy.
 //
+// Both modes also enforce the expected finite memory, PID, and nofile values
+// supplied as the remaining arguments. This lets the descriptor test prove both
+// safe defaults and operator overrides through the rendered Compose interface.
+//
 // Prints a "  FAIL: <reason>" line and exits 1 when the contract is violated;
 // exits 0 otherwise. Kept as its own module so both checks share one parser
 // instead of duplicating JSON logic across shell heredocs.
@@ -20,6 +24,12 @@ if (mode !== "baseline" && mode !== "prod") {
   fail(`unknown mode "${mode ?? ""}"; expected "baseline" or "prod"`);
 }
 
+const expectedLimits = {
+  memoryBytes: parseExpectedLimit(process.argv[3], "memory bytes"),
+  pids: parseExpectedLimit(process.argv[4], "PIDs"),
+  nofile: parseExpectedLimit(process.argv[5], "open files"),
+};
+
 const config = JSON.parse(readFileSync(0, "utf8"));
 const broker = config.services?.["omxterm-web"];
 if (!broker) {
@@ -28,6 +38,9 @@ if (!broker) {
 
 const networks = config.networks ?? {};
 assertBrokerHealthcheck(broker);
+assertBrokerMemoryLimit(broker, expectedLimits.memoryBytes);
+assertBrokerPidLimit(broker, expectedLimits.pids);
+assertBrokerNofileLimit(broker, expectedLimits.nofile);
 
 if (mode === "baseline") {
   assertLoopbackOnlyPublish(broker);
@@ -47,6 +60,14 @@ process.exit(0);
 function fail(reason) {
   console.error(`  FAIL: ${reason}`);
   process.exit(1);
+}
+
+function parseExpectedLimit(rawValue, name) {
+  const value = Number(rawValue);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail(`expected ${name} argument must be a positive integer`);
+  }
+  return value;
 }
 
 // Loopback host addresses keep a published port on the local machine, so the
@@ -74,6 +95,44 @@ function assertBrokerHealthcheck(service) {
   }
   if (!Number.isInteger(healthcheck.retries) || healthcheck.retries <= 0) {
     fail("omxterm-web healthcheck must use a positive retry bound");
+  }
+}
+
+function assertBrokerMemoryLimit(service, expectedBytes) {
+  const actualBytes = Number(service.mem_limit);
+  if (!Number.isSafeInteger(actualBytes) || actualBytes !== expectedBytes) {
+    fail(
+      `omxterm-web resolves memory limit "${service.mem_limit ?? "<unset>"}"; ` +
+        `expected the finite ${expectedBytes}-byte broker ceiling`,
+    );
+  }
+}
+
+function assertBrokerPidLimit(service, expectedTasks) {
+  const actualTasks = Number(service.pids_limit);
+  if (!Number.isSafeInteger(actualTasks) || actualTasks !== expectedTasks) {
+    fail(
+      `omxterm-web resolves PID limit "${service.pids_limit ?? "<unset>"}"; ` +
+        `expected the finite ${expectedTasks}-task broker ceiling`,
+    );
+  }
+}
+
+function assertBrokerNofileLimit(service, expectedDescriptors) {
+  const nofile = service.ulimits?.nofile;
+  const actualSoft = Number(nofile?.soft);
+  const actualHard = Number(nofile?.hard);
+  if (
+    !Number.isSafeInteger(actualSoft) ||
+    !Number.isSafeInteger(actualHard) ||
+    actualSoft !== expectedDescriptors ||
+    actualHard !== expectedDescriptors
+  ) {
+    fail(
+      `omxterm-web resolves nofile soft/hard limits ` +
+        `"${nofile?.soft ?? "<unset>"}/${nofile?.hard ?? "<unset>"}"; ` +
+        `expected the finite ${expectedDescriptors}/${expectedDescriptors} broker ceiling`,
+    );
   }
 }
 

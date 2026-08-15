@@ -39,8 +39,9 @@ Use Node.js `22.12+` or the tested Node.js 24 LTS line with npm 10 or newer.
 
 ```bash
 cp .env.example .env
-# Set OMXTERM_ACCESS_TOKEN in .env to a strong value before the first run; the
-# placeholder is rejected at boot. Generate one with: openssl rand -base64 32
+# Set OMXTERM_ACCESS_TOKEN in .env to a strong random value before the first run.
+# Leading/trailing whitespace and repeated weak placeholders are rejected at boot.
+# Generate one with: openssl rand -base64 32
 npm install
 ./scripts/run
 ```
@@ -61,8 +62,14 @@ npm run format:check
 npm run typecheck
 npm run test:run
 npm run build
-npm audit --omit=dev
+npm run audit:dependencies
 ```
+
+The dependency audit explicitly includes development, optional, and peer
+packages so environment-level npm omit settings cannot narrow the complete
+lockfile gate. The production image installs development dependencies and uses
+`tsx` to start the broker. This also audits build- and test-only packages
+conservatively; inclusion does not mean those packages execute in production.
 
 ### Disposable browser-to-SSH E2E
 
@@ -181,8 +188,18 @@ docker compose --project-name omxterm-web -f compose.yml -f compose.prod.yml \
   up -d --build --wait --wait-timeout 120
 ```
 
+Both paths impose finite broker-container defaults of 512 MiB memory, 256
+PIDs/tasks, and 4096 open files. Operators can tune them without source edits
+through the non-secret `OMXTERM_BROKER_MEMORY_LIMIT`,
+`OMXTERM_BROKER_PIDS_LIMIT`, and `OMXTERM_BROKER_NOFILE_LIMIT` values in `.env`.
+The ceilings do not raise the broker's application concurrency caps. Resource
+exhaustion can fail work or terminate/restart the process; because all sessions
+and tickets are in memory, a restart loses them and OMXTerm Web does not resume
+terminal sessions.
+
 For a step-by-step container rollout behind a reverse proxy (Docker, Compose,
-Traefik, basic auth), see `docs/deploy.md`.
+Traefik, basic auth), including resource sizing and exhaustion behavior, see
+`docs/deploy.md`.
 
 ## Architecture notes
 
