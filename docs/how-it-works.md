@@ -79,9 +79,13 @@ consumes it.
 The broker refuses to start with a weak gate. `loadConfig`
 ([`apps/server/src/config.ts`](../apps/server/src/config.ts)) reads:
 
-- `OMXTERM_ACCESS_TOKEN` — **required**. `validateAccessToken` rejects known
-  weak values (`change-me`, `password`, …) and anything shorter than 24
-  characters. A default placeholder cannot be shipped by accident.
+- `OMXTERM_ACCESS_TOKEN` — **required**. `validateAccessToken` rejects
+  all-whitespace values, leading/trailing whitespace, case-insensitive known
+  weak values (`change-me`, `password`, …), their exact repetitions, and
+  anything shorter than 24 UTF-16 code units. The generated token text from the
+  documented random-token command is accepted and returned byte-for-byte for
+  the exact runtime comparison, so a disguised placeholder cannot be shipped by
+  accident.
 - `OMXTERM_ALLOWED_ORIGIN` — the browser origin(s) allowed to talk to the
   broker, comma-separated for more than one (e.g. localhost + a LAN IP).
   `parseAllowedOrigins` matches each entry exactly and rejects wildcards or

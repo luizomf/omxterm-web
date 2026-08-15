@@ -39,8 +39,9 @@ Use Node.js `22.12+` or the tested Node.js 24 LTS line with npm 10 or newer.
 
 ```bash
 cp .env.example .env
-# Set OMXTERM_ACCESS_TOKEN in .env to a strong value before the first run; the
-# placeholder is rejected at boot. Generate one with: openssl rand -base64 32
+# Set OMXTERM_ACCESS_TOKEN in .env to a strong random value before the first run.
+# Leading/trailing whitespace and repeated weak placeholders are rejected at boot.
+# Generate one with: openssl rand -base64 32
 npm install
 ./scripts/run
 ```

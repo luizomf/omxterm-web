@@ -103,7 +103,9 @@ OMXTERM_SSH_ALLOWED_CIDR=10.0.0.0/24
 ENV
 ```
 
-- `OMXTERM_ACCESS_TOKEN` — generate one: `openssl rand -base64 32`.
+- `OMXTERM_ACCESS_TOKEN` — generate one with `openssl rand -base64 32` and
+  use the generated Base64 text without surrounding whitespace. Known weak
+  placeholders and their exact repetitions are also rejected at boot.
 - `OMXTERM_SECURE_COOKIES=true` — the auth cookies are the authentication, so
   they must be `Secure` on any HTTPS deploy. The broker also **refuses to boot**
   if this is false while binding to a non-loopback host (the image binds
