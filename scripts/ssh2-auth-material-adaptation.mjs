@@ -2,7 +2,8 @@
 
 // Stock ssh2 has no supported hook for releasing its authentication closure.
 // This project-owned source adaptation accepts only the audited 1.17.0
-// preimage or the exact complete postimage; any other installed tree fails.
+// complete-file preimages or exact adapted postimages for the source files
+// named below; drift in any of those assumptions fails closed.
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -14,13 +15,23 @@ const SSH2_INTEGRITY =
 const SSH2_PACKAGE_JSON_SHA256 =
   'e6fd4e4c3e69e4ad185c87cb5ee1df631e3f4cbd43cf89470f83c1e5d1a76dfb';
 
+// Protocol.js is intentionally not patched. Its exact authPK callback behavior
+// is still part of the disposal proof, so drift must invalidate the adaptation.
+const AUDITED_SUPPORT_FILES = [
+  {
+    path: 'lib/protocol/Protocol.js',
+    upstreamSha256:
+      'c1104b49087de7a91cd3ffaac8807c05eebf49f61effd084d0b0caf29fde6af4',
+  },
+];
+
 const ADAPTATION_FILES = [
   {
     path: 'lib/client.js',
     upstreamSha256:
       'edd3484daa9d942bc5a6412edc9cf11f85df40b2db10b07877bbfe694beac7f4',
     adaptedSha256:
-      'cf55735db830d6198b8cb02eb0eadbeb0c2639df18bbf3bc5b1dffc841fd1d44',
+      '70d8c030402d81c7e35dc76c7142cdeabca7ba718bcafd03ca4bf1108dc2098c',
     replacements: [
       {
         upstream: `    this._resetKA = undefined;
@@ -36,15 +47,17 @@ const ADAPTATION_FILES = [
   }
 
   disposeAuthMaterial() {
-    if (this._authMaterialDisposed)
-      return true;
     if (typeof this._disposeAuthMaterial !== 'function')
-      return false;
+      return this._authMaterialDisposed === true;
     return this._disposeAuthMaterial();
   }
 
   isAuthMaterialDisposed() {
-    return this._authMaterialDisposed === true;
+    if (this._authMaterialDisposed !== true)
+      return false;
+    if (typeof this._disposeAuthMaterial !== 'function')
+      return true;
+    return this._disposeAuthMaterial();
   }
 
   connect(cfg) {`,
@@ -85,6 +98,7 @@ const ADAPTATION_FILES = [
     this._remoteVer = undefined;
     let privateKey;
     let curAuth;
+    let authTerminated = false;
 
     this._authMaterialDisposed = false;
     const clearField = (object, field) => {
@@ -115,9 +129,7 @@ const ADAPTATION_FILES = [
       );
     };
     const disposeAuthMaterial = () => {
-      if (this._authMaterialDisposed)
-        return true;
-
+      authTerminated = true;
       const currentKey = curAuth && curAuth.key;
       const currentKeyDisposed = disposeKey(currentKey);
       const privateKeyDisposed = (
@@ -143,8 +155,6 @@ const ADAPTATION_FILES = [
         && authHandler === undefined
       );
       this._authMaterialDisposed = disposed;
-      if (disposed)
-        this._disposeAuthMaterial = undefined;
       return disposed;
     };
     this._disposeAuthMaterial = disposeAuthMaterial;
@@ -248,6 +258,8 @@ const ADAPTATION_FILES = [
           // Start keepalive mechanism
           resetKA();`,
         adapted: `        USERAUTH_SUCCESS: (p) => {
+          if (authTerminated)
+            return;
           if (!this.disposeAuthMaterial()) {
             const err = new Error('Failed to dispose authentication material');
             err.level = 'client-authentication';
@@ -258,6 +270,110 @@ const ADAPTATION_FILES = [
 
           // Start keepalive mechanism
           resetKA();`,
+      },
+      {
+        upstream: `        USERAUTH_FAILURE: (p, authMethods, partialSuccess) => {
+          // For key-based authentication, check if we should retry the current`,
+        adapted: `        USERAUTH_FAILURE: (p, authMethods, partialSuccess) => {
+          if (authTerminated)
+            return;
+          // For key-based authentication, check if we should retry the current`,
+      },
+      {
+        upstream: `        USERAUTH_PASSWD_CHANGEREQ: (p, prompt) => {
+          if (curAuth.type === 'password') {`,
+        adapted: `        USERAUTH_PASSWD_CHANGEREQ: (p, prompt) => {
+          if (authTerminated)
+            return;
+          if (curAuth.type === 'password') {`,
+      },
+      {
+        upstream: `            this.emit('change password', prompt, (newPassword) => {
+              proto.authPassword(`,
+        adapted: `            this.emit('change password', prompt, (newPassword) => {
+              if (authTerminated)
+                return;
+              proto.authPassword(`,
+      },
+      {
+        upstream: `        USERAUTH_PK_OK: (p) => {
+          let keyAlgo;`,
+        adapted: `        USERAUTH_PK_OK: (p) => {
+          if (authTerminated)
+            return;
+          let keyAlgo;`,
+      },
+      {
+        upstream: `              curAuth.agentCtx.sign(key, buf, opts, (err, signed) => {
+                if (err) {`,
+        adapted: `              curAuth.agentCtx.sign(key, buf, opts, (err, signed) => {
+                if (authTerminated)
+                  return;
+                if (err) {`,
+      },
+      {
+        upstream: `        USERAUTH_INFO_REQUEST: (p, name, instructions, prompts) => {
+          if (curAuth.type === 'keyboard-interactive') {`,
+        adapted: `        USERAUTH_INFO_REQUEST: (p, name, instructions, prompts) => {
+          if (authTerminated)
+            return;
+          if (curAuth.type === 'keyboard-interactive') {`,
+      },
+      {
+        upstream: `              (answers) => {
+                proto.authInfoRes(answers);`,
+        adapted: `              (answers) => {
+                if (authTerminated)
+                  return;
+                proto.authInfoRes(answers);`,
+      },
+      {
+        upstream: `    let hasSentAuth = false;
+    const doNextAuth = (nextAuth) => {
+      if (hasSentAuth)
+        return;`,
+        adapted: `    let hasSentAuth = false;
+    const doNextAuth = (nextAuth) => {
+      if (authTerminated) {
+        if (nextAuth && typeof nextAuth === 'object')
+          disposeKey(nextAuth.key);
+        return;
+      }
+      if (hasSentAuth)
+        return;`,
+      },
+      {
+        upstream: `      curAuth = nextAuth;
+
+      // Begin authentication method's process`,
+        adapted: `      this._authMaterialDisposed = false;
+      curAuth = nextAuth;
+
+      // Begin authentication method's process`,
+      },
+      {
+        upstream: `            curAuth.agentCtx.init((err) => {
+              if (err) {`,
+        adapted: `            curAuth.agentCtx.init((err) => {
+              if (authTerminated)
+                return;
+              if (err) {`,
+      },
+      {
+        upstream: `    function tryNextAuth() {
+      hasSentAuth = false;`,
+        adapted: `    function tryNextAuth() {
+      if (authTerminated)
+        return;
+      hasSentAuth = false;`,
+      },
+      {
+        upstream: `    const tryNextAgentKey = () => {
+      if (curAuth.type === 'agent') {`,
+        adapted: `    const tryNextAgentKey = () => {
+      if (authTerminated)
+        return;
+      if (curAuth.type === 'agent') {`,
       },
       {
         upstream: `      if (nextAuth === false) {
@@ -441,7 +557,20 @@ export async function adaptSsh2AuthenticationMaterial({
     }),
   );
 
-  if (inspected.some(({ state }) => state === 'drifted')) {
+  const inspectedSupport = await Promise.all(
+    AUDITED_SUPPORT_FILES.map(async (file) => {
+      const filePath = path.join(ssh2Root, file.path);
+      const source = await readFile(filePath, 'utf8');
+      return { file, filePath, digest: sha256(source) };
+    }),
+  );
+
+  if (
+    inspected.some(({ state }) => state === 'drifted') ||
+    inspectedSupport.some(
+      ({ file, digest }) => digest !== file.upstreamSha256,
+    )
+  ) {
     throw new Error(
       `ssh2 ${SSH2_VERSION} source drift detected; refusing to apply or trust the authentication-material adaptation`,
     );

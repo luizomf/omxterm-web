@@ -60,6 +60,39 @@ try {
     /source drift detected/u,
   );
 
+  const protocolDriftRoot = await copyInstalledProject('protocol-drift');
+  const driftedProtocol = path.join(
+    protocolDriftRoot,
+    'node_modules',
+    'ssh2',
+    'lib',
+    'protocol',
+    'Protocol.js',
+  );
+  const protocolSource = await readFile(driftedProtocol, 'utf8');
+  const protocolWithPrivateKeyRetention = protocolSource
+    .replace(
+      '  authPK(username, pubKey, keyAlgo, cbSign) {',
+      `  authPK(username, pubKey, keyAlgo, cbSign) {
+    const retainedPrivatePEM = pubKey.getPrivatePEM();`,
+    )
+    .replace(
+      '    cbSign(packet, (signature) => {',
+      `    cbSign(packet, (signature) => {
+      void retainedPrivatePEM;`,
+    );
+  assert.notEqual(protocolWithPrivateKeyRetention, protocolSource);
+  await writeFile(driftedProtocol, protocolWithPrivateKeyRetention);
+  for (const mode of ['apply', 'verify']) {
+    await assert.rejects(
+      adaptSsh2AuthenticationMaterial({
+        projectRoot: protocolDriftRoot,
+        mode,
+      }),
+      /source drift detected/u,
+    );
+  }
+
   const versionDriftRoot = await copyInstalledProject('version-drift');
   const dependencyPackagePath = path.join(
     versionDriftRoot,
@@ -132,7 +165,7 @@ try {
   assert.match(ci, /run: npm run verify:ssh2-adaptation/u);
 
   console.log(
-    'ssh2-auth-material-adaptation.test.mjs: installed tree verified; version, source, partial-patch, and lifecycle drift fail closed',
+    'ssh2-auth-material-adaptation.test.mjs: installed tree verified; version, adapted-source, Protocol-support, partial-patch, and lifecycle drift fail closed',
   );
 } finally {
   await rm(TEMP_ROOT, { recursive: true, force: true });

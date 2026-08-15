@@ -4,9 +4,12 @@ import {
   Client,
   Server,
   utils,
+  type AnyAuthMethod,
   type ConnectConfig,
+  type NextAuthHandler,
   type ParsedKey,
 } from 'ssh2';
+import { generateValidatedEd25519KeyPair } from './ssh-test-key-generation';
 
 // Integration coverage uses the installed pinned parser/client and an in-process
 // ssh2 server on an ephemeral loopback port. It never reaches an external host.
@@ -21,7 +24,7 @@ type AdaptedClient = Client & {
 
 describe('pinned ssh2 authentication-material adaptation', () => {
   test('disposes generated private PEM while preserving public-key operations', () => {
-    const generated = utils.generateKeyPairSync('ed25519');
+    const generated = generateValidatedEd25519KeyPair();
     let privateKey: string | undefined = generated.private;
     generated.private = '';
 
@@ -45,11 +48,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
 
   test('preserves encrypted OpenSSH missing, wrong, and correct passphrase behavior', () => {
     let passphrase: string | undefined = 'parser-passphrase';
-    const generated = utils.generateKeyPairSync('ed25519', {
-      passphrase,
-      cipher: 'aes256-ctr',
-      rounds: 16,
-    });
+    const generated = generateValidatedEd25519KeyPair({ passphrase });
     let privateKey: string | undefined = generated.private;
     generated.private = '';
 
@@ -86,7 +85,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
   });
 
   test('disposes before a real host-key rejection is observable', async () => {
-    const generatedHost = utils.generateKeyPairSync('ed25519');
+    const generatedHost = generateValidatedEd25519KeyPair();
     const server = new Server({ hostKeys: [generatedHost.private] });
     generatedHost.private = '';
     server.on('connection', (connection) => connection.on('error', () => {}));
@@ -95,7 +94,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
       server.listen(0, '127.0.0.1', resolve);
     });
 
-    const generatedClient = utils.generateKeyPairSync('ed25519');
+    const generatedClient = generateValidatedEd25519KeyPair();
     const config: ConnectConfig = {
       host: '127.0.0.1',
       port: (server.address() as AddressInfo).port,
@@ -127,7 +126,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
   });
 
   test('disposes before a real authentication rejection is observable', async () => {
-    const generatedHost = utils.generateKeyPairSync('ed25519');
+    const generatedHost = generateValidatedEd25519KeyPair();
     const server = new Server({ hostKeys: [generatedHost.private] });
     generatedHost.private = '';
     server.on('connection', (connection) => {
@@ -139,7 +138,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
       server.listen(0, '127.0.0.1', resolve);
     });
 
-    const generatedClient = utils.generateKeyPairSync('ed25519');
+    const generatedClient = generateValidatedEd25519KeyPair();
     const config: ConnectConfig = {
       host: '127.0.0.1',
       port: (server.address() as AddressInfo).port,
@@ -182,7 +181,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
       idleServer.listen(0, '127.0.0.1', resolve);
     });
 
-    const generatedClient = utils.generateKeyPairSync('ed25519');
+    const generatedClient = generateValidatedEd25519KeyPair();
     const config: ConnectConfig = {
       host: '127.0.0.1',
       port: (idleServer.address() as AddressInfo).port,
@@ -229,7 +228,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
       idleServer.listen(0, '127.0.0.1', resolve);
     });
 
-    const generatedClient = utils.generateKeyPairSync('ed25519');
+    const generatedClient = generateValidatedEd25519KeyPair();
     const config: ConnectConfig = {
       host: '127.0.0.1',
       port: (idleServer.address() as AddressInfo).port,
@@ -255,6 +254,83 @@ describe('pinned ssh2 authentication-material adaptation', () => {
     }
   });
 
+  test('rejects a delayed authentication callback after cancellation without stale disposal evidence', async () => {
+    const generatedHost = generateValidatedEd25519KeyPair();
+    const server = new Server({ hostKeys: [generatedHost.private] });
+    generatedHost.private = '';
+    server.on('connection', (connection) => connection.on('error', () => {}));
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+
+    let delayedCallback: NextAuthHandler | undefined;
+    let resolveCallbackCaptured: (() => void) | undefined;
+    const callbackCaptured = new Promise<void>((resolve) => {
+      resolveCallbackCaptured = resolve;
+    });
+    const client = new Client() as AdaptedClient;
+    client.on('error', () => {});
+    const config: ConnectConfig = {
+      host: '127.0.0.1',
+      port: (server.address() as AddressInfo).port,
+      username: 'delayed-callback-user',
+      hostVerifier: () => true,
+      authHandler: (_methods, _partialSuccess, next) => {
+        delayedCallback = next;
+        resolveCallbackCaptured?.();
+      },
+    };
+
+    try {
+      client.connect(config);
+      await callbackCaptured;
+      resolveCallbackCaptured = undefined;
+      client.destroy();
+      expect(client.isAuthMaterialDisposed()).toBe(true);
+
+      const generated = generateValidatedEd25519KeyPair();
+      let parsedKey = utils.parseKey(generated.private) as
+        | DisposableParsedKey
+        | Error
+        | undefined;
+      generated.private = '';
+      expect(parsedKey).not.toBeInstanceOf(Error);
+      if (parsedKey instanceof Error || parsedKey === undefined) return;
+
+      const observation: { calls: number; privatePem?: string | null } = {
+        calls: 0,
+      };
+      const originalDispose = parsedKey.dispose;
+      parsedKey.dispose = function observeDisposal() {
+        const disposed = originalDispose.call(this);
+        observation.calls += 1;
+        observation.privatePem = this.getPrivatePEM();
+        return disposed;
+      };
+      let delayedAttempt: AnyAuthMethod | undefined = {
+        type: 'publickey',
+        username: 'delayed-callback-user',
+        key: parsedKey,
+      };
+      parsedKey = undefined;
+      let invokeDelayed = delayedCallback;
+      delayedCallback = undefined;
+
+      expect(() => invokeDelayed?.(delayedAttempt!)).not.toThrow();
+      invokeDelayed = undefined;
+      delayedAttempt = undefined;
+
+      expect(observation).toEqual({ calls: 1, privatePem: null });
+      expect(client.isAuthMaterialDisposed()).toBe(true);
+      expect(client.disposeAuthMaterial()).toBe(true);
+      expect(observation.calls).toBe(1);
+    } finally {
+      client.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   test('disposes before a terminal socket error is observable', async () => {
     const unavailableServer = createServer();
     await new Promise<void>((resolve, reject) => {
@@ -264,7 +340,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
     const unavailablePort = (unavailableServer.address() as AddressInfo).port;
     await new Promise<void>((resolve) => unavailableServer.close(() => resolve()));
 
-    const generatedClient = utils.generateKeyPairSync('ed25519');
+    const generatedClient = generateValidatedEd25519KeyPair();
     const config: ConnectConfig = {
       host: '127.0.0.1',
       port: unavailablePort,
@@ -306,7 +382,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
       closingServer.listen(0, '127.0.0.1', resolve);
     });
 
-    const generatedClient = utils.generateKeyPairSync('ed25519');
+    const generatedClient = generateValidatedEd25519KeyPair();
     const config: ConnectConfig = {
       host: '127.0.0.1',
       port: (closingServer.address() as AddressInfo).port,
@@ -344,7 +420,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
   });
 
   test('disposes before real authentication readiness and preserves rekey plus shell operation', async () => {
-    const generatedHost = utils.generateKeyPairSync('ed25519');
+    const generatedHost = generateValidatedEd25519KeyPair();
     let hostPrivateKey: string | undefined = generatedHost.private;
     generatedHost.private = '';
     const parsedHost = utils.parseKey(hostPrivateKey) as
@@ -365,11 +441,7 @@ describe('pinned ssh2 authentication-material adaptation', () => {
     const client = new Client() as AdaptedClient;
     try {
       let passphrase: string | undefined = 'integration-passphrase';
-      const generatedClient = utils.generateKeyPairSync('ed25519', {
-        passphrase,
-        cipher: 'aes256-ctr',
-        rounds: 16,
-      });
+      const generatedClient = generateValidatedEd25519KeyPair({ passphrase });
       const config: ConnectConfig = {
         host: '127.0.0.1',
         port: (server.address() as AddressInfo).port,

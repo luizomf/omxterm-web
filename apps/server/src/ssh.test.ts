@@ -15,6 +15,7 @@ import {
   type Ssh2ShellCallback,
   type SshEstablishment,
 } from './ssh2-establishment';
+import { generateValidatedEd25519KeyPair } from './ssh-test-key-generation';
 
 describe('normalizeFingerprint', () => {
   test('trims padding and whitespace for session fingerprint comparison', () => {
@@ -332,13 +333,7 @@ describe('SshTerminalSession lifecycle', () => {
     'preserves $keyKind OpenSSH input and its optional passphrase at the ssh2 seam',
     async ({ encrypted }) => {
       const passphrase = encrypted ? 'generated-test-passphrase' : undefined;
-      const generated = encrypted
-        ? utils.generateKeyPairSync('ed25519', {
-            passphrase: passphrase ?? '',
-            cipher: 'aes256-ctr',
-            rounds: 16,
-          })
-        : utils.generateKeyPairSync('ed25519');
+      const generated = generateValidatedEd25519KeyPair({ passphrase });
       const { session, client } = createSession();
       client.parseAuthenticationInput = true;
       client.expectAuthenticationInput(generated.private, passphrase);

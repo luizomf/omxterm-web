@@ -330,26 +330,36 @@ through its live client: the input `ConnectConfig` (`privateKey`, `passphrase`,
 and optional `authHandler`), `Client.config.privateKey` and
 `Client.config.authHandler`, the connect closure's authentication-handler and
 parsed-key bindings, its current-authentication object, and the parsed key's
-generated private PEM. OMXTerm applies a narrow repository-owned adaptation to
-those two audited ssh2 files:
+generated private PEM. OMXTerm modifies two audited ssh2 files and verifies one
+unmodified support file:
 
 - `keyParser.js` gains `dispose()`, which drops only the generated private PEM;
   public PEM/SSH material remains available.
 - `client.js` clears raw key/passphrase configuration after parsing, disposes
   the parsed key, and releases the handler, current-authentication, and parsed-key
   bindings at user-auth success and on terminal failure/cancellation paths.
-- `disposeAuthMaterial()` plus `isAuthMaterialDisposed()` form the explicit
-  dependency contract. `Ssh2Establishment` requires positive runtime evidence
-  before it exposes `authenticated`; missing evidence fails closed. OMXTerm does
-  not reflect over private Symbols or replace protocol message handlers.
+  Terminal-state guards reject delayed authentication-handler, scheduled agent,
+  and user-auth callbacks, disposing any parsed key submitted after cancellation.
+- `Protocol.js` remains byte-for-byte stock, but its complete source preimage is
+  audited because `authPK()` must reduce the parsed key to public bytes before
+  its signing callback can outlive authentication. OMXTerm does not patch its
+  protocol handlers.
+- The retained idempotent `disposeAuthMaterial()` plus rechecking
+  `isAuthMaterialDisposed()` form the explicit dependency contract.
+  `Ssh2Establishment` requires positive runtime evidence before it exposes
+  `authenticated`; missing evidence fails closed. OMXTerm does not reflect over
+  private Symbols or replace protocol message handlers at runtime.
 
 The root `postinstall` runs
 [`scripts/ssh2-auth-material-adaptation.mjs`](../scripts/ssh2-auth-material-adaptation.mjs)
 after every normal `npm install`/`npm ci`. The script requires the lockfile,
-installed package metadata, ssh2 version, and complete upstream source hashes to
-match the audited 1.17.0 preimage; it applies exact replacements and verifies
-complete postimage hashes. An upstream change, unknown edit, unadapted verify,
-or mixture of patched and unpatched files aborts installation/verification.
+installed package metadata, ssh2 version, and complete-file upstream preimage
+hashes for `lib/client.js`, `lib/protocol/keyParser.js`, and the unmodified
+`lib/protocol/Protocol.js` support file. It applies exact replacements only to
+`client.js` and `keyParser.js`, then verifies their complete postimage hashes and
+`Protocol.js`'s unchanged complete-file hash. An upstream change, unknown edit,
+unadapted verify, or mixture of patched and unpatched files aborts
+installation/verification.
 Docker copies this script before its cached `npm ci` layer and verifies again;
 CI also runs the verifier explicitly.
 
