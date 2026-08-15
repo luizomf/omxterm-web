@@ -105,7 +105,10 @@ dashboards, no gratuitous metrics.
   package.
 - Use Vite + React for the browser UI.
 - Use Node.js + Fastify + `ws` for the server HTTP and WebSocket layer.
-- Use `ssh2` for SSH client behavior and remote PTY allocation.
+- Use locked ssh2 1.17.0 for SSH client behavior and remote PTY allocation.
+  Apply the repository-owned, exact-source-verified adaptation that releases
+  known dependency-owned authentication references before readiness; do not
+  reflect over private Symbols or claim secure memory erasure.
 - Use xterm.js and FitAddon for the browser terminal emulator.
 - Pin xterm.js-related packages rather than floating major/minor versions during
   the MVP.

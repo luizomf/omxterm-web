@@ -46,6 +46,14 @@ npm install
 ./scripts/run
 ```
 
+The install lifecycle applies and verifies OMXTerm's repository-owned adaptation
+of exactly ssh2 1.17.0. It fails on package/version/source drift or a partial
+patch; `npm run verify:ssh2-adaptation` checks the installed tree without
+modifying it. Do not use `--ignore-scripts`: a deliberately bypassed lifecycle
+leaves ssh2 unadapted, and the runtime adapter will refuse SSH establishment.
+The Docker build copies the adaptation script before its cached `npm ci` layer
+and verifies the result explicitly.
+
 Or run the processes separately:
 
 ```bash
@@ -59,6 +67,7 @@ Useful checks:
 
 ```bash
 npm run format:check
+npm run verify:ssh2-adaptation
 npm run typecheck
 npm run test:run
 npm run build
