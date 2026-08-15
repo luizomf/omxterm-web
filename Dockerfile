@@ -11,7 +11,12 @@ COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/core/package.json packages/core/package.json
-RUN npm ci
+# npm's root postinstall applies the audited ssh2 adaptation. Copy its
+# repository-owned implementation into the cached dependency layer first, then
+# verify explicitly so ignored lifecycle scripts or installed-tree drift fail the
+# image build rather than shipping stock/partially patched ssh2.
+COPY scripts/ssh2-auth-material-adaptation.mjs scripts/ssh2-auth-material-adaptation.mjs
+RUN npm ci && npm run verify:ssh2-adaptation
 
 COPY . .
 

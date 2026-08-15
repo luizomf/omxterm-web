@@ -26,7 +26,7 @@ defends each of those with one specific mechanism:
 | The broker is aimed at internal hosts | **SSH egress allowlist** (opt-in CIDRs) checked before any dial, then the validated IP is **pinned** into the connection — blocks SSRF and DNS rebinding |
 | You connect to an impostor server     | **User compares the fingerprint with an independent trusted source** before the broker re-verifies it at connect time                                  |
 | One client exhausts the broker        | **Bounded live state + post-auth limits** — five access credential pairs per client, probe/ticket rate caps, and connection caps                       |
-| The app becomes a credential vault    | Private key **never persisted** — OMXTerm-owned references are released at SSH user-authentication completion                                             |
+| The app becomes a credential vault    | Private key **never persisted** — known OMXTerm- and ssh2-owned authentication references are released at SSH user-authentication completion              |
 | Secrets leak into logs                | **Metadata-only audit** — no keys, no tickets, no terminal transcript                                                                                    |
 
 The boundary OMXTerm Web promises is **safe brokering**. It does _not_ decide
@@ -321,28 +321,63 @@ neither reads nor mutates the profile afterward.
 
 ssh2's `ready` event represents **SSH user-authentication success**, not an open
 terminal. The adapter models that authenticated milestone separately from shell
-completion: it deletes the private-key and passphrase fields from the
-OMXTerm-owned authentication configuration before requesting the PTY/shell. A
-target that authenticates and then stalls shell allocation can therefore keep
-the connection attempt pending only until the establishment deadline; it cannot
-prolong those OMXTerm-owned references. Synchronous key-parse failure, host-key
-rejection, authentication rejection, timeout, browser cancellation, and
-connection close release the same application-owned references before the
-attempt settles. Raw ssh2 parser, authentication, and shell errors stop at the
-external-dependency adapter because malformed-key diagnostics can echo submitted
-bytes. Rejected connection errors expose only a stable normalized reason and
-message, without the raw dependency error as a cause.
+completion. A target that authenticates and then stalls shell allocation can
+therefore keep the connection attempt pending only until the establishment
+deadline; it cannot prolong known authentication references.
+
+Stock ssh2 1.17.0 has no public disposal hook and otherwise retains credentials
+through its live client: the input `ConnectConfig` (`privateKey`, `passphrase`,
+and optional `authHandler`), `Client.config.privateKey` and
+`Client.config.authHandler`, the connect closure's authentication-handler and
+parsed-key bindings, its current-authentication object, and the parsed key's
+generated private PEM. OMXTerm modifies two audited ssh2 files and verifies one
+unmodified support file:
+
+- `keyParser.js` gains `dispose()`, which drops only the generated private PEM;
+  public PEM/SSH material remains available.
+- `client.js` clears raw key/passphrase configuration after parsing, disposes
+  the parsed key, and releases the handler, current-authentication, and parsed-key
+  bindings at user-auth success and on terminal failure/cancellation paths.
+  Terminal-state guards reject delayed authentication-handler, scheduled agent,
+  and user-auth callbacks, disposing any parsed key submitted after cancellation.
+- `Protocol.js` remains byte-for-byte stock, but its complete source preimage is
+  audited because `authPK()` must reduce the parsed key to public bytes before
+  its signing callback can outlive authentication. OMXTerm does not patch its
+  protocol handlers.
+- The retained idempotent `disposeAuthMaterial()` plus rechecking
+  `isAuthMaterialDisposed()` form the explicit dependency contract.
+  `Ssh2Establishment` requires positive runtime evidence before it exposes
+  `authenticated`; missing evidence fails closed. OMXTerm does not reflect over
+  private Symbols or replace protocol message handlers at runtime.
+
+The root `postinstall` runs
+[`scripts/ssh2-auth-material-adaptation.mjs`](../scripts/ssh2-auth-material-adaptation.mjs)
+after every normal `npm install`/`npm ci`. The script requires the lockfile,
+installed package metadata, ssh2 version, and complete-file upstream preimage
+hashes for `lib/client.js`, `lib/protocol/keyParser.js`, and the unmodified
+`lib/protocol/Protocol.js` support file. It applies exact replacements only to
+`client.js` and `keyParser.js`, then verifies their complete postimage hashes and
+`Protocol.js`'s unchanged complete-file hash. An upstream change, unknown edit,
+unadapted verify, or mixture of patched and unpatched files aborts
+installation/verification.
+Docker copies this script before its cached `npm ci` layer and verifies again;
+CI also runs the verifier explicitly.
+
+Synchronous key-parse failure, host-key rejection, authentication rejection,
+timeout, browser cancellation, and connection close release the same known
+application- and dependency-owned references before the attempt settles. Raw
+ssh2 parser, authentication, and shell errors stop at the external-dependency
+adapter because malformed-key diagnostics can echo submitted bytes. Rejected
+connection errors expose only a stable normalized reason and message, without
+the raw dependency error as a cause. The disposal does not touch ssh2's KEX,
+cipher, session ID, channel, or other transport state; rekeying and the live PTY
+continue normally after authentication.
 
 This is deliberately a **reference-release** guarantee, not memory
-zeroization. The locked ssh2 1.17.0 client copies the raw private key into its
-own client configuration and retains a parsed private key in authentication
-closures; stock ssh2 exposes no supported disposal hook for those
-**dependency-owned** references, so they may remain for the SSH client lifetime.
-OMXTerm Web does not reflect into ssh2 internals or mutate undocumented handlers
-to clear them. JavaScript strings are immutable, and V8 may retain prior
-stack/register/JIT or garbage-collector copies; immediate collection, native or
-OpenSSL allocations, swap, process dumps, and a compromised broker host are not
-claimed to be erased or protected.
+zeroization. JavaScript strings are immutable, and V8 may retain prior
+stack/register/JIT or garbage-collector copies. Immediate garbage collection,
+secure byte erasure, native/OpenSSL allocations or cleanup, swap, process dumps,
+and protection from a compromised broker host are not claimed.
 
 From here the broker bridges the small JSON terminal protocol
 ([`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts)):
@@ -407,13 +442,13 @@ process alive indefinitely. There is no reconnect/resume in the MVP.
 | Access session token | step 1        | SHA-256 hash, server memory                     | 12h TTL                                          | `HttpOnly` cookie           |
 | Device token         | step 1        | SHA-256 hash, server memory                     | 12h TTL                                          | `HttpOnly` cookie           |
 | Terminal ticket      | step 3        | SHA-256 hash, server memory                     | 60s / single use                                 | URL query param, once       |
-| Private key          | typed by user | ticket grant, then SSH authentication config    | OMXTerm refs: user auth; ssh2 refs: client lifetime | request body, once (step 3) |
+| Private key          | typed by user | ticket grant, then SSH authentication config    | Known OMXTerm/ssh2 refs: user auth                   | request body, once (step 3) |
 
 The private key and optional passphrase are never written to disk or logged.
 The consumed grant/profile releases them when establishment takes ownership;
-the OMXTerm-owned authentication configuration releases them at user-auth
-completion, before PTY/shell allocation. The dependency/V8 limitations above
-still apply.
+the OMXTerm-owned authentication configuration and audited ssh2 references are
+released at user-auth completion, before PTY/shell allocation. The V8/native
+limitations above still apply.
 
 ---
 
@@ -539,6 +574,7 @@ store, a stronger account model, and mature backpressure/lifecycle handling.
 | Sessions, device tokens, tickets, rate limiter | [`packages/core/src/stores.ts`](../packages/core/src/stores.ts)     |
 | Host-key probe + SSH terminal session          | [`apps/server/src/ssh.ts`](../apps/server/src/ssh.ts)               |
 | ssh2 establishment + credential ownership      | [`apps/server/src/ssh2-establishment.ts`](../apps/server/src/ssh2-establishment.ts) |
+| Pinned ssh2 adaptation + drift verification     | [`scripts/ssh2-auth-material-adaptation.mjs`](../scripts/ssh2-auth-material-adaptation.mjs) |
 | Cookie names and flags                         | [`apps/server/src/cookies.ts`](../apps/server/src/cookies.ts)       |
 | Config and access-token validation             | [`apps/server/src/config.ts`](../apps/server/src/config.ts)         |
 | Terminal protocol codec                        | [`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts) |
