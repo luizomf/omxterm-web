@@ -4,13 +4,14 @@
 #
 # The runtime image runs an unpruned npm ci and starts the broker through tsx,
 # which is currently classified as a development dependency. The fake npm below
-# models a reportable advisory that disappears only when dev dependencies are
-# omitted, then verifies that the maintainer audit command preserves npm's
-# failure and that CI and README use that same command.
+# models a reportable advisory that disappears when any omit-able dependency
+# class is not explicitly included. It verifies the shared audit command cannot
+# be narrowed by environment-level npm omit settings, preserves npm's failure,
+# and is used by CI and README.
 #
 # Run: bash scripts/dependency-audit.test.sh
 
-set -uo pipefail
+set -euo pipefail
 
 REPO_ROOT="$(realpath "$(dirname "${BASH_SOURCE[0]}")/..")"
 REAL_NPM="$(command -v npm)"
@@ -38,32 +39,51 @@ cat >"${FAKE_BIN}/npm" <<'EOF'
 set -u
 printf '%s\n' "$*" >"${AUDIT_ARGUMENT_LOG}"
 
-if [ "$#" -eq 1 ] && [ "$1" = "audit" ]; then
-  echo "synthetic reportable advisory in a dev-classified runtime dependency" >&2
-  exit 42
+if [ "${1:-}" != "audit" ]; then
+  echo "unexpected npm arguments: $*" >&2
+  exit 64
 fi
 
-if [ "$#" -eq 2 ] && [ "$1" = "audit" ] && [ "$2" = "--omit=dev" ]; then
-  exit 0
-fi
+for required_include in \
+  "--include=dev" \
+  "--include=optional" \
+  "--include=peer"; do
+  found=false
+  for argument in "$@"; do
+    if [ "${argument}" = "${required_include}" ]; then
+      found=true
+      break
+    fi
+  done
+  if [ "${found}" != "true" ]; then
+    # Model npm omitting the dependency class, which hides the advisory.
+    exit 0
+  fi
+done
 
-echo "unexpected npm arguments: $*" >&2
-exit 64
+echo "synthetic reportable advisory in an omit-able runtime dependency" >&2
+exit 42
 EOF
 chmod +x "${FAKE_BIN}/npm"
 
-PATH="${FAKE_BIN}:${PATH}" \
+if PATH="${FAKE_BIN}:${PATH}" \
   AUDIT_ARGUMENT_LOG="${AUDIT_ARGUMENT_LOG}" \
-  "${REAL_NPM}" run audit:dependencies --silent >"${AUDIT_OUTPUT_LOG}" 2>&1
-status=$?
+  NODE_ENV=production \
+  npm_config_omit=dev \
+  "${REAL_NPM}" run audit:dependencies --silent >"${AUDIT_OUTPUT_LOG}" 2>&1; then
+  status=0
+else
+  status=$?
+fi
 
 if [ "${status}" -ne 42 ]; then
   echo "dependency-audit.test.sh: expected the reportable advisory status 42, got ${status}" >&2
   cat "${AUDIT_OUTPUT_LOG}" >&2
   exit 1
 fi
-if [ "$(cat "${AUDIT_ARGUMENT_LOG}" 2>/dev/null)" != "audit" ]; then
-  echo "dependency-audit.test.sh: audit command did not cover the complete lockfile" >&2
+expected_arguments="audit --include=dev --include=optional --include=peer"
+if [ "$(cat "${AUDIT_ARGUMENT_LOG}" 2>/dev/null)" != "${expected_arguments}" ]; then
+  echo "dependency-audit.test.sh: audit command did not explicitly include every omit-able dependency class" >&2
   exit 1
 fi
 if ! grep -E -q '^[[:space:]]*run:[[:space:]]+npm run audit:dependencies[[:space:]]*$' "${REPO_ROOT}/.github/workflows/ci.yml"; then
@@ -75,4 +95,4 @@ if ! grep -F -x -q 'npm run audit:dependencies' "${REPO_ROOT}/README.md"; then
   exit 1
 fi
 
-echo "dependency-audit.test.sh: dev classification cannot escape the shared lockfile audit gate"
+echo "dependency-audit.test.sh: npm omit settings cannot narrow the shared lockfile audit gate"

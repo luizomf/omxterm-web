@@ -16,7 +16,7 @@
     "dev:web": "npm run dev --workspace @omxterm/web",
     "dev:server": "npm run dev --workspace @omxterm/server",
     "build": "npm run build --workspaces --if-present",
-    "audit:dependencies": "npm audit",
+    "audit:dependencies": "npm audit --include=dev --include=optional --include=peer",
     "format:check": "git diff --check",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
