@@ -13,6 +13,31 @@ _data/
 **/*.[nN][dD][jJ][sS][oO][nN].*
 **/*.[nN][dD][jJ][sS][oO][nN]-*
 
+# Local environment files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local agent and SSH metadata
+**/.claude/
+**/.hermes/
+**/.ssh/
+
+# Conventional private-key basenames
+**/id_rsa
+**/id_dsa
+**/id_ecdsa
+**/id_ed25519
+
+# Private-key and certificate-container extensions
+**/*.pem
+**/*.key
+**/*.ppk
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+
 # Temp
 TEMP.md
 TMP.md
@@ -102,7 +127,6 @@ docs/_build/
 target/
 
 # Virtual environment
-.env
 .venv/
 venv/
 
