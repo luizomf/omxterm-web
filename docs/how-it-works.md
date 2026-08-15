@@ -117,7 +117,13 @@ The broker refuses to start with a weak gate. `loadConfig`
   events while it is under backpressure (rather than buffering without bound),
   reporting the onset once; see the audit-log section below.
 - `OMXTERM_WEB_ROOT` — optional path to the built web SPA. When set, the broker
-  serves the SPA itself (single origin); unset in dev, where Vite serves it.
+  canonicalizes the root (a root symlink may resolve to a valid directory) and
+  refuses to start unless it contains a readable regular non-symlink
+  `index.html`. The broker serves public assets and legitimate client routes on
+  the same origin, but denies dotfiles and hidden-directory descendants before
+  static serving or SPA fallback; `/api`, `/health`, and `/terminal` remain
+  server-owned namespaces. Leave it unset in development, where Vite serves the
+  web.
 
 Fastify also applies route-specific JSON body limits before handlers run: 25 KiB
 for access, about 2.5 KiB for host-key probes, and about 413 KiB for

@@ -1,5 +1,12 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { parseAllowedOrigins } from "./allowed-origins";
 import { assertSafeCookieDeployment, parseTrustProxy } from "./deploy-safety";
@@ -79,20 +86,35 @@ function hasWeakAccessTokenPrimitive(token: string): boolean {
   return false;
 }
 
+const WEB_ROOT_CONFIG_HINT =
+  "OMXTERM_WEB_ROOT must point to an existing directory containing a readable " +
+  "regular non-symlink index.html, or be left unset.";
+
+function invalidWebRoot(): Error {
+  // Do not echo an environment-provided filesystem path into startup output.
+  return new Error(WEB_ROOT_CONFIG_HINT);
+}
+
 // In production the broker serves the built SPA itself (single origin, so the
 // browser's relative /api and same-origin wss just work). Opt-in: unset in dev,
-// where Vite owns the web. Fail fast on a bad path so a misconfigured deploy
-// surfaces at boot instead of 404-ing every asset.
+// where Vite owns the web. Canonicalize the configured root, then fail at boot
+// unless it is a usable built SPA instead of silently serving the wrong tree.
 export function resolveWebRoot(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  const resolved = resolve(value);
-  if (!existsSync(resolved)) {
-    throw new Error(
-      `OMXTERM_WEB_ROOT points at "${resolved}", which does not exist. Set it to ` +
-        "the built web assets (apps/web/dist) or leave it unset to skip serving the SPA.",
-    );
+
+  try {
+    const canonicalRoot = realpathSync(resolve(value));
+    if (!statSync(canonicalRoot).isDirectory()) throw invalidWebRoot();
+
+    const indexPath = join(canonicalRoot, "index.html");
+    if (!lstatSync(indexPath).isFile()) throw invalidWebRoot();
+    const indexDescriptor = openSync(indexPath, "r");
+    closeSync(indexDescriptor);
+    return canonicalRoot;
+  } catch {
+    // Normalize filesystem failures so configured paths never reach startup logs.
+    throw invalidWebRoot();
   }
-  return resolved;
 }
 
 export function validateAccessToken(token: string): string {

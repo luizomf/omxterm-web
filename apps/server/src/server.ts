@@ -221,6 +221,13 @@ const UPGRADE_STATUS_TEXT: Record<number, string> = {
   429: "Too Many Requests",
 };
 
+const ROUTE_NOT_FOUND_BODY = {
+  error: "Not Found",
+  message: "Route not found.",
+  statusCode: 404,
+} as const;
+const RESERVED_SERVER_PATHS = ["/api", "/health", "/terminal"] as const;
+
 function rejectUpgrade(socket: Duplex, statusCode: number): void {
   const statusText = UPGRADE_STATUS_TEXT[statusCode] ?? "Forbidden";
   socket.write(`HTTP/1.1 ${statusCode} ${statusText}\r\n\r\n`);
@@ -235,6 +242,30 @@ function normalizeOriginHeader(
 
 function requestOrigin(request: FastifyRequest): string | undefined {
   return normalizeOriginHeader(request.headers.origin);
+}
+
+function decodeRequestPathname(requestUrl: string): string | undefined {
+  const queryStart = requestUrl.indexOf("?");
+  const encodedPathname =
+    queryStart === -1 ? requestUrl : requestUrl.slice(0, queryStart);
+  try {
+    return decodeURIComponent(encodedPathname);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasHiddenPathSegment(pathname: string): boolean {
+  return pathname
+    .split(/[\\/]/u)
+    .some((segment) => segment.startsWith("."));
+}
+
+function isReservedServerPath(pathname: string): boolean {
+  return RESERVED_SERVER_PATHS.some(
+    (namespace) =>
+      pathname === namespace || pathname.startsWith(`${namespace}/`),
+  );
 }
 
 function consumePostAuthBudget(
@@ -387,11 +418,34 @@ export async function createOmxtermServer(
   await app.register(helmet);
   await app.register(cookie);
   // Serve the built SPA from the broker in production so it shares the API's
-  // origin (#52). The /api routes and the /terminal/ws upgrade are matched
-  // first, so this only answers the SPA shell and its assets. Unset in dev,
-  // where Vite serves the web and proxies the API.
+  // origin (#52). Server-owned namespaces stay authoritative, and hidden path
+  // segments are rejected before static serving or client-route fallback.
+  // Unset in dev, where Vite serves the web and proxies the API.
   if (config.webRoot) {
-    await app.register(fastifyStatic, { root: config.webRoot });
+    app.addHook("onRequest", async (request, reply) => {
+      const requestPath = decodeRequestPathname(request.url);
+      if (requestPath === undefined || hasHiddenPathSegment(requestPath)) {
+        return reply.code(404).send(ROUTE_NOT_FOUND_BODY);
+      }
+    });
+    await app.register(fastifyStatic, {
+      root: config.webRoot,
+      dotfiles: "deny",
+      allowedPath: (pathname) =>
+        !hasHiddenPathSegment(pathname) && !isReservedServerPath(pathname),
+    });
+    app.setNotFoundHandler((request, reply) => {
+      const requestPath = decodeRequestPathname(request.url);
+      if (
+        requestPath !== undefined &&
+        !hasHiddenPathSegment(requestPath) &&
+        !isReservedServerPath(requestPath) &&
+        (request.method === "GET" || request.method === "HEAD")
+      ) {
+        return reply.sendFile("index.html");
+      }
+      return reply.code(404).send(ROUTE_NOT_FOUND_BODY);
+    });
   }
   app.addHook("onClose", async () => {
     stopExpirySweeper();

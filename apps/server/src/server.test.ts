@@ -1,8 +1,14 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   ACCESS_GATE_MAX_FAILURES,
   ACCESS_GATE_WINDOW_MS,
@@ -18,7 +24,7 @@ import {
 import { JsonlAuditLogger } from "./audit-logger";
 import type { AuditEvent, AuditLogger } from "@omxterm/core/audit";
 import { MAX_PRIVATE_KEY_BYTES } from "@omxterm/core/ssh";
-import type { ServerConfig } from "./config";
+import { resolveWebRoot, type ServerConfig } from "./config";
 
 const baseConfig: ServerConfig = {
   accessToken: "strong-access-token-for-tests",
@@ -31,6 +37,128 @@ const baseConfig: ServerConfig = {
   auditLogPath: undefined,
   webRoot: undefined,
 };
+
+const SYNTHETIC_SPA_INDEX = "<main>synthetic SPA shell</main>";
+const SYNTHETIC_PUBLIC_ASSET = "window.syntheticAsset = true;";
+
+function createSyntheticWebRoot(): string {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "omxterm-static-root-"));
+  const assetsRoot = join(fixtureRoot, "assets");
+  mkdirSync(assetsRoot);
+  writeFileSync(join(fixtureRoot, "index.html"), SYNTHETIC_SPA_INDEX);
+  writeFileSync(join(assetsRoot, "app.js"), SYNTHETIC_PUBLIC_ASSET);
+  return fixtureRoot;
+}
+
+describe("SPA static serving", () => {
+  let fixtureRoot: string;
+  let app: Awaited<ReturnType<typeof createOmxtermServer>> | undefined;
+
+  beforeEach(() => {
+    fixtureRoot = createSyntheticWebRoot();
+    app = undefined;
+  });
+
+  afterEach(async () => {
+    try {
+      await app?.close();
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  async function startSpaServer() {
+    const webRoot = resolveWebRoot(fixtureRoot);
+    if (!webRoot) throw new Error("Expected the synthetic web root to resolve.");
+    app = await createOmxtermServer({ ...baseConfig, webRoot });
+    return app;
+  }
+
+  test("serves the index, public assets, and client-route fallback from a valid root", async () => {
+    const app = await startSpaServer();
+    const index = await app.inject({ method: "GET", url: "/" });
+    const asset = await app.inject({ method: "GET", url: "/assets/app.js" });
+    const clientRoute = await app.inject({
+      method: "GET",
+      url: "/connect/confirm",
+    });
+
+    expect(index.statusCode).toBe(200);
+    expect(index.body).toBe(SYNTHETIC_SPA_INDEX);
+    expect(asset.statusCode).toBe(200);
+    expect(asset.body).toBe(SYNTHETIC_PUBLIC_ASSET);
+    expect(clientRoute.statusCode).toBe(200);
+    expect(clientRoute.body).toBe(SYNTHETIC_SPA_INDEX);
+  });
+
+  test("keeps API routes authoritative instead of using static files or the SPA fallback", async () => {
+    const apiShadowBody = "synthetic static API shadow";
+    mkdirSync(join(fixtureRoot, "api"));
+    writeFileSync(join(fixtureRoot, "api", "client-route"), apiShadowBody);
+    const app = await startSpaServer();
+    const knownApiRoute = await app.inject({ method: "GET", url: "/api/me" });
+    const unknownApiRoute = await app.inject({
+      method: "GET",
+      url: "/api/client-route",
+    });
+
+    expect(knownApiRoute.statusCode).toBe(200);
+    expect(knownApiRoute.json()).toEqual({ authenticated: false });
+    expect(unknownApiRoute.statusCode).toBe(404);
+    expect(unknownApiRoute.body).not.toContain(apiShadowBody);
+    expect(unknownApiRoute.body).not.toContain(SYNTHETIC_SPA_INDEX);
+  });
+
+  test("keeps terminal security routing out of the SPA fallback", async () => {
+    const app = await startSpaServer();
+    const terminalRoute = await app.inject({
+      method: "GET",
+      url: "/terminal/ws",
+    });
+    const health = await app.inject({ method: "GET", url: "/health" });
+    const unknownHealthRoute = await app.inject({
+      method: "GET",
+      url: "/health/details",
+    });
+
+    expect(terminalRoute.statusCode).toBe(404);
+    expect(terminalRoute.body).not.toContain(SYNTHETIC_SPA_INDEX);
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ ok: true });
+    expect(unknownHealthRoute.statusCode).toBe(404);
+    expect(unknownHealthRoute.body).not.toContain(SYNTHETIC_SPA_INDEX);
+  });
+
+  test("denies a dotfile without returning hidden content or the SPA index", async () => {
+    const hiddenBody = "synthetic hidden deployment file";
+    writeFileSync(join(fixtureRoot, ".synthetic-config"), hiddenBody);
+    const app = await startSpaServer();
+    const response = await app.inject({
+      method: "GET",
+      url: "/.synthetic-config",
+    });
+
+    expect([403, 404]).toContain(response.statusCode);
+    expect(response.body).not.toContain(hiddenBody);
+    expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
+  });
+
+  test("denies content below a hidden directory without falling back to the SPA", async () => {
+    const hiddenDirectory = join(fixtureRoot, "assets", ".synthetic-private");
+    const hiddenBody = "synthetic hidden nested content";
+    mkdirSync(hiddenDirectory);
+    writeFileSync(join(hiddenDirectory, "public.txt"), hiddenBody);
+    const app = await startSpaServer();
+    const response = await app.inject({
+      method: "GET",
+      url: "/assets/.synthetic-private/public.txt",
+    });
+
+    expect([403, 404]).toContain(response.statusCode);
+    expect(response.body).not.toContain(hiddenBody);
+    expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
+  });
+});
 
 describe("scrubSshConnectionSecrets", () => {
   test("clears private key and passphrase without dropping connection metadata", () => {
