@@ -18,7 +18,6 @@ import {
   MAX_AUTHENTICATED_WS_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
   MAX_AUTHENTICATED_WS_UPGRADE_ATTEMPTS_PER_WINDOW,
   MAX_UNAUTHENTICATED_REJECTION_AUDITS_PER_REASON_PER_WINDOW,
-  scrubSshConnectionSecrets,
   TERMINAL_TICKET_REQUEST_BODY_LIMIT_BYTES,
 } from "./server";
 import { JsonlAuditLogger } from "./audit-logger";
@@ -157,28 +156,6 @@ describe("SPA static serving", () => {
     expect([403, 404]).toContain(response.statusCode);
     expect(response.body).not.toContain(hiddenBody);
     expect(response.body).not.toContain(SYNTHETIC_SPA_INDEX);
-  });
-});
-
-describe("scrubSshConnectionSecrets", () => {
-  test("clears private key and passphrase without dropping connection metadata", () => {
-    const profile = {
-      host: "ssh.example",
-      port: 22,
-      username: "deploy",
-      privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----secret",
-      passphrase: "top-secret",
-      acceptedHostFingerprint: "SHA256:test",
-    };
-
-    scrubSshConnectionSecrets(profile);
-
-    expect(profile.privateKey).toBe("");
-    expect(profile.passphrase).toBe("");
-    expect(profile.host).toBe("ssh.example");
-    expect(profile.port).toBe(22);
-    expect(profile.username).toBe("deploy");
-    expect(profile.acceptedHostFingerprint).toBe("SHA256:test");
   });
 });
 

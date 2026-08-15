@@ -19,6 +19,9 @@ type StoredDeviceToken = {
   expiresAt: number;
 };
 
+// Mutable, one-attempt connection input. Ownership transfers to SSH
+// establishment when connect starts; callers must not reuse the profile after
+// that point. Credential fields are cleared as references are released.
 export type SshConnectionProfile = {
   host: string;
   port: number;
@@ -32,6 +35,15 @@ export type SshConnectionProfile = {
   // unrestricted mode, where nothing is resolved and the dial uses `host`.
   pinnedAddress?: string;
 };
+
+// Drops OMXTerm-owned references; it does not overwrite immutable string
+// storage or make a JavaScript/V8 memory-zeroization claim.
+export function releaseSshConnectionCredentials(
+  profile: SshConnectionProfile,
+): void {
+  profile.privateKey = '';
+  if (profile.passphrase !== undefined) profile.passphrase = '';
+}
 
 export type TerminalTicketGrant = {
   id: string;
@@ -270,17 +282,15 @@ export class InMemoryTerminalTicketStore {
     return { ok: true, grant };
   }
 
-  // Active expiry (#29): drop expired/used grants and overwrite the SSH key
-  // material before releasing the reference, so an unconsumed ticket can't keep
-  // a private key in memory past its TTL. The successful-consume path deletes
-  // without scrubbing on purpose — there the grant (and its key) is handed to
-  // the caller to open the SSH session.
+  // Active expiry (#29): drop expired/used grants and release their SSH
+  // credential references, so an unconsumed ticket cannot retain them past its
+  // TTL. Successful consume transfers the one-attempt profile to SSH
+  // establishment instead.
   sweepExpired(): void {
     const now = this.clock.now();
     for (const [ticketHash, grant] of this.#tickets.entries()) {
       if (grant.expiresAt <= now || grant.usedAt) {
-        grant.profile.privateKey = '';
-        if (grant.profile.passphrase) grant.profile.passphrase = '';
+        releaseSshConnectionCredentials(grant.profile);
         this.#tickets.delete(ticketHash);
       }
     }

@@ -306,11 +306,6 @@ function profileFromBody(
   return profile;
 }
 
-export function scrubSshConnectionSecrets(profile: SshConnectionProfile): void {
-  profile.privateKey = "";
-  if (profile.passphrase !== undefined) profile.passphrase = "";
-}
-
 export type ServerDependencies = {
   // Injected so tests can drive a runtime sink failure through the real
   // handlers; production builds the configured file/stdout audit logger.
@@ -1029,12 +1024,10 @@ export async function createOmxtermServer(
         closed = true;
         stopHeartbeat();
         inbound.dispose();
-        // terminal.close() aborts a still-pending SSH dial; scrub here too so
-        // the key/passphrase are cleared on cancellation even when the socket
-        // closes before connect() settles (#76). Idempotent with the scrub in
-        // the connect resolve/reject paths below.
+        // terminal.close() aborts a still-pending SSH establishment attempt;
+        // that boundary owns and releases its authentication references before
+        // the cancellation settles.
         terminal.close();
-        scrubSshConnectionSecrets(context.grant.profile);
         audit.write({
           event: "session_ended",
           severity,
@@ -1085,29 +1078,29 @@ export async function createOmxtermServer(
 
       ws.on("close", () => closeTerminalSession("websocket_closed", "info"));
 
+      // connect() consumes the one-attempt profile. Capture only audit-safe
+      // metadata before transfer and never read or mutate the profile afterward.
+      const targetHost = context.grant.profile.host;
+      const targetPort = context.grant.profile.port;
       void terminal
         .connect(context.grant.profile, { cols: 120, rows: 34 })
         .then(() => {
-          scrubSshConnectionSecrets(context.grant.profile);
           audit.write({
             event: "session_started",
             severity: "info",
             sessionId: context.session.id,
-            host: context.grant.profile.host,
-            port: context.grant.profile.port,
+            host: targetHost,
+            port: targetPort,
           });
           send({ type: "ready", sessionId: terminalSessionId });
         })
         .catch((error: unknown) => {
-          // Clear the key/passphrase on failure, timeout, and cancellation too,
-          // not just on success — the grant must not outlive the attempt (#76).
-          scrubSshConnectionSecrets(context.grant.profile);
           audit.write({
             event: "session_connect_failed",
             severity: "warn",
             sessionId: context.session.id,
-            host: context.grant.profile.host,
-            port: context.grant.profile.port,
+            host: targetHost,
+            port: targetPort,
             reason:
               error instanceof SshConnectError
                 ? error.reason
