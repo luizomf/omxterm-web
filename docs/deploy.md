@@ -137,6 +137,45 @@ ENV
   `OMXTERM_SERVER_HOST` to a loopback value — the container must keep binding
   `0.0.0.0` so Docker's published port and any in-network proxy can reach it.
 
+### Broker container resource ceilings
+
+Both Compose paths apply the same broker-only runtime ceilings from
+`compose.yml`; the production override inherits them rather than maintaining a
+second set that could drift. Existing `.env` files need no change because
+Compose supplies these defaults:
+
+| Resource | Default | Capacity headroom |
+| --- | --- | --- |
+| Memory | `512m` (512 MiB) | The 50-connection global cap can account for at most 50 MiB of the documented 1 MiB-per-connection inbound SSH queues, leaving more than 460 MiB for Node/V8, SSH and WebSocket state, startup/shutdown, and the healthcheck process. |
+| PIDs/tasks | `256` | SSH sessions use in-process sockets rather than one child process each. The ceiling leaves room for Node/V8 threads and an overlapping Node healthcheck during lifecycle transitions. |
+| Open files (`nofile`) | `4096` soft and hard | Fifty active terminals use roughly 100 long-lived browser/SSH sockets. The limit leaves more than 40 times that descriptor count for the listener, transient HTTP/probe traffic, logs, and health checks. |
+
+Operators can tune the non-secret Compose inputs in `.env` without editing
+source, for example:
+
+```dotenv
+OMXTERM_BROKER_MEMORY_LIMIT=768m
+OMXTERM_BROKER_PIDS_LIMIT=384
+OMXTERM_BROKER_NOFILE_LIMIT=6144
+```
+
+Keep all three values positive and finite. The memory value uses Compose byte
+units; PID and nofile values are integers. Validate changes with
+`docker compose config` (and with both `-f` files for the production path)
+before rollout. These container ceilings complement the broker's caps of five
+active SSH sessions per access session and 50 global WebSocket connections;
+they do not raise or replace either cap.
+
+Exhaustion is containment, not graceful recovery. Memory pressure can cause the
+container runtime to terminate the broker, while PID or descriptor exhaustion
+can reject new work, make the healthcheck fail, or cause the process to exit. A
+configured restart policy may start a new broker after process termination;
+Docker does not restart a container merely because its health status changed.
+Any restart closes live WebSocket/SSH sessions and loses the process-local
+access sessions, device credentials, and pending tickets. OMXTerm Web does not
+resume those sessions. These settings constrain only the broker container; the
+separate reverse proxy and host-wide controls remain operator-owned.
+
 ## 3. Start the broker
 
 Choose the path that matches where your reverse proxy runs.
