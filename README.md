@@ -70,11 +70,17 @@ Useful checks:
 ```bash
 npm run format:check
 npm run verify:ssh2-adaptation
+npm run lint
 npm run typecheck
 npm run test:run
 npm run build
 npm run audit:dependencies
 ```
+
+The lint gate analyzes every TypeScript and TSX source in `apps/web`,
+`apps/server`, and `packages/core` with type information and fails on any warning
+or error. Its cyclomatic and cognitive-complexity ceilings preserve the current
+independently measured maxima; the test suite verifies both boundaries.
 
 The dependency audit explicitly includes development, optional, and peer
 packages so environment-level npm omit settings cannot narrow the complete

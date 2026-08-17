@@ -199,6 +199,7 @@ Use the repository's root npm scripts:
 
 ```bash
 npm run format:check
+npm run lint
 npm run typecheck
 npm run test:run
 npm run build
@@ -209,10 +210,10 @@ Use `npm run test:e2e:ssh` when a change materially affects the browser-to-SSH
 flow, Docker fixture, or deployment path and its prerequisites are available.
 Explain clearly when an applicable check cannot run.
 
-`format:check` currently validates the Git diff; the repository does not yet
-provide a root lint script. Do not claim lint passed or invent `npm run lint`.
-When adding mechanically enforceable style or complexity rules, configure a
-real root lint command and CI gate in the same change.
+`format:check` validates only the Git diff. `lint` type-aware checks all
+TypeScript and TSX sources in the three workspaces, fails on every warning, and
+enforces the current independently measured cyclomatic and cognitive-complexity
+ceilings.
 
 ## Documentation and completion
 
