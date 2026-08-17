@@ -23,6 +23,7 @@ Closes #
 
 - [ ] Commits are conventional (`type(scope): description`)
 - [ ] Changed lines pass the repository whitespace check (`npm run format:check`)
+- [ ] Lint passes with zero warnings (`npm run lint`)
 - [ ] Type-checks pass (`npm run typecheck`)
 - [ ] Relevant tests pass (`npm run test:run`)
 - [ ] New behavior has tests (when practical)

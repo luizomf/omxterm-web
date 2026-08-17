@@ -46,6 +46,9 @@ jobs:
       - name: Audit locked dependencies
         run: npm run audit:dependencies
 
+      - name: Lint
+        run: npm run lint
+
       - name: Type-check
         run: npm run typecheck
 
