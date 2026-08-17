@@ -20,17 +20,25 @@
     "postinstall": "node scripts/ssh2-auth-material-adaptation.mjs --apply",
     "verify:ssh2-adaptation": "node scripts/ssh2-auth-material-adaptation.mjs --verify",
     "format:check": "git diff --check",
+    "lint": "eslint --max-warnings 0 'apps/web/**/*.{ts,tsx}' 'apps/server/**/*.ts' 'packages/core/**/*.ts'",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
     "test:run": "npm run test:run --workspaces --if-present && npm run test:scripts",
-    "test:scripts": "node scripts/ssh2-auth-material-adaptation.test.mjs && bash scripts/dependency-audit.test.sh && bash scripts/deploy.test.sh && bash scripts/compose-baseline.test.sh && bash scripts/docker-build-context.test.sh && bash scripts/run-bounded-command.test.sh && bash scripts/ssh-browser-e2e.test.sh && bash scripts/ssh-browser-e2e-preparation.test.sh",
+    "test:scripts": "npm run test:lint-config && node scripts/ssh2-auth-material-adaptation.test.mjs && bash scripts/dependency-audit.test.sh && bash scripts/deploy.test.sh && bash scripts/compose-baseline.test.sh && bash scripts/docker-build-context.test.sh && bash scripts/run-bounded-command.test.sh && bash scripts/ssh-browser-e2e.test.sh && bash scripts/ssh-browser-e2e-preparation.test.sh",
+    "test:lint-config": "node scripts/lint-complexity-ceilings.test.mjs",
     "test:compose:integration": "bash scripts/compose-baseline.integration.test.sh",
     "test:e2e:ssh": "bash scripts/ssh-browser-e2e.sh"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@types/node": "26.0.1",
+    "eslint": "9.39.5",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-sonarjs": "4.2.0",
+    "globals": "17.11.0",
     "typescript": "6.0.3",
+    "typescript-eslint": "8.67.0",
     "vitest": "4.1.9"
   },
   "allowScripts": {
