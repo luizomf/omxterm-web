@@ -56,6 +56,8 @@ export default tseslint.config(
     files: [
       "apps/server/**/*.ts",
       "packages/core/**/*.test.ts",
+      "packages/core/src/stores.ts",
+      "packages/core/src/sweeper.ts",
       "apps/web/vite.config.ts",
     ],
     languageOptions: {
