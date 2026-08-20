@@ -1,5 +1,5 @@
 <!--
-Workflow (see AGENTS.md): issue → branch → PR (closes #N) → squash merge.
+Workflow: issue → branch → PR (closes #N) → squash merge.
 Keep commits conventional: type(scope): description.
 -->
 
@@ -28,4 +28,4 @@ Closes #
 - [ ] Relevant tests pass (`npm run test:run`)
 - [ ] New behavior has tests (when practical)
 - [ ] No unrelated files changed; no secrets added
-- [ ] Security-sensitive change (Origin / auth / ticket / SSH)? Ran `security-review`
+- [ ] Security-sensitive changes include relevant regression tests
