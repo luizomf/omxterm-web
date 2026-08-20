@@ -1,24 +1,16 @@
-# Misc
-_data/
+# Source-control and local metadata
+.git
+.gitignore
+.gitattributes
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/*.swp
 
-# Runtime logs (including the optional JSONL audit sink)
-**/[lL][oO][gG][sS]/
-**/*.[lL][oO][gG]
-**/*.[lL][oO][gG].*
-**/*.[lL][oO][gG]-*
-**/*.[jJ][sS][oO][nN][lL]
-**/*.[jJ][sS][oO][nN][lL].*
-**/*.[jJ][sS][oO][nN][lL]-*
-**/*.[nN][dD][jJ][sS][oO][nN]
-**/*.[nN][dD][jJ][sS][oO][nN].*
-**/*.[nN][dD][jJ][sS][oO][nN]-*
-
-# Local environment files
+# Local environment, agent, and SSH metadata
 **/.env
 **/.env.*
 !**/.env.example
-
-# Local agent and SSH metadata
 **/.claude/
 **/.hermes/
 **/.ssh/
@@ -38,107 +30,38 @@ _data/
 **/*.jks
 **/*.keystore
 
-# Temp
+# Dependencies, generated output, and caches
+**/node_modules/
+**/dist/
+**/coverage/
+**/.cache/
+**/.vite/
+**/*.tsbuildinfo
+
+# Runtime logs and audit sinks
+**/[lL][oO][gG][sS]/
+**/*.[lL][oO][gG]
+**/*.[lL][oO][gG].*
+**/*.[lL][oO][gG]-*
+**/*.[jJ][sS][oO][nN][lL]
+**/*.[jJ][sS][oO][nN][lL].*
+**/*.[jJ][sS][oO][nN][lL]-*
+**/*.[nN][dD][jJ][sS][oO][nN]
+**/*.[nN][dD][jJ][sS][oO][nN].*
+**/*.[nN][dD][jJ][sS][oO][nN]-*
+
+# Temporary local artifacts
+_data/
 TEMP.md
 TMP.md
 temp/
-
-# AI
 model_cache/
 
-# NodeJS
-node_modules
-
-# Git
-.git
-.gitignore
-.gitattributes
-
-# CI
-.codeclimate.yml
-.travis.yml
-.taskcluster.yml
-
-# Docker
-docker-compose.yml
+# Compose and Docker development files are not runtime inputs
 Dockerfile
-.docker
 .dockerignore
+.docker/
 *compose*.yaml
 *compose*.yml
 *Dockerfile*
 *docker-compose*
-
-# Byte-compiled / optimized / DLL files
-**/__pycache__/
-**/*.py[cod]
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-.python-version
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-coverage
-.coverage
-.cache
-nosetests.xml
-coverage.xml
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Virtual environment
-.venv/
-venv/
-
-# PyCharm
-.idea
-
-# Python mode for VIM
-.ropeproject
-**/.ropeproject
-
-# Vim swap files
-**/*.swp
-
-# VS Code
-.vscode/
