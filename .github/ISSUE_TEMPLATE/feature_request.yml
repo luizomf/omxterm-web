@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         OMXTerm Web is a small, scope-locked MVP. Features outside
-        `docs/prd-mvp-web-ssh-terminal.md` require updating the PRD first — see `AGENTS.md`.
+        `docs/prd-mvp-web-ssh-terminal.md` require updating the PRD first.
   - type: textarea
     id: problem
     attributes:
