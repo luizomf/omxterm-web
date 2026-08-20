@@ -7,6 +7,10 @@ OMXTerm Web is not a shell running in the browser. xterm.js renders the terminal
 the backend brokers a WebSocket connection to a real SSH session on a
 user-provided target.
 
+## Tutorial em vídeo (PT-BR)
+
+🎥 **[Terminais por dentro + OMXTerm Web: explicação aprofundada e demonstração prática](https://youtu.be/up0im04clS8)**
+
 ## MVP scope
 
 - Access gate with an environment-configured token.
