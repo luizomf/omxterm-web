@@ -3,13 +3,16 @@
 A browser-based SSH terminal MVP built with TypeScript, React, xterm.js,
 Fastify, WebSocket, and `ssh2`.
 
-OMXTerm Web is not a shell running in the browser. xterm.js renders the terminal UI;
-the backend brokers a WebSocket connection to a real SSH session on a
+OMXTerm Web is not a shell running in the browser. xterm.js renders the terminal
+UI; the backend brokers a WebSocket connection to a real SSH session on a
 user-provided target.
 
-## Tutorial em vídeo (PT-BR)
+## Tutorial em vídeo (PT-BR 🇧🇷)
 
-🎥 **[Terminais por dentro + OMXTerm Web: explicação aprofundada e demonstração prática](https://youtu.be/up0im04clS8)**
+🎥
+**[OMXTerm Web: explicação aprofundada e demonstração prática em vídeo](https://youtu.be/up0im04clS8)**
+
+PS.: the video above is in Brazilian Portuguese (no english version for now).
 
 ## MVP scope
 
@@ -55,10 +58,9 @@ of exactly ssh2 1.17.0. It fails on package/version/partial-patch drift or
 complete-file drift in the adapted `client.js`/`keyParser.js` and supporting
 unmodified `Protocol.js`; `npm run verify:ssh2-adaptation` checks the installed
 tree without modifying it. Do not use `--ignore-scripts`: a deliberately
-bypassed lifecycle leaves ssh2 unadapted, and the runtime adapter will refuse SSH
-establishment.
-The Docker build copies the adaptation script before its cached `npm ci` layer
-and verifies the result explicitly.
+bypassed lifecycle leaves ssh2 unadapted, and the runtime adapter will refuse
+SSH establishment. The Docker build copies the adaptation script before its
+cached `npm ci` layer and verifies the result explicitly.
 
 Or run the processes separately:
 
@@ -82,9 +84,9 @@ npm run audit:dependencies
 ```
 
 The lint gate analyzes every TypeScript and TSX source in `apps/web`,
-`apps/server`, and `packages/core` with type information and fails on any warning
-or error. Its cyclomatic and cognitive-complexity ceilings preserve the current
-independently measured maxima; the test suite verifies both boundaries.
+`apps/server`, and `packages/core` with type information and fails on any
+warning or error. Its cyclomatic and cognitive-complexity ceilings preserve the
+current independently measured maxima; the test suite verifies both boundaries.
 
 The dependency audit explicitly includes development, optional, and peer
 packages so environment-level npm omit settings cannot narrow the complete
@@ -95,8 +97,8 @@ conservatively; inclusion does not mean those packages execute in production.
 ### Disposable browser-to-SSH E2E
 
 The opt-in end-to-end check exercises a real browser, the production-like
-OMXTerm Web image, and a repository-configured OpenSSH fixture without using a real
-SSH host or user credentials:
+OMXTerm Web image, and a repository-configured OpenSSH fixture without using a
+real SSH host or user credentials:
 
 ```bash
 npm run test:e2e:ssh
@@ -108,12 +110,12 @@ Expect the first run to take several minutes while three local images build;
 subsequent runs reuse Docker and Playwright caches. This command remains outside
 the default fast test suite.
 
-Each invocation creates a unique Compose project, access token, client key,
-host key, loopback browser port, and OS temp directory. The browser reaches only
-`127.0.0.1` through a non-root TCP gateway; the OMXTerm Web process and SSH fixture
-share only an `internal` Docker network with no published SSH port. The broker's
-SSH egress allowlist contains only the fixture's run-specific address. The test
-calculates the expected fingerprint from the generated host public key
+Each invocation creates a unique Compose project, access token, client key, host
+key, loopback browser port, and OS temp directory. The browser reaches only
+`127.0.0.1` through a non-root TCP gateway; the OMXTerm Web process and SSH
+fixture share only an `internal` Docker network with no published SSH port. The
+broker's SSH egress allowlist contains only the fixture's run-specific address.
+The test calculates the expected fingerprint from the generated host public key
 independently, confirms it in the browser, opens a PTY, runs a deterministic
 sentinel command, and checks both initially hidden terminal bars can be reopened
 independently.
@@ -124,20 +126,20 @@ networks, volumes, local images, generated environment state, and keys, then
 verify no project-scoped Docker resource or temp directory remains. Browser
 traces, screenshots, and videos are disabled. Before captured diagnostics are
 displayed or success is reported, the harness checks for the complete generated
-access token, the OpenSSH private-key header, and its sampled private-key marker;
-a detection or scan error withholds diagnostics and fails the run. A ten-minute
-deadline terminates a hung build, Docker wait, browser installation, or browser
-test together with its child process group, then starts bounded teardown.
-Contributors diagnosing a slow local daemon can override it with a positive
-`OMXTERM_E2E_TIMEOUT_SECONDS` value. Prerequisite checks and local
+access token, the OpenSSH private-key header, and its sampled private-key
+marker; a detection or scan error withholds diagnostics and fails the run. A
+ten-minute deadline terminates a hung build, Docker wait, browser installation,
+or browser test together with its child process group, then starts bounded
+teardown. Contributors diagnosing a slow local daemon can override it with a
+positive `OMXTERM_E2E_TIMEOUT_SECONDS` value. Prerequisite checks and local
 credential/subnet preparation happen before any Docker resource exists and are
 not included in that runtime deadline. Repository/temp paths, restrictive temp
-permissions, generated credential paths, keys, fingerprint, subnet, and
-loopback port are validated before startup; preparation failure cleans up any
-synthetic credential material. Docker and Compose operations after startup
-begins, including isolation inspection, log capture, and teardown, are bounded;
-teardown has a separate one-minute aggregate deadline so it can still run after
-the main deadline expires.
+permissions, generated credential paths, keys, fingerprint, subnet, and loopback
+port are validated before startup; preparation failure cleans up any synthetic
+credential material. Docker and Compose operations after startup begins,
+including isolation inspection, log capture, and teardown, are bounded; teardown
+has a separate one-minute aggregate deadline so it can still run after the main
+deadline expires.
 
 Troubleshooting:
 
@@ -159,18 +161,18 @@ token, SSH form, host-key confirmation, and what the terminal can do.
 The defaults target `localhost`. Any deploy reachable over an untrusted network
 must run behind HTTPS/WSS, because the auth cookies (`omxterm_session_*`,
 `omxterm_device_*`) **are** the authentication and would otherwise travel in
-cleartext. OMXTerm Web does not terminate TLS itself; put it behind a reverse proxy
-(e.g. Traefik, Caddy, nginx) that does.
+cleartext. OMXTerm Web does not terminate TLS itself; put it behind a reverse
+proxy (e.g. Traefik, Caddy, nginx) that does.
 
 **Before exposing OMXTerm Web on a public hostname**, know the difference
-between what the broker rate-limits itself (access-gate brute force,
-post-auth probe/ticket abuse, concurrent sessions/connections) and what it
-does not defend against (botnets, volumetric/distributed DoS, TLS). OMXTerm Web
-makes no DDoS-resistance claim — application limits complement edge rate
-limiting, firewalling, your provider's DDoS protection, and a WAF where
-appropriate; they do not replace them. See
-[`docs/public-exposure.md`](./docs/public-exposure.md) for the full model,
-`OMXTERM_TRUST_PROXY` failure modes, and an optional edge rate-limit recipe.
+between what the broker rate-limits itself (access-gate brute force, post-auth
+probe/ticket abuse, concurrent sessions/connections) and what it does not defend
+against (botnets, volumetric/distributed DoS, TLS). OMXTerm Web makes no
+DDoS-resistance claim — application limits complement edge rate limiting,
+firewalling, your provider's DDoS protection, and a WAF where appropriate; they
+do not replace them. See [`docs/public-exposure.md`](./docs/public-exposure.md)
+for the full model, `OMXTERM_TRUST_PROXY` failure modes, and an optional edge
+rate-limit recipe.
 
 Required for a non-loopback deploy:
 
@@ -194,8 +196,8 @@ In production the broker can also serve the built web SPA itself (one origin) by
 setting `OMXTERM_WEB_ROOT` to the web build output; the Docker image does this
 for you. The broker canonicalizes that root and refuses to start unless it is a
 directory with a readable regular non-symlink `index.html`. Dotfiles and content
-below hidden directories are never served or used as SPA fallback paths. Locally,
-leave the root unset and Vite serves the web.
+below hidden directories are never served or used as SPA fallback paths.
+Locally, leave the root unset and Vite serves the web.
 
 Security headers (CSP and friends) are applied via `@fastify/helmet`. See
 `.env.example` for every variable and `docs/how-it-works.md` for the security
