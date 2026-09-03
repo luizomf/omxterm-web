@@ -105,6 +105,26 @@ lockfile gate. The production image installs development dependencies and uses
 `tsx` to start the broker. This also audits build- and test-only packages
 conservatively; inclusion does not mean those packages execute in production.
 
+### Dependency security monitoring
+
+The push/pull-request CI workflow keeps dependency audit feedback attached to
+every code change. The dedicated `Dependency security` workflow also audits the
+unchanged lockfile every Monday at 09:17 UTC and can be started at any time from
+**Actions > Dependency security > Run workflow**. Both paths run
+`npm run audit:dependencies` at complete dependency scope. A reportable npm
+advisory returns a non-zero status and visibly fails the job.
+
+A repository administrator must also confirm these GitHub settings under
+**Settings > Security > Advanced Security**:
+
+- **Dependency graph** is enabled.
+- **Dependabot alerts** is enabled.
+- **Dependabot security updates** is enabled so vulnerable dependencies can
+  receive automated remediation pull requests.
+
+These are repository settings, not workflow credentials. Enabling them does not
+require storing an administrative token or any other secret in this repository.
+
 ### Disposable browser-to-SSH E2E
 
 The opt-in end-to-end check exercises a real browser, the production-like
