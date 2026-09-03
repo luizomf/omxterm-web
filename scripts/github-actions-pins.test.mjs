@@ -14,8 +14,11 @@ const PIN = '0123456789abcdef0123456789abcdef01234567';
 const accepted = `
 steps:
   - uses: actions/checkout@${PIN} # v4.4.0
+  - { uses: actions/setup-node@${PIN} } # v4.4.0
   - uses: './.github/actions/local'
   - uses: docker://alpine:3.22
+  - run: |
+      uses: actions/checkout@v4
 jobs:
   delegated:
     uses: organization/repository/.github/workflows/build.yml@${PIN} # v2.1.3
@@ -37,7 +40,15 @@ const rejectedCases = [
     message: /full 40-character commit SHA/u,
   },
   {
+    source: 'steps:\n  - { uses: actions/checkout@v4 } # v4.4.0',
+    message: /full 40-character commit SHA/u,
+  },
+  {
     source: `  - uses: actions/checkout@${PIN}`,
+    message: /adjacent release tag comment/u,
+  },
+  {
+    source: `steps:\n  - { uses: actions/checkout@${PIN} }`,
     message: /adjacent release tag comment/u,
   },
   {
@@ -51,7 +62,7 @@ const rejectedCases = [
   },
   {
     source: '  - uses: ${{ matrix.action }}',
-    message: /unable to parse uses reference/u,
+    message: /must have the form/u,
   },
 ];
 

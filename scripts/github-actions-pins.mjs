@@ -3,12 +3,10 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isScalar, LineCounter, parseDocument, visit } from 'yaml';
 
 const FULL_COMMIT_SHA = /^[0-9a-f]{40}$/iu;
 const RELEASE_TAG = /^[^\s#]+$/u;
-const USES_KEY = /^\s*(?:-\s*)?uses\s*:/u;
-const USES_SCALAR =
-  /^\s*(?:-\s*)?uses\s*:\s*(?:(['"])([^'"]+)\1|([^#\s]+))\s*(?:#\s*(.*?)\s*)?$/u;
 
 function validateExternalReference(reference, releaseTag) {
   const separator = reference.lastIndexOf('@');
@@ -28,26 +26,55 @@ function validateExternalReference(reference, releaseTag) {
   return undefined;
 }
 
+function lineNumber(lineCounter, offset) {
+  return lineCounter.linePos(offset).line;
+}
+
+function releaseTagAfter(source, endOffset) {
+  const nextLine = source.indexOf('\n', endOffset);
+  const lineEnd = nextLine === -1 ? source.length : nextLine;
+  const trailingSource = source.slice(endOffset, lineEnd);
+  const match = /^[\s,}\]]*#\s*([^\s#]+)\s*$/u.exec(trailingSource);
+  return match?.[1];
+}
+
 export function validateWorkflow(source, fileName = '<workflow>') {
   const errors = [];
+  const lineCounter = new LineCounter();
+  const document = parseDocument(source, {
+    lineCounter,
+    prettyErrors: false,
+  });
 
-  for (const [index, line] of source.split(/\r?\n/u).entries()) {
-    if (!USES_KEY.test(line)) continue;
-
-    const match = USES_SCALAR.exec(line);
-    if (!match) {
-      errors.push(`${fileName}:${index + 1}: unable to parse uses reference`);
-      continue;
-    }
-
-    const reference = match[2] ?? match[3];
-    if (reference.startsWith('./') || reference.startsWith('docker://')) {
-      continue;
-    }
-
-    const error = validateExternalReference(reference, match[4]);
-    if (error) errors.push(`${fileName}:${index + 1}: ${error}`);
+  for (const error of document.errors) {
+    const offset = error.pos[0] ?? 0;
+    errors.push(
+      `${fileName}:${lineNumber(lineCounter, offset)}: invalid YAML: ${error.message}`,
+    );
   }
+
+  if (errors.length > 0) return errors;
+
+  visit(document, {
+    Pair(_key, pair) {
+      if (!isScalar(pair.key) || pair.key.value !== 'uses') return;
+
+      const offset = pair.key.range?.[0] ?? 0;
+      const line = lineNumber(lineCounter, offset);
+      if (!isScalar(pair.value) || typeof pair.value.value !== 'string') {
+        errors.push(`${fileName}:${line}: unable to parse uses reference`);
+        return;
+      }
+
+      const reference = pair.value.value;
+      if (reference.startsWith('./') || reference.startsWith('docker://')) return;
+
+      const endOffset = pair.value.range?.[1] ?? offset;
+      const releaseTag = releaseTagAfter(source, endOffset);
+      const error = validateExternalReference(reference, releaseTag);
+      if (error) errors.push(`${fileName}:${line}: ${error}`);
+    },
+  });
 
   return errors;
 }
