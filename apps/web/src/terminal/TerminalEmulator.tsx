@@ -227,7 +227,7 @@ export function TerminalEmulator({
       };
 
       const disposables = [
-        adapter.onOutput(data => terminal.write(data)),
+        adapter.onOutput((data, consumed) => terminal.write(data, consumed)),
         adapter.onStatusChange(next => {
           setStatus(next);
           if (next === 'closing' || next === 'closed' || next === 'error') {

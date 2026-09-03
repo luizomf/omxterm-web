@@ -28,6 +28,12 @@ sequence diagram of the request/response flow.
    → 4 WSS upgrade + ticket → 5 ssh2 PTY ↔ shell.   Disconnect destroys the SSH session.
 ```
 
+PTY output is sequenced and admitted to the browser through a finite 256 KiB
+UTF-8 parser-credit window. The browser returns one acknowledgment only from
+xterm.js's write-completion callback. Exhausted parser credit and a congested
+WebSocket independently pause the SSH readable side; it resumes only when both
+guards clear. The SSH writable side remains active for input and Ctrl-C.
+
 ## Important boundaries
 
 - The browser never speaks raw SSH directly.
@@ -47,3 +53,5 @@ sequence diagram of the request/response flow.
 - SSH host key trust is explicit per session; persistent `known_hosts` is out of
   MVP scope.
 - Remote privileges are controlled by the SSH target, not by OMXTerm Web.
+- Pending decoded output admitted to the browser parser is bounded to 256 KiB;
+  reconnect replay and transcripts remain outside the architecture.

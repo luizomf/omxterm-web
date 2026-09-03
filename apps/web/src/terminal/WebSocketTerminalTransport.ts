@@ -1,7 +1,16 @@
-import type { ServerMessage } from '@omxterm/core/protocol';
-import type { TerminalStatus, TerminalTransportAdapter, Unsubscribe } from '@omxterm/core/terminal';
+import {
+  MAX_TERMINAL_OUTPUT_CHUNK_BYTES,
+  type ServerMessage,
+} from '@omxterm/core/protocol';
+import type {
+  OutputConsumed,
+  TerminalStatus,
+  TerminalTransportAdapter,
+  Unsubscribe,
+} from '@omxterm/core/terminal';
 
 type Handler<T> = (value: T) => void;
+type OutputHandler = (data: string, consumed: OutputConsumed) => void;
 
 // The slice of the browser WebSocket this transport drives. Injecting a factory
 // for it is the smallest seam that lets tests settle connect() deterministically
@@ -26,10 +35,11 @@ const SOCKET_OPEN = 1;
 
 export class WebSocketTerminalTransport implements TerminalTransportAdapter {
   #socket: TerminalSocket | null = null;
-  readonly #outputHandlers = new Set<Handler<string>>();
+  readonly #outputHandlers = new Set<OutputHandler>();
   readonly #statusHandlers = new Set<Handler<TerminalStatus>>();
   readonly #errorHandlers = new Set<Handler<string>>();
   readonly #createSocket: (url: string) => TerminalSocket;
+  #expectedOutputId = 1;
 
   constructor(
     private readonly url: string,
@@ -43,6 +53,7 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
     return new Promise((resolve, reject) => {
       const socket = this.#createSocket(this.url);
       this.#socket = socket;
+      this.#expectedOutputId = 1;
       let settled = false;
 
       socket.addEventListener('open', () => {
@@ -50,7 +61,9 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
         settled = true;
         resolve();
       });
-      socket.addEventListener('message', (event) => this.#handleMessage(event.data));
+      socket.addEventListener('message', (event) =>
+        this.#handleMessage(socket, event.data),
+      );
       socket.addEventListener('close', () => {
         this.#setStatus('closed');
         if (settled) return;
@@ -84,7 +97,7 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
     this.#socket?.close(1000, 'user');
   }
 
-  onOutput(handler: Handler<string>): Unsubscribe {
+  onOutput(handler: OutputHandler): Unsubscribe {
     this.#outputHandlers.add(handler);
     return () => this.#outputHandlers.delete(handler);
   }
@@ -99,25 +112,67 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
     return () => this.#errorHandlers.delete(handler);
   }
 
-  #send(payload: unknown): void {
-    if (this.#socket?.readyState !== SOCKET_OPEN) return;
-    this.#socket.send(JSON.stringify(payload));
+  #send(payload: unknown, socket = this.#socket): void {
+    if (socket?.readyState !== SOCKET_OPEN || socket !== this.#socket) return;
+    socket.send(JSON.stringify(payload));
   }
 
-  #handleMessage(raw: unknown): void {
+  #handleMessage(socket: TerminalSocket, raw: unknown): void {
     if (typeof raw !== 'string') return;
-    let message: ServerMessage;
+    let parsed: unknown;
     try {
-      message = JSON.parse(raw) as ServerMessage;
+      parsed = JSON.parse(raw);
     } catch {
       this.#emitError('Received invalid terminal message.');
       return;
     }
+    if (!isRecord(parsed) || typeof parsed.type !== 'string') {
+      this.#emitError('Received invalid terminal message.');
+      return;
+    }
+    const message = parsed as ServerMessage;
 
     if (message.type === 'ready') this.#setStatus('connected');
-    if (message.type === 'output') this.#outputHandlers.forEach((handler) => handler(message.data));
+    if (message.type === 'output') this.#handleOutput(socket, message);
     if (message.type === 'error') this.#handleServerError(message);
     if (message.type === 'exit') this.#setStatus('closed');
+  }
+
+  #handleOutput(
+    socket: TerminalSocket,
+    message: Extract<ServerMessage, { type: 'output' }>,
+  ): void {
+    if (
+      !Number.isSafeInteger(message.id) ||
+      message.id !== this.#expectedOutputId ||
+      typeof message.data !== 'string' ||
+      !Number.isSafeInteger(message.bytes) ||
+      message.bytes < 1 ||
+      message.bytes > MAX_TERMINAL_OUTPUT_CHUNK_BYTES ||
+      utf8ByteLength(message.data) !== message.bytes
+    ) {
+      this.#emitError('Received invalid terminal output.');
+      socket.close(1002, 'invalid_output');
+      return;
+    }
+    this.#expectedOutputId += 1;
+
+    const handlers = [...this.#outputHandlers];
+    let remaining = handlers.length;
+    for (const handler of handlers) {
+      let completed = false;
+      handler(message.data, () => {
+        if (completed) return;
+        completed = true;
+        remaining -= 1;
+        if (remaining === 0) {
+          this.#send(
+            { type: 'output_ack', id: message.id, bytes: message.bytes },
+            socket,
+          );
+        }
+      });
+    }
   }
 
   // A rejected resize is a scoped control error: the PTY keeps its last good
@@ -138,4 +193,12 @@ export class WebSocketTerminalTransport implements TerminalTransportAdapter {
   #emitError(message: string): void {
     this.#errorHandlers.forEach((handler) => handler(message));
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }

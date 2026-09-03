@@ -13,8 +13,9 @@ import {
 import { afterAll, afterEach, describe, expect, test, vi } from 'vitest';
 import { TerminalEmulator } from './TerminalEmulator';
 
-const { oscHandlers, writeText } = vi.hoisted(() => ({
+const { oscHandlers, terminalWrites, writeText } = vi.hoisted(() => ({
   oscHandlers: new Map<number, (payload: string) => boolean>(),
+  terminalWrites: [] as Array<{ data: string; complete?: () => void }>,
   writeText: vi.fn(async () => undefined),
 }));
 
@@ -41,7 +42,9 @@ vi.mock('@xterm/xterm', () => ({
       return { dispose: vi.fn() };
     }
     resize(): void {}
-    write(): void {}
+    write(data: string, complete?: () => void): void {
+      terminalWrites.push({ data, ...(complete ? { complete } : {}) });
+    }
     dispose(): void {}
   },
 }));
@@ -74,6 +77,7 @@ Object.defineProperty(navigator, 'clipboard', {
 afterEach(() => {
   cleanup();
   oscHandlers.clear();
+  terminalWrites.length = 0;
   writeText.mockClear();
   writeText.mockResolvedValue(undefined);
 });
@@ -84,16 +88,21 @@ afterAll(() => {
 
 type TestAdapter = TerminalTransportAdapter & {
   emitStatus(status: TerminalStatus): void;
+  emitOutput(data: string, consumed: () => void): void;
 };
 
 function createAdapter(): TestAdapter {
   const statusHandlers = new Set<(status: TerminalStatus) => void>();
+  const outputHandlers = new Set<(data: string, consumed: () => void) => void>();
   return {
     connect: vi.fn(async () => undefined),
     sendInput: vi.fn(),
     resize: vi.fn(),
     close: vi.fn(),
-    onOutput: vi.fn(() => vi.fn()),
+    onOutput: vi.fn((handler: (data: string, consumed: () => void) => void) => {
+      outputHandlers.add(handler);
+      return () => outputHandlers.delete(handler);
+    }),
     onStatusChange: vi.fn((handler: (status: TerminalStatus) => void) => {
       statusHandlers.add(handler);
       return () => statusHandlers.delete(handler);
@@ -101,6 +110,8 @@ function createAdapter(): TestAdapter {
     onError: vi.fn(() => vi.fn()),
     emitStatus: (status: TerminalStatus) =>
       statusHandlers.forEach(handler => handler(status)),
+    emitOutput: (data: string, consumed: () => void) =>
+      outputHandlers.forEach(handler => handler(data, consumed)),
   };
 }
 
@@ -156,6 +167,29 @@ describe('TerminalEmulator chrome visibility', () => {
     expect(
       screen.queryByRole('toolbar', { name: 'Terminal key shortcuts' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('TerminalEmulator output completion', () => {
+  test('returns transport credit through the xterm write callback', async () => {
+    const adapter = createAdapter();
+    const consumed = vi.fn();
+    render(
+      <TerminalEmulator
+        adapter={adapter}
+        title='demo@example.test'
+        onDisconnect={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(adapter.onOutput).toHaveBeenCalled());
+
+    act(() => adapter.emitOutput('ordered output', consumed));
+
+    expect(terminalWrites).toHaveLength(1);
+    expect(terminalWrites[0]?.data).toBe('ordered output');
+    expect(consumed).not.toHaveBeenCalled();
+    terminalWrites[0]?.complete?.();
+    expect(consumed).toHaveBeenCalledOnce();
   });
 });
 

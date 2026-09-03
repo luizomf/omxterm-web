@@ -24,6 +24,8 @@ PS.: the video above is in Brazilian Portuguese (no english version for now).
   optional passphrase.
 - SSH host-key fingerprint confirmation before opening the session.
 - xterm.js terminal UI with resize support.
+- Lossless PTY output flow control tied to xterm.js parser completion, with a
+  finite 256 KiB pending-output window.
 - Metadata-only audit logs.
 - No saved private keys, saved profiles, persistent known_hosts, or raw
   transcripts.

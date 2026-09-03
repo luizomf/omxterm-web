@@ -63,7 +63,8 @@ dashboards, no gratuitous metrics.
 11. As a developer, I want the terminal to resize correctly, so that full-screen
     tools like vim, top, less, htop, tmux, and nano behave properly.
 12. As a developer, I want terminal input to go to the SSH session and terminal
-    output to render through xterm.js, so that normal shell interaction works.
+    output to render through xterm.js with bounded parser backpressure, so that
+    normal shell interaction and sustained output both work without loss.
 13. As a developer, I want connection states available from the terminal's
     explicit toolbar reveal control, so that I can check whether the terminal is
     disconnected, connecting, waiting for host-key trust, connected, closing,
@@ -119,8 +120,15 @@ dashboards, no gratuitous metrics.
 - Use JSON messages for the MVP protocol because they are easier to test and
   debug. Keep protocol encoding behind a codec port so binary framing can
   replace it later.
-- MVP client messages are input, resize, and ping.
-- MVP server messages are ready, output, error, exit, and pong.
+- MVP client messages are input, resize, ping, and output acknowledgment.
+- MVP server messages are ready, sequenced output, error, exit, and pong.
+- Count sequenced output by UTF-8 byte length against a 256 KiB per-connection
+  parser-credit window before sending it to the browser. Return that capacity
+  only after xterm.js reports write completion for the matching block.
+- Pause the SSH readable side when parser credit is exhausted and resume it only
+  as acknowledgments return capacity. Coordinate that pause independently with
+  the existing WebSocket `bufferedAmount` high/low-water guard; terminal input
+  remains writable so interrupts such as Ctrl-C stay responsive.
 - Validate all incoming protocol messages at runtime; TypeScript types alone are
   not a boundary.
 - Enforce resize bounds; resize is control data, never shell input.
@@ -219,7 +227,9 @@ Modules to test:
   - invalid session/device rejects;
   - valid grant reaches the WebSocket connection handler.
 - Protocol codec:
-  - valid input/resize/ping messages parse;
+  - valid input/resize/ping/output-ack messages parse;
+  - malformed, duplicate, out-of-order, and byte-mismatched output ACKs cannot
+    return parser credit;
   - malformed JSON rejects safely;
   - unknown message type rejects safely;
   - resize bounds are enforced;
@@ -278,7 +288,8 @@ Verification before declaring the MVP done:
 - WebTransport.
 - Socket.IO.
 - Binary terminal protocol framing.
-- Sophisticated ACK-based backpressure.
+- Output replay or resume across reconnects (output ACKs are live flow control,
+  not durable delivery or transcript storage).
 - SSH agent integration.
 - ProxyJump, port forwarding, SFTP, tunnels, or command policy.
 - Container sandboxing or local PTY execution.
@@ -301,4 +312,4 @@ The documentation should be explicit about the MVP security boundary:
 - The MVP uses in-memory sessions/tickets and is single-process.
 - A production version would add persistent host-key pinning, stronger
   account/auth model, durable/shared store, and more mature
-  lifecycle/backpressure handling.
+  lifecycle handling and reconnect-aware output replay.

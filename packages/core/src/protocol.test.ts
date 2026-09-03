@@ -16,6 +16,32 @@ describe('json terminal protocol codec', () => {
     expect(codec.parseClientMessage(JSON.stringify({ type: 'input', data: 'ls\n' }))).toEqual({ ok: true, message: { type: 'input', data: 'ls\n' } });
   });
 
+  test('parses a valid output acknowledgement', () => {
+    expect(
+      codec.parseClientMessage(
+        JSON.stringify({ type: 'output_ack', id: 7, bytes: 4096 }),
+      ),
+    ).toEqual({
+      ok: true,
+      message: { type: 'output_ack', id: 7, bytes: 4096 },
+    });
+  });
+
+  test.each([
+    { id: 0, bytes: 1 },
+    { id: 1.5, bytes: 1 },
+    { id: Number.MAX_SAFE_INTEGER + 1, bytes: 1 },
+    { id: 1, bytes: 0 },
+    { id: 1, bytes: 256 * 1024 + 1 },
+    { id: 1, bytes: 1.5 },
+  ])('rejects invalid output acknowledgement fields: %o', ack => {
+    const result = codec.parseClientMessage(
+      JSON.stringify({ type: 'output_ack', ...ack }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe('invalid_output_ack');
+  });
+
   test('rejects invalid JSON safely', () => {
     const result = codec.parseClientMessage('{nope');
     expect(result.ok).toBe(false);
