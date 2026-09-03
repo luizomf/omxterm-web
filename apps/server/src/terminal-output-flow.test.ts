@@ -91,4 +91,30 @@ describe("createTerminalOutputFlow", () => {
     expect(harness.flow.queuedBytes).toBe(0);
     expect(harness.invalid).toEqual([]);
   });
+
+  test("drains queued output before completing a normal SSH close", () => {
+    const harness = createHarness();
+    const drained: string[] = [];
+    harness.flow.push("abcdefghijklmnop");
+
+    harness.flow.finish(() => drained.push("drained"));
+    harness.flow.push("late");
+
+    expect(drained).toEqual([]);
+    const acknowledged = new Set<number>();
+    while (harness.flow.inFlightBytes > 0 || harness.flow.queuedBytes > 0) {
+      const next = harness.sent.find(message => !acknowledged.has(message.id));
+      expect(next).toBeDefined();
+      acknowledged.add((next as OutputMessage).id);
+      harness.flow.acknowledge(
+        (next as OutputMessage).id,
+        (next as OutputMessage).bytes,
+      );
+    }
+
+    expect(harness.sent.map(message => message.data).join("")).toBe(
+      "abcdefghijklmnop",
+    );
+    expect(drained).toEqual(["drained"]);
+  });
 });

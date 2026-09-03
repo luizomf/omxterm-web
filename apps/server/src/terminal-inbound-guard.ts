@@ -103,14 +103,17 @@ export function createTerminalInboundGuard(
   }
 
   // Returns the reason to close on, or null when the frame fits the budget.
-  function admit(frameBytes: number): InboundOverflowReason | null {
+  function admit(
+    frameBytes: number,
+    countMessage: boolean,
+  ): InboundOverflowReason | null {
     const nowMs = deps.now();
     if (nowMs - windowStart >= limits.windowMs) {
       windowStart = nowMs;
       windowMessages = 0;
       windowBytes = 0;
     }
-    windowMessages += 1;
+    if (countMessage) windowMessages += 1;
     windowBytes += frameBytes;
     if (windowMessages > limits.maxMessagesPerWindow) return "inbound_message_rate";
     if (windowBytes > limits.maxBytesPerWindow) return "inbound_byte_rate";
@@ -183,12 +186,17 @@ export function createTerminalInboundGuard(
   return {
     handleFrame(text: string): void {
       if (stopped) return;
-      const overflow = admit(byteLength(text));
+      const parsed = deps.parseFrame(text);
+      // Each valid ACK corresponds to output the broker admitted itself, so it
+      // cannot be client-amplified independently. Keep charging its bytes, but
+      // do not let parser throughput trip the interactive message-rate budget.
+      const countMessage =
+        !parsed.ok || parsed.message.type !== "output_ack";
+      const overflow = admit(byteLength(text), countMessage);
       if (overflow) {
         fail(overflow);
         return;
       }
-      const parsed = deps.parseFrame(text);
       if (!parsed.ok) {
         deps.sendMessage({
           type: "error",

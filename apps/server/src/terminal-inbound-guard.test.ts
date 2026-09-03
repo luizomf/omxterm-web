@@ -128,6 +128,22 @@ describe("createTerminalInboundGuard legitimate traffic", () => {
     expect(harness.acknowledgements).toEqual([{ id: 4, bytes: 1024 }]);
   });
 
+  test("does not charge broker-correlated ACKs to the interactive message budget", () => {
+    const harness = createHarness({ maxMessagesPerWindow: 1 });
+
+    for (let id = 1; id <= 513; id += 1) {
+      harness.acknowledge(id, 1);
+    }
+    harness.ping(1);
+
+    expect(harness.acknowledgements).toHaveLength(513);
+    expect(harness.sent).toEqual([{ type: "pong", ts: 1 }]);
+    expect(harness.overflows).toEqual([]);
+
+    harness.ping(2);
+    expect(harness.overflows).toEqual(["inbound_message_rate"]);
+  });
+
   test("responds to a malformed frame with a single error and no crash", () => {
     const harness = createHarness();
 

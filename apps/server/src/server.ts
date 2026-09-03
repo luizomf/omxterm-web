@@ -1134,8 +1134,15 @@ export async function createOmxtermServer(
       });
       terminal.on("close", (reason) => {
         if (closed) return;
-        send({ type: "exit", reason });
-        ws.close(1000, reason);
+        // The SSH readable side can close while decoded output is still waiting
+        // for parser credit. Keep the WebSocket alive until xterm acknowledges
+        // every admitted block, then publish exit in-order without dropping the
+        // final queued bytes.
+        output.finish(() => {
+          if (closed) return;
+          send({ type: "exit", reason });
+          ws.close(1000, reason);
+        });
       });
 
       ws.on("message", (raw) => {

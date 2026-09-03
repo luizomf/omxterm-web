@@ -10,6 +10,7 @@ export type InvalidOutputAckReason =
 export type TerminalOutputFlow = {
   push(data: string): void;
   acknowledge(id: number, bytes: number): void;
+  finish(onDrained: () => void): void;
   dispose(): void;
   readonly inFlightBytes: number;
   readonly queuedBytes: number;
@@ -68,6 +69,8 @@ export function createTerminalOutputFlow(
   let inFlightBytes = 0;
   let nextId = 1;
   let paused = false;
+  let finishing = false;
+  let onDrained: (() => void) | null = null;
   let disposed = false;
 
   function setPaused(next: boolean): void {
@@ -100,6 +103,11 @@ export function createTerminalOutputFlow(
     }
 
     setPaused(inFlightBytes === deps.maxInFlightBytes || queue.length > 0);
+    if (finishing && queue.length === 0 && pending.length === 0) {
+      const complete = onDrained;
+      onDrained = null;
+      complete?.();
+    }
   }
 
   function rejectAck(reason: InvalidOutputAckReason): void {
@@ -109,7 +117,7 @@ export function createTerminalOutputFlow(
 
   return {
     push(data): void {
-      if (disposed || data.length === 0) return;
+      if (disposed || finishing || data.length === 0) return;
       queue.push(data);
       queuedBytes += Buffer.byteLength(data, "utf8");
       flush();
@@ -133,6 +141,12 @@ export function createTerminalOutputFlow(
       inFlightBytes -= bytes;
       flush();
     },
+    finish(complete): void {
+      if (disposed || finishing) return;
+      finishing = true;
+      onDrained = complete;
+      flush();
+    },
     dispose(): void {
       if (disposed) return;
       disposed = true;
@@ -140,6 +154,7 @@ export function createTerminalOutputFlow(
       pending.length = 0;
       queuedBytes = 0;
       inFlightBytes = 0;
+      onDrained = null;
     },
     get inFlightBytes(): number {
       return inFlightBytes;
