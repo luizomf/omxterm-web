@@ -61,8 +61,9 @@ Browser                          Broker (Fastify + ws)                 SSH targe
   |                                    |---- ssh connect + verify key ----->|
   |    {type:ready}  <-----------------|<--- PTY shell allocated ---------->|
   |                                    |                                    |
-  | 5. {input}/{resize}/{ping} <=====> | bridge stdin/stdout <===========> | shell
-  |    {output}/{exit}/{pong}          | (destroy-on-disconnect)            |
+  | 5. {input}/{resize}/{ping}/{output_ack}                                |
+  |                         <=====> | bridge stdin/stdout <===========> | shell
+  |    {output(id,bytes)}/{exit}/{pong} | (destroy-on-disconnect)            |
 ```
 
 Five steps, three short-lived secrets minted by the broker (access session,
@@ -392,8 +393,10 @@ From here the broker bridges the small JSON terminal protocol
 ([`packages/core/src/protocol.ts`](../packages/core/src/protocol.ts)):
 
 - **Client → server:** `input` (keystrokes), `resize` (cols/rows — control data,
-  bounds-checked, never fed to the shell as input), `ping`.
-- **Server → client:** `ready`, `output`, `error`, `exit`, `pong`.
+  bounds-checked, never fed to the shell as input), `ping`, and `output_ack`
+  (the sequential output id and acknowledged UTF-8 byte count).
+- **Server → client:** `ready`, sequenced `output` (id, text, UTF-8 byte count),
+  `error`, `exit`, `pong`.
 
 `resize` is validated against a shared contract, `TERMINAL_SIZE_BOUNDS`
 (`20–512` cols × `5–256` rows). That range covers realistic large layouts — a
@@ -422,6 +425,24 @@ Output is UTF-8 decoded per stream so a multi-byte character split across two
 PTY chunks is reassembled instead of rendering as `�`
 ([`apps/server/src/terminal-output-decoder.ts`](../apps/server/src/terminal-output-decoder.ts),
 fix for #11).
+
+Decoded output is then split on Unicode boundaries into blocks no larger than
+32 KiB. Before each block is sent, the broker reserves its exact UTF-8 byte
+length from a **256 KiB parser-credit window**. The browser passes the block to
+`terminal.write` and sends its matching `output_ack` only from xterm.js's write
+completion callback. ACKs must match the oldest pending sequential id and exact
+byte count; duplicates, gaps, reordered ids, and byte mismatches never restore
+capacity and close the non-conforming connection. This keeps decoded output
+admitted to the browser parser at or below 256 KiB while preserving byte order
+and lossless delivery during sustained output.
+
+When the parser-credit window fills, the broker pauses stdout and stderr on the
+SSH channel. This is coordinated with the separate WebSocket
+`bufferedAmount` high/low-water guard: clearing either reason cannot resume the
+channel while the other remains blocked. Only the readable side is paused, so
+browser input follows its independent bounded path and Ctrl-C can interrupt a
+remote output flood. Capacity control is normal pause/resume behavior, not a
+reason to drop output or terminate a conforming session.
 
 Remote output then passes through xterm's parser in the browser. xterm core
 processes OSC 8 semantic hyperlinks even when `WebLinksAddon` is not installed;
@@ -578,7 +599,8 @@ Being honest about the boundary is part of the point:
 These are deliberate MVP scope choices, documented in
 [`docs/prd-mvp-web-ssh-terminal.md`](./prd-mvp-web-ssh-terminal.md). A
 production version would add persistent host-key pinning, a durable shared
-store, a stronger account model, and mature backpressure/lifecycle handling.
+store, a stronger account model, and reconnect-aware output replay/lifecycle
+handling.
 
 ---
 

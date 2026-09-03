@@ -2,7 +2,11 @@ import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import fastifyStatic from "@fastify/static";
 import type { AuditLogger } from "@omxterm/core/audit";
-import { createJsonTerminalProtocolCodec } from "@omxterm/core/protocol";
+import {
+  createJsonTerminalProtocolCodec,
+  MAX_TERMINAL_OUTPUT_CHUNK_BYTES,
+  TERMINAL_OUTPUT_CREDIT_BYTES,
+} from "@omxterm/core/protocol";
 import { MAX_PRIVATE_KEY_BYTES } from "@omxterm/core/ssh";
 import {
   InMemoryAccessCredentialStore,
@@ -44,6 +48,8 @@ import {
 } from "./ssh-egress-policy";
 import { createOutputBackpressure } from "./terminal-backpressure";
 import { createTerminalInboundGuard } from "./terminal-inbound-guard";
+import { createTerminalOutputFlow } from "./terminal-output-flow";
+import { createTerminalOutputPause } from "./terminal-output-pause";
 import { startWebSocketHeartbeat } from "./websocket-heartbeat";
 
 const MAX_ACCESS_TOKEN_CODE_UNITS = 4096;
@@ -988,13 +994,18 @@ export async function createOmxtermServer(
       let closed = false;
       let stopHeartbeat = () => {};
 
+      const outputPause = createTerminalOutputPause({
+        pause: () => terminal.pause(),
+        resume: () => terminal.resume(),
+      });
+
       // Pause the SSH channel when the socket's send buffer backs up, resume when
       // it drains, so a flood can't outrun the client and freeze the tab (#19).
       const backpressure = createOutputBackpressure({
         highWaterMark: WS_OUTPUT_HIGH_WATER_MARK,
         lowWaterMark: WS_OUTPUT_LOW_WATER_MARK,
-        pause: () => terminal.pause(),
-        resume: () => terminal.resume(),
+        pause: () => outputPause.pauseFor("websocket_buffer"),
+        resume: () => outputPause.resumeFor("websocket_buffer"),
       });
 
       const send = (
@@ -1008,6 +1019,27 @@ export async function createOmxtermServer(
         ws.send(encoded, () => backpressure.observe(ws.bufferedAmount));
         backpressure.observe(ws.bufferedAmount);
       };
+
+      let invalidOutputAck = false;
+      const rejectInvalidOutputAck = () => {
+        if (invalidOutputAck || ws.readyState !== WebSocket.OPEN) return;
+        invalidOutputAck = true;
+        send({
+          type: "error",
+          code: "invalid_output_ack",
+          message: "Output acknowledgement is invalid.",
+        });
+        ws.close(1008, "invalid_output_ack");
+      };
+
+      const output = createTerminalOutputFlow({
+        maxInFlightBytes: TERMINAL_OUTPUT_CREDIT_BYTES,
+        maxChunkBytes: MAX_TERMINAL_OUTPUT_CHUNK_BYTES,
+        send,
+        pause: () => outputPause.pauseFor("parser_credit"),
+        resume: () => outputPause.resumeFor("parser_credit"),
+        onInvalidAck: rejectInvalidOutputAck,
+      });
 
       // Bound inbound terminal traffic so an authenticated client cannot outrun
       // the SSH target or audit sink (#77): a per-connection byte/message budget
@@ -1041,7 +1073,17 @@ export async function createOmxtermServer(
             rows,
           });
         },
-        sendMessage: send,
+        acknowledgeOutput: (id, bytes) => output.acknowledge(id, bytes),
+        sendMessage: (message) => {
+          if (
+            message.type === "error" &&
+            message.code === "invalid_output_ack"
+          ) {
+            rejectInvalidOutputAck();
+            return;
+          }
+          send(message);
+        },
         onOverflow: (reason) => {
           audit.write({
             event: "terminal_flood",
@@ -1064,6 +1106,8 @@ export async function createOmxtermServer(
         closed = true;
         stopHeartbeat();
         inbound.dispose();
+        output.dispose();
+        outputPause.dispose();
         // terminal.close() aborts a still-pending SSH establishment attempt;
         // that boundary owns and releases its authentication references before
         // the cancellation settles.
@@ -1079,7 +1123,7 @@ export async function createOmxtermServer(
       };
 
       terminal.on("output", (data) => {
-        send({ type: "output", data });
+        output.push(data);
       });
       terminal.on("error", () => {
         send({

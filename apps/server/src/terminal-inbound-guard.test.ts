@@ -29,6 +29,7 @@ function createHarness(overrides: Partial<TerminalTrafficLimits> = {}) {
   const writes: string[] = [];
   const resizes: Array<{ cols: number; rows: number }> = [];
   const sent: ServerMessage[] = [];
+  const acknowledgements: Array<{ id: number; bytes: number }> = [];
   const overflows: InboundOverflowReason[] = [];
 
   const guard = createTerminalInboundGuard({
@@ -49,6 +50,7 @@ function createHarness(overrides: Partial<TerminalTrafficLimits> = {}) {
       };
     },
     applyResize: (cols, rows) => resizes.push({ cols, rows }),
+    acknowledgeOutput: (id, bytes) => acknowledgements.push({ id, bytes }),
     sendMessage: (message) => sent.push(message),
     onOverflow: (reason) => overflows.push(reason),
   });
@@ -58,11 +60,14 @@ function createHarness(overrides: Partial<TerminalTrafficLimits> = {}) {
     writes,
     resizes,
     sent,
+    acknowledgements,
     overflows,
     input: (data: string) => guard.handleFrame(JSON.stringify({ type: "input", data })),
     resize: (cols: number, rows: number) =>
       guard.handleFrame(JSON.stringify({ type: "resize", cols, rows })),
     ping: (ts: number) => guard.handleFrame(JSON.stringify({ type: "ping", ts })),
+    acknowledge: (id: number, bytes: number) =>
+      guard.handleFrame(JSON.stringify({ type: "output_ack", id, bytes })),
     raw: (text: string) => guard.handleFrame(text),
     advanceClock: (ms: number) => {
       clock += ms;
@@ -113,6 +118,14 @@ describe("createTerminalInboundGuard legitimate traffic", () => {
     harness.ping(42);
 
     expect(harness.sent).toEqual([{ type: "pong", ts: 42 }]);
+  });
+
+  test("forwards a valid output acknowledgement to outbound flow control", () => {
+    const harness = createHarness();
+
+    harness.acknowledge(4, 1024);
+
+    expect(harness.acknowledgements).toEqual([{ id: 4, bytes: 1024 }]);
   });
 
   test("responds to a malformed frame with a single error and no crash", () => {

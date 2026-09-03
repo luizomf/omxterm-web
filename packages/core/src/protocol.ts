@@ -1,18 +1,19 @@
 export type ClientMessage =
   | { type: 'input'; data: string }
   | { type: 'resize'; cols: number; rows: number }
-  | { type: 'ping'; ts: number };
+  | { type: 'ping'; ts: number }
+  | { type: 'output_ack'; id: number; bytes: number };
 
 export type ServerMessage =
   | { type: 'ready'; sessionId: string }
-  | { type: 'output'; data: string }
+  | { type: 'output'; id: number; data: string; bytes: number }
   | { type: 'error'; code: string; message: string }
   | { type: 'exit'; reason: string }
   | { type: 'pong'; ts: number };
 
 export type ParseClientMessageResult =
   | { ok: true; message: ClientMessage }
-  | { ok: false; code: 'invalid_json' | 'invalid_message' | 'resize_out_of_bounds' | 'payload_too_large'; message: string };
+  | { ok: false; code: 'invalid_json' | 'invalid_message' | 'invalid_output_ack' | 'resize_out_of_bounds' | 'payload_too_large'; message: string };
 
 export type TerminalProtocolCodec = {
   parseClientMessage(raw: string): ParseClientMessageResult;
@@ -20,6 +21,12 @@ export type TerminalProtocolCodec = {
 };
 
 const MAX_JSON_PAYLOAD_BYTES = 64 * 1024;
+
+// The broker never has more than this many UTF-8 output bytes awaiting xterm
+// parser completion in one browser. Each output block is smaller so ACKs
+// continuously return capacity during sustained output.
+export const TERMINAL_OUTPUT_CREDIT_BYTES = 256 * 1024;
+export const MAX_TERMINAL_OUTPUT_CHUNK_BYTES = 32 * 1024;
 
 // Shared resize contract for the terminal grid the broker accepts and the
 // frontend fits to. The old 240x100 cap rejected legitimate large layouts: at
@@ -70,6 +77,46 @@ function isFiniteInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && Number.isFinite(value);
 }
 
+function parseResizeMessage(
+  parsed: Record<string, unknown>,
+): ParseClientMessageResult {
+  if (!isFiniteInteger(parsed.cols) || !isFiniteInteger(parsed.rows)) {
+    return { ok: false, code: 'invalid_message', message: 'Resize message must include integer cols and rows.' };
+  }
+  if (
+    parsed.cols < TERMINAL_SIZE_BOUNDS.minCols ||
+    parsed.cols > TERMINAL_SIZE_BOUNDS.maxCols ||
+    parsed.rows < TERMINAL_SIZE_BOUNDS.minRows ||
+    parsed.rows > TERMINAL_SIZE_BOUNDS.maxRows
+  ) {
+    return { ok: false, code: 'resize_out_of_bounds', message: 'Resize dimensions are outside the allowed bounds.' };
+  }
+  return { ok: true, message: { type: 'resize', cols: parsed.cols, rows: parsed.rows } };
+}
+
+function parseOutputAckMessage(
+  parsed: Record<string, unknown>,
+): ParseClientMessageResult {
+  if (
+    typeof parsed.id !== 'number' ||
+    !Number.isSafeInteger(parsed.id) ||
+    parsed.id < 1 ||
+    !isFiniteInteger(parsed.bytes) ||
+    parsed.bytes < 1 ||
+    parsed.bytes > TERMINAL_OUTPUT_CREDIT_BYTES
+  ) {
+    return {
+      ok: false,
+      code: 'invalid_output_ack',
+      message: 'Output acknowledgement is invalid.',
+    };
+  }
+  return {
+    ok: true,
+    message: { type: 'output_ack', id: parsed.id, bytes: parsed.bytes },
+  };
+}
+
 export function createJsonTerminalProtocolCodec(): TerminalProtocolCodec {
   return {
     parseClientMessage(raw) {
@@ -96,18 +143,7 @@ export function createJsonTerminalProtocolCodec(): TerminalProtocolCodec {
       }
 
       if (parsed.type === 'resize') {
-        if (!isFiniteInteger(parsed.cols) || !isFiniteInteger(parsed.rows)) {
-          return { ok: false, code: 'invalid_message', message: 'Resize message must include integer cols and rows.' };
-        }
-        if (
-          parsed.cols < TERMINAL_SIZE_BOUNDS.minCols ||
-          parsed.cols > TERMINAL_SIZE_BOUNDS.maxCols ||
-          parsed.rows < TERMINAL_SIZE_BOUNDS.minRows ||
-          parsed.rows > TERMINAL_SIZE_BOUNDS.maxRows
-        ) {
-          return { ok: false, code: 'resize_out_of_bounds', message: 'Resize dimensions are outside the allowed bounds.' };
-        }
-        return { ok: true, message: { type: 'resize', cols: parsed.cols, rows: parsed.rows } };
+        return parseResizeMessage(parsed);
       }
 
       if (parsed.type === 'ping') {
@@ -115,6 +151,10 @@ export function createJsonTerminalProtocolCodec(): TerminalProtocolCodec {
           return { ok: false, code: 'invalid_message', message: 'Ping message must include integer ts.' };
         }
         return { ok: true, message: { type: 'ping', ts: parsed.ts } };
+      }
+
+      if (parsed.type === 'output_ack') {
+        return parseOutputAckMessage(parsed);
       }
 
       return { ok: false, code: 'invalid_message', message: `Unsupported terminal message type: ${parsed.type}` };

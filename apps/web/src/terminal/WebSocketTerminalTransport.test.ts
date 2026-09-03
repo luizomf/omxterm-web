@@ -13,6 +13,8 @@ type SocketListener = (event: { data: unknown }) => void;
 class FakeSocket implements TerminalSocket {
   readyState = 0;
   closeCount = 0;
+  readonly sent: string[] = [];
+  closeCode: number | undefined;
   readonly #listeners = new Map<SocketEvent, SocketListener[]>();
 
   addEventListener(type: SocketEvent, listener: SocketListener): void {
@@ -21,13 +23,18 @@ class FakeSocket implements TerminalSocket {
     this.#listeners.set(type, listeners);
   }
 
-  send(): void {}
+  send(data: string): void {
+    this.sent.push(data);
+  }
 
-  close(): void {
+  close(code?: number): void {
     this.closeCount += 1;
+    this.closeCode = code;
   }
 
   emit(type: SocketEvent, event: { data: unknown } = { data: undefined }): void {
+    if (type === 'open') this.readyState = 1;
+    if (type === 'close') this.readyState = 3;
     this.#listeners.get(type)?.forEach(listener => listener(event));
   }
 }
@@ -133,5 +140,87 @@ describe('WebSocketTerminalTransport server error handling', () => {
     });
 
     expect(statuses).toContain('error');
+  });
+});
+
+describe('WebSocketTerminalTransport output credit', () => {
+  test('acknowledges UTF-8 bytes only after parser completion', async () => {
+    const { transport, socket } = createTransport();
+    let consumed: (() => void) | undefined;
+    const output: string[] = [];
+    transport.onOutput((data, complete) => {
+      output.push(data);
+      consumed = complete;
+    });
+    const connecting = transport.connect();
+    socket.emit('open');
+    await connecting;
+
+    serverMessage(socket, { type: 'output', id: 1, data: 'olá 🌎', bytes: 9 });
+
+    expect(output).toEqual(['olá 🌎']);
+    expect(socket.sent).toEqual([]);
+    consumed?.();
+    expect(socket.sent.map(value => JSON.parse(value))).toEqual([
+      { type: 'output_ack', id: 1, bytes: 9 },
+    ]);
+    consumed?.();
+    expect(socket.sent).toHaveLength(1);
+  });
+
+  test('supports a synchronous parser completion callback', async () => {
+    const { transport, socket } = createTransport();
+    transport.onOutput((_data, complete) => complete());
+    const connecting = transport.connect();
+    socket.emit('open');
+    await connecting;
+
+    serverMessage(socket, { type: 'output', id: 1, data: 'ok', bytes: 2 });
+
+    expect(JSON.parse(socket.sent[0] as string)).toEqual({
+      type: 'output_ack',
+      id: 1,
+      bytes: 2,
+    });
+  });
+
+  test.each([
+    { type: 'output', id: 2, data: 'skip', bytes: 4 },
+    { type: 'output', id: 1, data: '🌎', bytes: 1 },
+    {
+      type: 'output',
+      id: 1,
+      data: 'x'.repeat(32 * 1024 + 1),
+      bytes: 32 * 1024 + 1,
+    },
+  ])('rejects invalid or out-of-order output: %o', async message => {
+    const { transport, socket, errors } = createTransport();
+    transport.onOutput((_data, complete) => complete());
+    const connecting = transport.connect();
+    socket.emit('open');
+    await connecting;
+
+    serverMessage(socket, message);
+
+    expect(errors).toContain('Received invalid terminal output.');
+    expect(socket.closeCode).toBe(1002);
+    expect(socket.sent).toEqual([]);
+  });
+
+  test('does not send a late ACK after the socket closes', async () => {
+    const { transport, socket } = createTransport();
+    let consumed: (() => void) | undefined;
+    transport.onOutput((_data, complete) => {
+      consumed = complete;
+    });
+    const connecting = transport.connect();
+    socket.emit('open');
+    await connecting;
+    serverMessage(socket, { type: 'output', id: 1, data: 'late', bytes: 4 });
+
+    socket.emit('close');
+    consumed?.();
+
+    expect(socket.sent).toEqual([]);
   });
 });

@@ -35,6 +35,8 @@ export type TerminalInboundGuardDeps = {
   subscribeDrain: (listener: () => void) => () => void;
   // Applies a resize to the SSH channel and audits it (the guard decides when).
   applyResize: (cols: number, rows: number) => void;
+  // Returns xterm parser capacity to the outbound flow controller.
+  acknowledgeOutput: (id: number, bytes: number) => void;
   sendMessage: (message: ServerMessage) => void;
   // Invoked once when a budget is exceeded; the broker closes the connection.
   onOverflow: (reason: InboundOverflowReason) => void;
@@ -169,6 +171,10 @@ export function createTerminalInboundGuard(
     }
     if (message.type === "resize") {
       queueResize(message.cols, message.rows);
+      return;
+    }
+    if (message.type === "output_ack") {
+      deps.acknowledgeOutput(message.id, message.bytes);
       return;
     }
     deps.sendMessage({ type: "pong", ts: message.ts });
