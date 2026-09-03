@@ -97,14 +97,32 @@ checkout that silently throws away uncommitted and untracked files.
 
 ```bash
 cd /opt/omxterm-web
-cat > .env <<'ENV'
+(
+  umask 077
+  touch .env || exit 1
+  chmod 600 .env || exit 1
+  cat > .env <<'ENV'
 OMXTERM_ACCESS_TOKEN=__REPLACE_WITH_A_STRONG_TOKEN__
 OMXTERM_ALLOWED_ORIGIN=https://omxterm-web.example.com
 OMXTERM_SECURE_COOKIES=true
 OMXTERM_SSH_ALLOWED_CIDR=10.0.0.0/24
 # OMXTERM_TRUST_PROXY — set once you know how the proxy reaches the broker (step 3).
 ENV
+)
 ```
+
+The subshell applies the restrictive umask only while writing `.env`; `chmod`
+guarantees mode `0600` before any secret is written, regardless of the caller's
+ordinary umask. Verify
+the file owner and mode with the first command your host supports:
+
+```bash
+stat -L -c 'owner=%U mode=%a' .env 2>/dev/null || stat -L -f 'owner=%Su mode=%Lp' .env
+# Expected: owner=<your deployment user> mode=600
+```
+
+Do not deploy until the reported owner is the account that runs the rollout and
+the reported mode is exactly `600`.
 
 - `OMXTERM_ACCESS_TOKEN` — generate one with `openssl rand -base64 32` and
   use the generated Base64 text without surrounding whitespace. Known weak

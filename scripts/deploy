@@ -44,6 +44,33 @@ OMXTERM_COMPOSE_OVERRIDE="${OMXTERM_COMPOSE_OVERRIDE-compose.prod.yml}"
 
 cd "${OMXTERM_DIR}"
 
+# Reject an exposed production secret before consulting Git or invoking Docker.
+# GNU stat (Linux) and BSD stat (macOS) use different flags, so try both. A
+# present .env whose mode cannot be inspected also fails closed; a missing file
+# remains Compose's responsibility, preserving the existing deployment flow.
+if [ -e .env ]; then
+  if env_mode="$(stat -L -c '%a' .env 2>/dev/null)"; then
+    :
+  elif env_mode="$(stat -L -f '%Lp' .env 2>/dev/null)"; then
+    :
+  else
+    echo "deploy: refusing to run — cannot verify ${OMXTERM_DIR}/.env permissions." >&2
+    exit 1
+  fi
+
+  case "${env_mode}" in
+    ''|*[!0-7]*)
+      echo "deploy: refusing to run — invalid mode '${env_mode}' reported for ${OMXTERM_DIR}/.env." >&2
+      exit 1
+      ;;
+  esac
+
+  if (( (8#${env_mode} & 8#77) != 0 )); then
+    echo "deploy: refusing to run — ${OMXTERM_DIR}/.env mode is ${env_mode}; remove all group or world permissions (recommended mode 600)." >&2
+    exit 1
+  fi
+fi
+
 # Refuse to run against a dirty checkout. Tracked or untracked changes stop the
 # deploy here, before Docker, preserving every file byte-for-byte.
 if [ -n "$(git status --porcelain)" ]; then
