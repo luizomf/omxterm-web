@@ -4,12 +4,23 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 ROOT_DIR="$(dirname "${SCRIPTS_DIR}")"
+dotenv_env=()
 
 if [ -f "${ROOT_DIR}/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "${ROOT_DIR}/.env"
-  set +a
+  dotenv_output="$(mktemp "${TMPDIR:-/tmp}/omxterm-run-dotenv.XXXXXX")"
+
+  cleanup_dotenv_output() {
+    rm -f -- "${dotenv_output}"
+  }
+  trap cleanup_dotenv_output EXIT
+
+  node "${SCRIPTS_DIR}/parse-dotenv.mjs" "${ROOT_DIR}/.env" >"${dotenv_output}"
+  while IFS= read -r -d '' entry; do
+    dotenv_env+=("${entry}")
+  done <"${dotenv_output}"
+
+  cleanup_dotenv_output
+  trap - EXIT
 fi
 
 pids=()
@@ -30,10 +41,10 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-npm run dev:server "${@}" &
+env -- "${dotenv_env[@]}" npm run dev:server "${@}" &
 pids+=("$!")
 
-npm run dev:web "${@}" &
+env -- "${dotenv_env[@]}" npm run dev:web "${@}" &
 pids+=("$!")
 
 while true; do
