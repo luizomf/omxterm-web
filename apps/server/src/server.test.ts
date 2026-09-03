@@ -670,25 +670,25 @@ describe("POST /api/access abuse policy", () => {
     }
   });
 
-  test("a direct-server deployment keys on the real socket peer and ignores a spoofed X-Forwarded-For", async () => {
+  test("one direct peer cannot bypass its access-rate budget by rotating X-Forwarded-For", async () => {
     const config: ServerConfig = { ...baseConfig, trustProxy: false };
     const app = await createOmxtermServer(config);
     try {
       const peerAddress = "203.0.113.40";
-      for (let attempt = 0; attempt < ACCESS_GATE_MAX_FAILURES; attempt++) {
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < ACCESS_GATE_MAX_FAILURES + 2; attempt++) {
         const response = await accessAttempt(app, config, "wrong-token", {
           remoteAddress: peerAddress,
-          forwardedFor: `198.51.100.${attempt}`,
+          forwardedFor: `198.51.100.${attempt + 1}`,
         });
-        expect(response.statusCode).toBe(401);
+        statuses.push(response.statusCode);
       }
 
-      const blocked = await accessAttempt(app, config, "wrong-token", {
-        remoteAddress: peerAddress,
-        forwardedFor: "198.51.100.250",
-      });
-
-      expect(blocked.statusCode).toBe(429);
+      expect(statuses).toEqual([
+        ...Array.from({ length: ACCESS_GATE_MAX_FAILURES }, () => 401),
+        429,
+        429,
+      ]);
     } finally {
       await app.close();
     }

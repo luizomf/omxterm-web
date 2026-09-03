@@ -6,12 +6,13 @@ import { isIP } from "node:net";
 // X-Forwarded-Proto reflects HTTPS), and the broker must refuse to ship those
 // cookies in cleartext on a public bind.
 
-// Fastify's trustProxy accepts boolean | number (hop count) | string (a comma
-// separated IP/CIDR allowlist of trusted proxies). Default false so a directly
-// exposed dev server never honors spoofable X-Forwarded-* headers.
+// Fastify's trustProxy accepts several forms, but numeric hop counts make the
+// trust boundary depend on path length and let a direct peer spoof its identity.
+// Accept only booleans or an explicit IP/CIDR allowlist. Default false so a
+// directly exposed dev server never honors spoofable X-Forwarded-* headers.
 export function parseTrustProxy(
   raw: string | undefined,
-): boolean | number | string {
+): boolean | string {
   const value = raw?.trim();
   if (!value) return false;
 
@@ -19,12 +20,15 @@ export function parseTrustProxy(
   if (lowered === "true") return true;
   if (lowered === "false") return false;
 
-  // A bare non-negative integer means "trust this many proxy hops".
-  const hops = Number(value);
-  if (Number.isInteger(hops) && hops >= 0) return hops;
+  if (!Number.isNaN(Number(value))) {
+    throw new Error(
+      "OMXTERM_TRUST_PROXY does not accept numeric proxy hop counts. Use " +
+        "false, true, or an explicit trusted proxy IP/CIDR allowlist.",
+    );
+  }
 
-  // Otherwise treat it as an IP/CIDR allowlist and let Fastify parse it. This is
-  // the safest option in production: trust only the known proxy address.
+  // Treat any other value as an IP/CIDR allowlist and let Fastify parse it. This
+  // is the safest option in production: trust only the known proxy address.
   return value;
 }
 
