@@ -4,8 +4,8 @@
 // which is the security boundary called out in issue #16. This module keeps the
 // decoding/routing decision pure so it can be tested without a live terminal.
 
-/** Writes decoded text into the host clipboard. Injected at the boundary. */
-export type HostClipboardWriter = (text: string) => void;
+/** Receives a decoded, validated write request at the UI consent boundary. */
+export type ClipboardWriteRequestHandler = (text: string) => void;
 
 // Large remote-controlled clipboard writes are surprising and needlessly hold
 // decoded attacker input in memory. 64 KiB covers normal editor/tmux yanks.
@@ -30,18 +30,18 @@ function decodeBase64Utf8(encoded: string): string | null {
 
 /**
  * Handles an OSC 52 payload (`Pc ; Pd`, e.g. `c;SGVsbG8=`). Decodes the base64
- * write payload and forwards it to the clipboard. Read requests (`Pd === '?'`)
- * empty payloads, and writes larger than 64 KiB are ignored so the host can
- * never read, clear, or flood the clipboard. Always returns true to mark the
- * sequence as fully handled.
+ * write payload and forwards a validated request to the UI consent boundary.
+ * Read requests (`Pd === '?'`), empty payloads, and writes larger than 64 KiB
+ * are ignored so the host can never read, clear, or flood the clipboard.
+ * Always returns true to mark the sequence as fully handled.
  *
  * @example
- * handleOsc52('c;SGVsbG8=', writeClipboard); // writes "Hello", returns true
- * handleOsc52('c;?', writeClipboard);         // ignored (read), returns true
+ * handleOsc52('c;SGVsbG8=', requestWrite); // requests "Hello", returns true
+ * handleOsc52('c;?', requestWrite);         // ignored (read), returns true
  */
 export function handleOsc52(
   payload: string,
-  writeClipboard: HostClipboardWriter,
+  requestClipboardWrite: ClipboardWriteRequestHandler,
 ): boolean {
   const separator = payload.indexOf(';');
   if (separator === -1) return true;
@@ -52,6 +52,6 @@ export function handleOsc52(
   const text = decodeBase64Utf8(data);
   if (text === null) return true;
 
-  writeClipboard(text);
+  requestClipboardWrite(text);
   return true;
 }

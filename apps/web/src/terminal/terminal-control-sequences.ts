@@ -1,5 +1,8 @@
 import type { IDisposable, Terminal } from '@xterm/xterm';
-import { handleOsc52, type HostClipboardWriter } from './osc52-clipboard';
+import {
+  handleOsc52,
+  type ClipboardWriteRequestHandler,
+} from './osc52-clipboard';
 
 /**
  * Registers the remote-controlled OSC handlers owned by OMXTerm Web.
@@ -12,11 +15,11 @@ import { handleOsc52, type HostClipboardWriter } from './osc52-clipboard';
  */
 export function registerTerminalControlSequenceHandlers(
   terminal: Terminal,
-  writeClipboard: HostClipboardWriter,
+  requestClipboardWrite: ClipboardWriteRequestHandler,
 ): IDisposable {
   const osc8Disposable = terminal.parser.registerOscHandler(8, () => true);
   const osc52Disposable = terminal.parser.registerOscHandler(52, payload =>
-    handleOsc52(payload, writeClipboard),
+    handleOsc52(payload, requestClipboardWrite),
   );
 
   return {
