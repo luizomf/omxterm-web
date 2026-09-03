@@ -18,17 +18,33 @@ describe("parseTrustProxy", () => {
     expect(parseTrustProxy("false")).toBe(false);
   });
 
-  test("reads a non-negative integer as a hop count", () => {
-    expect(parseTrustProxy("1")).toBe(1);
-    expect(parseTrustProxy("0")).toBe(0);
-  });
+  test.each([
+    "0",
+    "1",
+    "2",
+    " 1 ",
+    "+1",
+    "1.0",
+    "1e2",
+    "0x1",
+    "-1",
+    "Infinity",
+  ])(
+    "rejects the numeric proxy-hop value %j",
+    (value) => {
+      expect(() => parseTrustProxy(value)).toThrow(
+        /OMXTERM_TRUST_PROXY does not accept numeric proxy hop counts/,
+      );
+    },
+  );
 
-  test("passes an IP/CIDR allowlist through as a string", () => {
+  test("preserves false and passes explicit IP/CIDR allowlists through", () => {
+    expect(parseTrustProxy("false")).toBe(false);
     expect(parseTrustProxy("10.100.0.1")).toBe("10.100.0.1");
+    expect(parseTrustProxy("10.100.0.0/24")).toBe("10.100.0.0/24");
     expect(parseTrustProxy("127.0.0.1,10.100.0.0/24")).toBe(
       "127.0.0.1,10.100.0.0/24",
     );
-    expect(parseTrustProxy("-1")).toBe("-1");
   });
 });
 

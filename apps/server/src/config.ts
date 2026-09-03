@@ -30,7 +30,7 @@ export type ServerConfig = {
   host: string;
   port: number;
   secureCookies: boolean;
-  trustProxy: boolean | number | string;
+  trustProxy: boolean | string;
   sshEgressPolicy: SshEgressPolicy;
   auditLogPath: string | undefined;
   webRoot: string | undefined;

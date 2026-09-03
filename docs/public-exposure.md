@@ -162,9 +162,11 @@ you actually control, because that header is trivially spoofable by anyone
 who can reach the broker directly.
 
 `OMXTERM_TRUST_PROXY` (`apps/server/src/deploy-safety.ts`, `parseTrustProxy`)
-controls this. It defaults to `false` (unset), and accepts `true`, a hop
-count, or — preferred — a trusted proxy IP/CIDR allowlist. It affects both
-rate-limiting (`request.ip`) and HTTPS detection (`X-Forwarded-Proto`).
+controls this. It defaults to `false` (unset), and accepts `true` or —
+preferred — a trusted proxy IP/CIDR allowlist. Numeric proxy hop counts are
+rejected because path length is not a stable trust boundary. The setting
+affects both rate-limiting (`request.ip`) and HTTPS detection
+(`X-Forwarded-Proto`).
 
 Both misconfigurations are real failure modes, in opposite directions:
 
@@ -174,15 +176,15 @@ Both misconfigurations are real failure modes, in opposite directions:
   one shared bucket: one abusive client can burn the whole budget and lock out
   every other client behind that proxy, and per-client limiting stops meaning
   anything.
-- **Trusted too broadly** (`true`, or a hop count) when untrusted parties
-  can reach the broker's port directly — e.g. it is also exposed on a LAN or
-  a Docker network anyone can join. `X-Forwarded-For` is just a request
-  header; anyone who can reach the port can set it to whatever they want,
-  including a different fake IP on every request. With trust turned on but
-  no actual proxy enforcing the header, an attacker rotates IPs at will and
-  the per-client rate limits and live credential cap stop limiting one physical
-  attacker as a single client. The direct-peer access-audit budget still holds,
-  but it is not a substitute for correct proxy trust.
+- **Trusted too broadly** (`true`) when untrusted parties can reach the broker's
+  port directly — e.g. it is also exposed on a LAN or a Docker network anyone
+  can join. `X-Forwarded-For` is just a request header; anyone who can reach the
+  port can set it to whatever they want, including a different fake IP on every
+  request. With trust turned on but no actual proxy enforcing the header, an
+  attacker rotates IPs at will and the per-client rate limits and live
+  credential cap stop limiting one physical attacker as a single client. The
+  direct-peer access-audit budget still holds, but it is not a substitute for
+  correct proxy trust.
 
 The safe pattern is: only turn on `OMXTERM_TRUST_PROXY`, and only trust the
 exact address(es) the real proxy connects from (its Docker network subnet,
