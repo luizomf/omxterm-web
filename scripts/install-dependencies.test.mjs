@@ -119,13 +119,15 @@ try {
     ),
   );
 
-  const [rootPackage, dockerfile, ci, readme, agents] = await Promise.all([
-    readFile(path.join(REPO_ROOT, 'package.json'), 'utf8').then(JSON.parse),
-    readFile(path.join(REPO_ROOT, 'Dockerfile'), 'utf8'),
-    readFile(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'README.md'), 'utf8'),
-    readFile(path.join(REPO_ROOT, 'AGENTS.md'), 'utf8'),
-  ]);
+  const [rootPackage, dockerfile, ci, readme, agents, installerSource] =
+    await Promise.all([
+      readFile(path.join(REPO_ROOT, 'package.json'), 'utf8').then(JSON.parse),
+      readFile(path.join(REPO_ROOT, 'Dockerfile'), 'utf8'),
+      readFile(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'),
+      readFile(path.join(REPO_ROOT, 'README.md'), 'utf8'),
+      readFile(path.join(REPO_ROOT, 'AGENTS.md'), 'utf8'),
+      readFile(INSTALLER, 'utf8'),
+    ]);
   assert.equal(rootPackage.scripts?.bootstrap, 'node scripts/install-dependencies.mjs');
   assert.equal(rootPackage.scripts?.postinstall, undefined);
   assert.equal(rootPackage.allowScripts, undefined);
@@ -139,6 +141,14 @@ try {
   assert.doesNotMatch(dockerfile, /RUN npm ci(?:\s|$)/u);
   assert.match(readme, /^npm run bootstrap$/mu);
   assert.match(agents, /^Bootstrap:\s+npm run bootstrap$/mu);
+  assert.doesNotMatch(
+    installerSource,
+    /runNpm\(\s*\[\s*['"]rebuild['"]/u,
+  );
+  assert.match(
+    installerSource,
+    /run\(process\.execPath, \['install\.js'\], \{ cwd: packageRoot \}\)/u,
+  );
 
   console.log(
     'install-dependencies.test.mjs: local, CI, and Docker share the fail-closed bootstrap; a hermetic unapproved lifecycle script stayed inert',

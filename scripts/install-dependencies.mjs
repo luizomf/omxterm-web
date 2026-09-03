@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { access, readFile, rm } from 'node:fs/promises';
+import { access, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { adaptSsh2AuthenticationMaterial } from './ssh2-auth-material-adaptation.mjs';
@@ -25,7 +25,7 @@ const APPROVED_LIFECYCLE_PACKAGES = [
     lifecycle: {
       install: 'node buildcheck.js > buildcheck.gypi && node-gyp rebuild',
     },
-    action: 'rebuild',
+    action: 'build-cpu-features',
   },
   {
     lockPath: 'node_modules/esbuild',
@@ -35,7 +35,7 @@ const APPROVED_LIFECYCLE_PACKAGES = [
       'sha512-HrJrvZv5ayxBzPfwphOoNzkzOIIlifzk0KJrGK2c8R4+LKpMtpYLQeUdjnwjWv/LZlkH2laZk+4w78pi99D4Vw==',
     optional: false,
     lifecycle: { postinstall: 'node install.js' },
-    action: 'rebuild',
+    action: 'run-node-install',
   },
   {
     lockPath: 'node_modules/fsevents',
@@ -65,7 +65,7 @@ const APPROVED_LIFECYCLE_PACKAGES = [
       'sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ==',
     optional: false,
     lifecycle: { install: 'node install.js' },
-    action: 'rebuild',
+    action: 'build-ssh2-crypto',
   },
 ];
 
@@ -141,6 +141,31 @@ async function runNpm(arguments_, options) {
   return run(invocation.command, invocation.arguments, options);
 }
 
+function runAndCaptureStdout(command, arguments_, { cwd }) {
+  return new Promise((resolve, reject) => {
+    const output = [];
+    const child = spawn(command, arguments_, {
+      cwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'inherit'],
+      windowsHide: true,
+    });
+    child.stdout.on('data', (chunk) => output.push(chunk));
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolve(Buffer.concat(output));
+      } else {
+        reject(
+          new Error(
+            `${path.basename(command)} failed${signal ? ` with signal ${signal}` : ` with status ${code ?? 'unknown'}`}`,
+          ),
+        );
+      }
+    });
+  });
+}
+
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, 'utf8'));
 }
@@ -210,6 +235,85 @@ async function assertInstalledManifest(projectRoot, approved) {
   return packageRoot;
 }
 
+async function resolveNodeGyp() {
+  const nodeGypPath = process.env.npm_config_node_gyp;
+  if (!nodeGypPath || !path.isAbsolute(nodeGypPath)) {
+    throw new Error(
+      'npm did not expose its bundled node-gyp; run the supported npm run bootstrap command',
+    );
+  }
+  await access(nodeGypPath);
+  return nodeGypPath;
+}
+
+async function buildCpuFeatures(packageRoot) {
+  try {
+    const buildConfiguration = await runAndCaptureStdout(
+      process.execPath,
+      ['buildcheck.js'],
+      { cwd: packageRoot },
+    );
+    await writeFile(
+      path.join(packageRoot, 'buildcheck.gypi'),
+      buildConfiguration,
+    );
+    const nodeGypPath = await resolveNodeGyp();
+    const built = await run(process.execPath, [nodeGypPath, 'rebuild'], {
+      cwd: packageRoot,
+      allowFailure: true,
+    });
+    if (built) {
+      await access(path.join(packageRoot, 'build', 'Release', 'cpufeatures.node'));
+    }
+    return built;
+  } catch (error) {
+    console.warn(
+      `lifecycle policy: optional cpu-features build failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+}
+
+async function buildSsh2Crypto(packageRoot) {
+  const nodeGypPath = await resolveNodeGyp();
+  const cryptoRoot = path.join(packageRoot, 'lib', 'protocol', 'crypto');
+  const opensslMajor = /^\d+/u.exec(process.versions.openssl)?.[0];
+  if (!opensslMajor) {
+    throw new Error('Unable to determine the OpenSSL major version');
+  }
+  const built = await run(
+    process.execPath,
+    [
+      nodeGypPath,
+      `--target=${process.version}`,
+      `--real_openssl_major=${opensslMajor}`,
+      'rebuild',
+    ],
+    { cwd: cryptoRoot, allowFailure: true },
+  );
+  if (built) {
+    await access(path.join(cryptoRoot, 'build', 'Release', 'sshcrypto.node'));
+  } else {
+    console.warn(
+      'lifecycle policy: optional ssh2 crypto binding build failed; using the JavaScript fallback',
+    );
+  }
+}
+
+async function runRequiredNodeInstall(packageRoot, approved) {
+  await run(process.execPath, ['install.js'], { cwd: packageRoot });
+  if (approved.name === 'esbuild') {
+    const version = await runAndCaptureStdout(
+      path.join(packageRoot, 'bin', 'esbuild'),
+      ['--version'],
+      { cwd: packageRoot },
+    );
+    if (version.toString('utf8').trim() !== approved.version) {
+      throw new Error(`esbuild binary validation failed at ${approved.lockPath}`);
+    }
+  }
+}
+
 async function runApprovedLifecycleSteps(projectRoot) {
   for (const approved of APPROVED_LIFECYCLE_PACKAGES) {
     const packageRoot = await assertInstalledManifest(projectRoot, approved);
@@ -228,18 +332,17 @@ async function runApprovedLifecycleSteps(projectRoot) {
       continue;
     }
 
-    const rebuilt = await runNpm(
-      [
-        'rebuild',
-        `${approved.name}@${approved.version}`,
-        '--foreground-scripts',
-        '--ignore-scripts=false',
-        '--no-audit',
-        '--no-fund',
-      ],
-      { cwd: projectRoot, allowFailure: approved.optional },
-    );
-    if (!rebuilt) {
+    if (approved.action === 'run-node-install') {
+      await runRequiredNodeInstall(packageRoot, approved);
+      continue;
+    }
+    if (approved.action === 'build-ssh2-crypto') {
+      await buildSsh2Crypto(packageRoot);
+      continue;
+    }
+
+    const built = await buildCpuFeatures(packageRoot);
+    if (!built) {
       await rm(packageRoot, { recursive: true, force: true });
       console.warn(
         `lifecycle policy: optional ${approved.name}@${approved.version} build failed and was omitted`,

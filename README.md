@@ -58,11 +58,12 @@ npm run bootstrap
 `npm run bootstrap` is the only supported dependency-install command. With npm
 10 or newer, it runs the locked install with all lifecycle scripts disabled,
 rejects any lifecycle package outside the repository's exact path/version/
-integrity policy, and explicitly rebuilds only the audited `cpu-features`,
-`esbuild`, and `ssh2` packages. The two optional macOS `fsevents` packages ship
-their native binaries in their locked tarballs, so the bootstrap verifies those
-prebuilt files without running package code. Optional native build failure keeps
-npm's fallback behavior; the required esbuild binary validation must succeed.
+integrity policy, and invokes only the audited, path-specific build steps for
+`cpu-features`, `esbuild`, and `ssh2`. The two optional macOS `fsevents`
+packages ship their native binaries in their locked tarballs, so the bootstrap
+verifies those prebuilt files without running package code. Optional native
+build failure keeps npm's fallback behavior; the required esbuild binary
+validation must succeed.
 
 The same bootstrap then applies and verifies OMXTerm's repository-owned
 adaptation of exactly ssh2 1.17.0. It fails on package/version/partial-patch

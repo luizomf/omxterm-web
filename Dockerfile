@@ -13,7 +13,7 @@ COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/core/package.json packages/core/package.json
 # The repository bootstrap disables every lifecycle script, checks the complete
-# locked lifecycle surface, explicitly rebuilds only audited packages, and
+# locked lifecycle surface, invokes only audited package build steps, and
 # applies the ssh2 adaptation. Copy both repository-owned implementations into
 # the cached dependency layer and verify again before application sources enter.
 COPY scripts/install-dependencies.mjs scripts/install-dependencies.mjs

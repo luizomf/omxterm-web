@@ -366,12 +366,15 @@ first invokes the locked npm install with lifecycle scripts disabled. It then
 requires the lockfile's complete `hasInstallScript` set to match the audited
 path, version, integrity, and optional-package metadata for `cpu-features`
 0.0.10, `esbuild` 0.28.1, both `fsevents` 2.3.x paths, and `ssh2` 1.17.0. Only
-the audited `cpu-features`, `esbuild`, and `ssh2` rebuilds execute. The optional
-`fsevents` packages contain their prebuilt macOS modules and declare no install
-lifecycle in the extracted manifests, so the bootstrap verifies those files
-without executing package code. Unsupported lockfile additions remain inert and
-abort before any approved lifecycle step runs. Optional packages preserve npm's
-omit-on-build-failure behavior; required package steps fail the bootstrap.
+the audited, path-specific `cpu-features`, `esbuild`, and `ssh2` actions execute.
+The optional `fsevents` packages contain their prebuilt macOS modules and declare
+no install lifecycle in the extracted manifests, so the bootstrap verifies those
+files without executing package code. Each executable action targets the one
+validated package directory directly; package-name selectors cannot broaden
+execution to a matching nested package. Unsupported lockfile additions remain
+inert and abort before any approved lifecycle step runs. Optional packages
+preserve npm's omit-on-build-failure behavior; required package steps fail the
+bootstrap.
 
 The bootstrap then invokes
 [`scripts/ssh2-auth-material-adaptation.mjs`](../scripts/ssh2-auth-material-adaptation.mjs).
