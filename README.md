@@ -51,18 +51,27 @@ cp .env.example .env
 # Set OMXTERM_ACCESS_TOKEN in .env to a strong random value before the first run.
 # Leading/trailing whitespace and repeated weak placeholders are rejected at boot.
 # Generate one with: openssl rand -base64 32
-npm install
+npm run bootstrap
 ./scripts/run
 ```
 
-The install lifecycle applies and verifies OMXTerm's repository-owned adaptation
-of exactly ssh2 1.17.0. It fails on package/version/partial-patch drift or
-complete-file drift in the adapted `client.js`/`keyParser.js` and supporting
-unmodified `Protocol.js`; `npm run verify:ssh2-adaptation` checks the installed
-tree without modifying it. Do not use `--ignore-scripts`: a deliberately
-bypassed lifecycle leaves ssh2 unadapted, and the runtime adapter will refuse
-SSH establishment. The Docker build copies the adaptation script before its
-cached `npm ci` layer and verifies the result explicitly.
+`npm run bootstrap` is the only supported dependency-install command. With npm
+10 or newer, it runs the locked install with all lifecycle scripts disabled,
+rejects any lifecycle package outside the repository's exact path/version/
+integrity policy, and invokes only the audited, path-specific build steps for
+`cpu-features`, `esbuild`, and `ssh2`. The two optional macOS `fsevents`
+packages ship their native binaries in their locked tarballs, so the bootstrap
+verifies those prebuilt files without running package code. Optional native
+build failure keeps npm's fallback behavior; the required esbuild binary
+validation must succeed.
+
+The same bootstrap then applies and verifies OMXTerm's repository-owned
+adaptation of exactly ssh2 1.17.0. It fails on package/version/partial-patch
+drift or complete-file drift in the adapted `client.js`/`keyParser.js` and
+supporting unmodified `Protocol.js`; `npm run verify:ssh2-adaptation` checks the
+installed tree without modifying it. Direct `npm install`/`npm ci` is not a
+supported bootstrap because it bypasses the repository policy. CI and Docker use
+the same command and also verify the ssh2 result explicitly.
 
 Or run the processes separately:
 

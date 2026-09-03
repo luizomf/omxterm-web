@@ -37,9 +37,11 @@ OMXTerm Web.
   cleans up the bridge; the SSH target controls shell privileges and command
   authorization. OMXTerm Web does not sandbox remote commands.
 - **Supported environment:** Node.js `^22.12.0 || ^24.0.0`, npm 10 or newer,
-  TypeScript workspaces, and the pinned `ssh2` 1.17.0 adaptation applied by the
-  install lifecycle. Bun, Deno, edge runtimes, and container-per-session
-  orchestration are outside the MVP.
+  TypeScript workspaces, and `npm run bootstrap` as the only supported install
+  path. The bootstrap disables dependency lifecycle scripts, explicitly runs
+  the audited required steps, and applies the pinned `ssh2` 1.17.0 adaptation.
+  Bun, Deno, edge runtimes, and container-per-session orchestration are outside
+  the MVP.
 - **Generated artifacts:** build output is written to ignored `dist/` paths by
   `npm run build`. Dependencies, coverage, Vite caches, and TypeScript build
   metadata are also ignored; do not commit them.
@@ -49,7 +51,7 @@ OMXTerm Web.
 Run commands from the repository root.
 
 ```text
-Bootstrap:              npm ci
+Bootstrap:              npm run bootstrap
 Run:                    ./scripts/run
 Server dev:             npm run dev:server
 Web dev:                npm run dev:web

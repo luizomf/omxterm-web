@@ -177,6 +177,7 @@ assert_present context/apps/web/src/main.tsx
 assert_present context/apps/web/public/favicon.svg
 assert_present context/apps/web/public/fonts/JetBrainsMonoNerdFontMono-Regular.woff2
 assert_present context/packages/core/src/protocol.ts
+assert_present context/scripts/install-dependencies.mjs
 assert_present context/scripts/ssh2-auth-material-adaptation.mjs
 assert_present context/tsconfig.base.json
 assert_present context/apps/server/tsconfig.json

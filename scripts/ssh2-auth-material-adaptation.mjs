@@ -589,7 +589,7 @@ export async function adaptSsh2AuthenticationMaterial({
   }
   if (mode === 'verify') {
     throw new Error(
-      `ssh2 ${SSH2_VERSION} is unadapted; run the repository install lifecycle`,
+      `ssh2 ${SSH2_VERSION} is unadapted; run npm run bootstrap`,
     );
   }
 

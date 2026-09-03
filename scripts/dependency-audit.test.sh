@@ -2,12 +2,12 @@
 
 # Regression guard for the dependency audit boundary (issue #182).
 #
-# The runtime image runs an unpruned npm ci and starts the broker through tsx,
-# which is currently classified as a development dependency. The fake npm below
-# models a reportable advisory that disappears when any omit-able dependency
-# class is not explicitly included. It verifies the shared audit command cannot
-# be narrowed by environment-level npm omit settings, preserves npm's failure,
-# and is used by CI and README.
+# The runtime image runs the unpruned repository bootstrap and starts the broker
+# through tsx, which is currently classified as a development dependency. The
+# fake npm below models a reportable advisory that disappears when any omit-able
+# dependency class is not explicitly included. It verifies the shared audit
+# command cannot be narrowed by environment-level npm omit settings, preserves
+# npm's failure, and is used by CI and README.
 #
 # Run: bash scripts/dependency-audit.test.sh
 
