@@ -65,6 +65,7 @@ Format check:           npm run format:check
 Format write:           N/A; no repository formatter is configured
 Docs check:             N/A; no separate documentation checker is configured
 Dependency audit:       npm run audit:dependencies
+GitHub Actions pins:    npm run verify:github-actions-pins
 ssh2 adaptation check:  npm run verify:ssh2-adaptation
 Build:                  npm run build
 ```

@@ -114,6 +114,13 @@ unchanged lockfile every Monday at 09:17 UTC and can be started at any time from
 `npm run audit:dependencies` at complete dependency scope. A reportable npm
 advisory returns a non-zero status and visibly fails the job.
 
+External GitHub Actions and reusable workflows are pinned to full commit SHAs;
+the adjacent release-tag comments keep those immutable references readable.
+Dependabot checks these pins weekly and updates both the SHA and release comment
+in its proposals. `npm run verify:github-actions-pins` enforces the policy across
+every workflow file while leaving repository-local actions outside this trust
+boundary.
+
 A repository administrator must also confirm these GitHub settings under
 **Settings > Security > Advanced Security**:
 
