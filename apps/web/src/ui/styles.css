@@ -317,6 +317,11 @@ textarea[data-masked='true'] {
   font-size: var(--font-size-xxsmall);
 }
 
+.terminal-topbar .ghost-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .topbar-toggle {
   /* .terminal-stage is a column flex container (align-items defaults to
    * stretch), so without this the button would stretch to full width. */
@@ -423,6 +428,57 @@ textarea[data-masked='true'] {
    * invisible. No vertical padding — it would just reopen the gap (#50). */
   flex: 1;
   padding: 0 1rem;
+}
+
+.clipboard-consent-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 1.6rem;
+  background: rgb(0 0 0 / 72%);
+}
+
+.clipboard-consent-dialog {
+  width: min(100%, 64rem);
+  display: grid;
+  gap: 1.4rem;
+  padding: 2rem;
+  border: 0.1rem solid var(--clr-teal);
+  border-radius: var(--radius-medium);
+  background: var(--clr-gray01);
+  box-shadow: 0 0 3rem rgb(107 204 255 / 18%);
+}
+
+.clipboard-consent-dialog h2,
+.clipboard-consent-dialog p {
+  margin: 0;
+}
+
+.clipboard-consent-dialog h2 {
+  color: var(--clr-tealBright);
+  font-size: var(--font-size-large);
+}
+
+.clipboard-consent-dialog p {
+  color: var(--clr-gray16);
+  font-size: var(--font-size-small);
+}
+
+.clipboard-consent-dialog pre {
+  max-height: min(45dvh, 32rem);
+  margin: 0;
+  padding: 1.2rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 0.1rem solid var(--clr-gray05);
+  border-radius: var(--radius-small);
+  color: var(--clr-fg);
+  background: var(--clr-bg);
+  font: inherit;
+  font-size: var(--font-size-small);
 }
 
 .terminal-key-bar {

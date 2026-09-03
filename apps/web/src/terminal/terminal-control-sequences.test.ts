@@ -152,10 +152,10 @@ describe('registerTerminalControlSequenceHandlers', () => {
     ]);
   });
 
-  test('preserves OSC 52 writes, read blocking, and the 64 KiB cap', async () => {
+  test('surfaces validated OSC 52 write requests and blocks reads and oversized writes', async () => {
     const terminal = createTerminal();
-    const writeClipboard = vi.fn();
-    registerTerminalControlSequenceHandlers(terminal, writeClipboard);
+    const requestClipboardWrite = vi.fn();
+    registerTerminalControlSequenceHandlers(terminal, requestClipboardWrite);
     const boundaryPayload = btoa('a'.repeat(64 * 1024));
     const oversizedPayload = btoa('b'.repeat(64 * 1024 + 1));
 
@@ -165,9 +165,9 @@ describe('registerTerminalControlSequenceHandlers', () => {
       701,
     );
 
-    expect(writeClipboard).toHaveBeenCalledTimes(2);
-    expect(writeClipboard).toHaveBeenNthCalledWith(1, 'Hello');
-    expect(writeClipboard).toHaveBeenNthCalledWith(
+    expect(requestClipboardWrite).toHaveBeenCalledTimes(2);
+    expect(requestClipboardWrite).toHaveBeenNthCalledWith(1, 'Hello');
+    expect(requestClipboardWrite).toHaveBeenNthCalledWith(
       2,
       'a'.repeat(64 * 1024),
     );

@@ -9,7 +9,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { hardenTerminalInputForMobile } from './harden-terminal-input-for-mobile';
 import { keepTerminalFocused, TerminalKeyBar } from './TerminalKeyBar';
 import { registerTerminalControlSequenceHandlers } from './terminal-control-sequences';
@@ -21,11 +21,14 @@ import {
 } from './terminal-font-zoom';
 import { attachTerminalPinchZoom } from './terminal-pinch-zoom';
 
-// Best-effort host clipboard write for OSC 52. navigator.clipboard is only
-// defined in a secure context (localhost and the https deploy qualify) and can
-// reject without a user gesture; OSC 52 copy is non-critical, so we swallow.
-function writeHostClipboard(text: string): void {
-  void navigator.clipboard?.writeText(text).catch(() => {});
+// navigator.clipboard is only defined in a secure context (localhost and the
+// https deploy qualify) and can still reject a user-approved write. Keep this
+// mutation behind an async boundary so the UI can report that failure.
+async function writeHostClipboard(text: string): Promise<void> {
+  if (!navigator.clipboard) {
+    throw new Error('Clipboard access is unavailable.');
+  }
+  await navigator.clipboard.writeText(text);
 }
 
 // xterm reads its font from the DOM when open() runs, so the Nerd Font must lead
@@ -63,6 +66,16 @@ export function TerminalEmulator({
   const [topbarVisible, setTopbarVisible] = useState(false);
   const [keyBarVisible, setKeyBarVisible] = useState(false);
   const [ctrlArmed, setCtrlArmed] = useState(false);
+  const [clipboardWritesEnabled, setClipboardWritesEnabled] = useState(false);
+  const [pendingClipboardWrite, setPendingClipboardWrite] = useState<
+    string | null
+  >(null);
+  const [clipboardError, setClipboardError] = useState<string | null>(null);
+  // OSC handlers are installed once for the terminal session. Refs let that
+  // long-lived parser callback enforce the latest consent state without
+  // rebuilding xterm whenever a prompt opens or closes.
+  const clipboardWritesEnabledRef = useRef(false);
+  const pendingClipboardWriteRef = useRef<string | null>(null);
   // terminal.onData is wired once per adapter (see the effect below), so it
   // needs a ref rather than the `ctrlArmed` state value to see the latest
   // armed state without re-subscribing on every toggle.
@@ -79,8 +92,59 @@ export function TerminalEmulator({
     reset(): void;
   } | null>(null);
 
+  const clearPendingClipboardWrite = useCallback(() => {
+    pendingClipboardWriteRef.current = null;
+    setPendingClipboardWrite(null);
+  }, []);
+
+  const disableClipboardWrites = useCallback(() => {
+    clipboardWritesEnabledRef.current = false;
+    pendingClipboardWriteRef.current = null;
+    setClipboardWritesEnabled(false);
+    setPendingClipboardWrite(null);
+  }, []);
+
+  const requestClipboardWrite = useCallback((text: string) => {
+    // Disabled requests are discarded at arrival and can never become pending
+    // after a later opt-in. A second request cannot replace the text currently
+    // being reviewed either; every displayed decision remains unambiguous.
+    if (
+      !clipboardWritesEnabledRef.current ||
+      pendingClipboardWriteRef.current !== null
+    ) {
+      return;
+    }
+    pendingClipboardWriteRef.current = text;
+    setClipboardError(null);
+    setPendingClipboardWrite(text);
+  }, []);
+
+  const toggleClipboardWrites = () => {
+    const enabled = !clipboardWritesEnabledRef.current;
+    if (enabled && status !== 'connected') return;
+    clipboardWritesEnabledRef.current = enabled;
+    setClipboardWritesEnabled(enabled);
+    setClipboardError(null);
+    if (!enabled) clearPendingClipboardWrite();
+  };
+
+  const acceptClipboardWrite = () => {
+    const text = pendingClipboardWriteRef.current;
+    // Consent is one-shot: clear the request before crossing the browser
+    // clipboard boundary, including when the asynchronous mutation fails.
+    clearPendingClipboardWrite();
+    if (text === null || !clipboardWritesEnabledRef.current) return;
+    void writeHostClipboard(text).catch(() => {
+      setClipboardError('The browser could not write to your clipboard.');
+    });
+  };
+
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // A new adapter is a new terminal session. Consent never follows it.
+    disableClipboardWrites();
+    setClipboardError(null);
 
     const openTerminal = (container: HTMLDivElement) => {
       const terminal = new Terminal({
@@ -106,7 +170,7 @@ export function TerminalEmulator({
 
       const controlSequenceHandlers = registerTerminalControlSequenceHandlers(
         terminal,
-        writeHostClipboard,
+        requestClipboardWrite,
       );
 
       terminal.open(container);
@@ -170,6 +234,9 @@ export function TerminalEmulator({
         adapter.onOutput(data => terminal.write(data)),
         adapter.onStatusChange(next => {
           setStatus(next);
+          if (next === 'closing' || next === 'closed' || next === 'error') {
+            disableClipboardWrites();
+          }
           // The PTY only exists once the server reports "connected", and the
           // resize sent before the socket opened was dropped by the transport.
           // Re-sync here so the PTY starts at the real fitted size, not 80x24.
@@ -204,6 +271,7 @@ export function TerminalEmulator({
       });
 
       return () => {
+        disableClipboardWrites();
         fontZoomRef.current = null;
         detachPinchZoom();
         resizeObserver.disconnect();
@@ -229,7 +297,7 @@ export function TerminalEmulator({
       disposed = true;
       disposeTerminal?.();
     };
-  }, [adapter]);
+  }, [adapter, disableClipboardWrites, requestClipboardWrite]);
 
   return (
     <section className='terminal-stage' aria-label='Terminal session'>
@@ -238,6 +306,17 @@ export function TerminalEmulator({
           <h1>{title}</h1>
           <div className='terminal-actions'>
             <span className={`status-pill status-${status}`}>{status}</span>
+            <button
+              type='button'
+              className='ghost-button'
+              aria-pressed={clipboardWritesEnabled}
+              disabled={status !== 'connected' && !clipboardWritesEnabled}
+              onClick={toggleClipboardWrites}
+            >
+              {clipboardWritesEnabled
+                ? 'Disable remote clipboard writes'
+                : 'Enable remote clipboard writes'}
+            </button>
             <button
               type='button'
               className='ghost-button'
@@ -269,7 +348,48 @@ export function TerminalEmulator({
           {error}
         </div>
       ) : null}
+      {clipboardError ? (
+        <div className='inline-error' role='alert'>
+          {clipboardError}
+        </div>
+      ) : null}
       <div ref={containerRef} className='terminal-surface' />
+      {pendingClipboardWrite !== null ? (
+        <div
+          className='clipboard-consent-backdrop'
+          role='dialog'
+          aria-modal='true'
+          aria-labelledby='clipboard-consent-title'
+          aria-describedby='clipboard-consent-description'
+          onKeyDown={event => {
+            if (event.key === 'Escape') clearPendingClipboardWrite();
+          }}
+        >
+          <div className='clipboard-consent-dialog'>
+            <h2 id='clipboard-consent-title'>Remote clipboard write</h2>
+            <p id='clipboard-consent-description'>
+              The remote session wants to copy this decoded text to your
+              clipboard. Review it before allowing the write.
+            </p>
+            <pre aria-label='Decoded clipboard text'>
+              {pendingClipboardWrite}
+            </pre>
+            <div className='button-row'>
+              <button
+                type='button'
+                className='ghost-button'
+                autoFocus
+                onClick={clearPendingClipboardWrite}
+              >
+                Reject
+              </button>
+              <button type='button' onClick={acceptClipboardWrite}>
+                Copy to clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {keyBarVisible ? (
         <TerminalKeyBar
           ctrlArmed={ctrlArmed}
