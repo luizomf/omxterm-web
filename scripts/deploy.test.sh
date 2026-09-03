@@ -3,8 +3,10 @@
 # Regression suite for scripts/deploy (issue #75).
 #
 # It exercises the deploy guards against a REAL git in throwaway sandboxes, with
-# a fake `docker` shimmed onto PATH. No real rollout, Docker, or Traefik is ever
-# touched, so this is safe to run anywhere — never point it at production.
+# a fake `docker` shimmed onto PATH. Permission rejection also shims `git` to
+# prove it happens before repository synchronization. No real rollout, Docker,
+# or Traefik is ever touched, so this is safe to run anywhere — never point it
+# at production.
 #
 # Run: bash scripts/deploy.test.sh
 
@@ -50,6 +52,7 @@ setup_sandbox() {
   APP="${SANDBOX}/omxterm-web"
   FAKEBIN="${SANDBOX}/bin"
   DOCKER_LOG="${SANDBOX}/docker.log"
+  GIT_LOG="${SANDBOX}/git.log"
   OUT_LOG="${SANDBOX}/out.log"
 
   mkdir -p "${FAKEBIN}"
@@ -62,6 +65,7 @@ fi
 EOF
   chmod +x "${FAKEBIN}/docker"
   : >"${DOCKER_LOG}"
+  : >"${GIT_LOG}"
 
   git init -q --bare "${REMOTE}"
   git --git-dir="${REMOTE}" symbolic-ref HEAD refs/heads/main
@@ -70,10 +74,13 @@ EOF
     cd "${APP}" || exit
     git symbolic-ref HEAD refs/heads/main
     echo v1 >app.txt
-    git add app.txt
+    printf '.env\n' >.gitignore
+    git add app.txt .gitignore
     git commit -qm init
     git remote add origin "${REMOTE}"
     git push -q -u origin main
+    printf 'OMXTERM_ACCESS_TOKEN=test-secret\n' >.env
+    chmod 0600 .env
   )
 }
 
@@ -96,7 +103,49 @@ run_deploy() {
 }
 
 docker_ran() { [ -s "${DOCKER_LOG}" ]; }
+git_ran() { [ -s "${GIT_LOG}" ]; }
 head_sha() { git -C "${APP}" rev-parse HEAD; }
+
+test_insecure_env_stops_before_git_or_docker() {
+  echo "group- or world-accessible .env stops before Git or Docker"
+  setup_sandbox
+
+  cat >"${FAKEBIN}/git" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"${GIT_LOG}"
+exit 99
+EOF
+  chmod +x "${FAKEBIN}/git"
+
+  local mode
+  for mode in 0640 0604; do
+    chmod "${mode}" "${APP}/.env"
+    : >"${GIT_LOG}"
+    : >"${DOCKER_LOG}"
+
+    if run_deploy; then
+      fail_test "expected non-zero exit for insecure .env mode ${mode}"
+    fi
+    git_ran && fail_test "must not invoke Git for insecure .env mode ${mode}"
+    docker_ran && fail_test "must not invoke Docker for insecure .env mode ${mode}"
+    grep -q "remove all group or world permissions" "${OUT_LOG}" ||
+      fail_test "expected a useful permission failure for mode ${mode}"
+  done
+  pass_test "rejected group/world access before Git and Docker"
+}
+
+test_owner_only_env_deploys() {
+  echo "owner-only .env preserves successful deployment"
+  setup_sandbox
+  chmod 0600 "${APP}/.env"
+
+  if ! run_deploy; then
+    fail_test "expected exit 0 for owner-only .env mode 0600"
+    return
+  fi
+  docker_ran || fail_test "expected docker compose to run for owner-only .env"
+  pass_test "accepted mode 0600 and deployed"
+}
 
 test_clean_uptodate_deploys_app_only() {
   echo "clean + up-to-date deploys only the omxterm-web service"
@@ -295,6 +344,8 @@ test_docs_keep_portable_compose_project_isolation() {
   pass_test "fresh clones remain isolated; existing maintainer rollout remains continuous"
 }
 
+test_insecure_env_stops_before_git_or_docker
+test_owner_only_env_deploys
 test_clean_uptodate_deploys_app_only
 test_unhealthy_broker_fails_with_bounded_diagnostics
 test_applies_production_override
