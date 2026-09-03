@@ -30,7 +30,7 @@ jobs:
           cache: npm
 
       - name: Install locked dependencies
-        run: npm ci
+        run: npm run bootstrap
 
       - name: Verify pinned ssh2 adaptation
         run: npm run verify:ssh2-adaptation

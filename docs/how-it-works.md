@@ -360,18 +360,30 @@ unmodified support file:
   `authenticated`; missing evidence fails closed. OMXTerm does not reflect over
   private Symbols or replace protocol message handlers at runtime.
 
-The root `postinstall` runs
-[`scripts/ssh2-auth-material-adaptation.mjs`](../scripts/ssh2-auth-material-adaptation.mjs)
-after every normal `npm install`/`npm ci`. The script requires the lockfile,
-installed package metadata, ssh2 version, and complete-file upstream preimage
-hashes for `lib/client.js`, `lib/protocol/keyParser.js`, and the unmodified
-`lib/protocol/Protocol.js` support file. It applies exact replacements only to
-`client.js` and `keyParser.js`, then verifies their complete postimage hashes and
-`Protocol.js`'s unchanged complete-file hash. An upstream change, unknown edit,
-unadapted verify, or mixture of patched and unpatched files aborts
-installation/verification.
-Docker copies this script before its cached `npm ci` layer and verifies again;
-CI also runs the verifier explicitly.
+The supported `npm run bootstrap` command runs
+[`scripts/install-dependencies.mjs`](../scripts/install-dependencies.mjs). It
+first invokes the locked npm install with lifecycle scripts disabled. It then
+requires the lockfile's complete `hasInstallScript` set to match the audited
+path, version, integrity, and optional-package metadata for `cpu-features`
+0.0.10, `esbuild` 0.28.1, both `fsevents` 2.3.x paths, and `ssh2` 1.17.0. Only
+the audited `cpu-features`, `esbuild`, and `ssh2` rebuilds execute. The optional
+`fsevents` packages contain their prebuilt macOS modules and declare no install
+lifecycle in the extracted manifests, so the bootstrap verifies those files
+without executing package code. Unsupported lockfile additions remain inert and
+abort before any approved lifecycle step runs. Optional packages preserve npm's
+omit-on-build-failure behavior; required package steps fail the bootstrap.
+
+The bootstrap then invokes
+[`scripts/ssh2-auth-material-adaptation.mjs`](../scripts/ssh2-auth-material-adaptation.mjs).
+That script requires the lockfile, installed package metadata, ssh2 version, and
+complete-file upstream preimage hashes for `lib/client.js`,
+`lib/protocol/keyParser.js`, and the unmodified `lib/protocol/Protocol.js`
+support file. It applies exact replacements only to `client.js` and
+`keyParser.js`, then verifies their complete postimage hashes and `Protocol.js`'s
+unchanged complete-file hash. An upstream change, unknown edit, unadapted
+verify, or mixture of patched and unpatched files aborts
+installation/verification. Local development, CI, and Docker all use this one
+bootstrap; Docker and CI also run the verifier explicitly.
 
 Synchronous key-parse failure, host-key rejection, authentication rejection,
 timeout, browser cancellation, and connection close release the same known

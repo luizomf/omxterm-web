@@ -5,18 +5,20 @@ FROM node:24.19.0-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f9
 
 WORKDIR /app
 
-# Copy the lockfile and every workspace manifest first so `npm ci` resolves the
-# monorepo and this layer caches until a dependency actually changes.
+# Copy the lockfile and every workspace manifest first so the repository
+# bootstrap resolves the monorepo and this layer caches until a dependency
+# actually changes.
 COPY package.json package-lock.json ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/core/package.json packages/core/package.json
-# npm's root postinstall applies the audited ssh2 adaptation. Copy its
-# repository-owned implementation into the cached dependency layer first, then
-# verify explicitly so ignored lifecycle scripts or installed-tree drift fail the
-# image build rather than shipping stock/partially patched ssh2.
+# The repository bootstrap disables every lifecycle script, checks the complete
+# locked lifecycle surface, explicitly rebuilds only audited packages, and
+# applies the ssh2 adaptation. Copy both repository-owned implementations into
+# the cached dependency layer and verify again before application sources enter.
+COPY scripts/install-dependencies.mjs scripts/install-dependencies.mjs
 COPY scripts/ssh2-auth-material-adaptation.mjs scripts/ssh2-auth-material-adaptation.mjs
-RUN npm ci && npm run verify:ssh2-adaptation
+RUN npm run bootstrap && npm run verify:ssh2-adaptation
 
 COPY . .
 
@@ -34,7 +36,7 @@ RUN rm -rf \
   /usr/local/lib/node_modules/npm
 
 # Defaults baked for the container; secrets/origin come from compose env at runtime.
-# NODE_ENV is set after install/build so npm ci still pulls devDeps (tsx, vite).
+# NODE_ENV is set after install/build so bootstrap includes devDeps (tsx, vite).
 ENV NODE_ENV=production
 ENV OMXTERM_WEB_ROOT=/app/apps/web/dist
 ENV OMXTERM_SERVER_HOST=0.0.0.0

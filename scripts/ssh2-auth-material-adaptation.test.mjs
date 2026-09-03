@@ -150,18 +150,24 @@ try {
     readFile(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'),
   ]);
   assert.equal(
-    rootPackage.scripts?.postinstall,
-    'node scripts/ssh2-auth-material-adaptation.mjs --apply',
+    rootPackage.scripts?.bootstrap,
+    'node scripts/install-dependencies.mjs',
   );
+  assert.equal(rootPackage.scripts?.postinstall, undefined);
   assert.equal(
     rootPackage.scripts?.['verify:ssh2-adaptation'],
     'node scripts/ssh2-auth-material-adaptation.mjs --verify',
   );
-  const dockerScriptCopy = dockerfile.indexOf(
+  const dockerPolicyCopy = dockerfile.indexOf(
+    'COPY scripts/install-dependencies.mjs scripts/install-dependencies.mjs',
+  );
+  const dockerAdaptationCopy = dockerfile.indexOf(
     'COPY scripts/ssh2-auth-material-adaptation.mjs scripts/ssh2-auth-material-adaptation.mjs',
   );
-  const dockerInstall = dockerfile.indexOf('RUN npm ci');
-  assert.ok(dockerScriptCopy >= 0 && dockerScriptCopy < dockerInstall);
+  const dockerInstall = dockerfile.indexOf('RUN npm run bootstrap');
+  assert.ok(dockerPolicyCopy >= 0 && dockerPolicyCopy < dockerInstall);
+  assert.ok(dockerAdaptationCopy >= 0 && dockerAdaptationCopy < dockerInstall);
+  assert.match(ci, /run: npm run bootstrap/u);
   assert.match(ci, /run: npm run verify:ssh2-adaptation/u);
 
   console.log(
