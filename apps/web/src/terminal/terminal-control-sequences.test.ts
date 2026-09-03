@@ -1,6 +1,7 @@
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal, type ILink, type ILinkProvider } from '@xterm/xterm';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { ClipboardWriteConsentSession } from './clipboard-write-consent';
 import { registerTerminalControlSequenceHandlers } from './terminal-control-sequences';
 
 const terminals: Terminal[] = [];
@@ -152,24 +153,51 @@ describe('registerTerminalControlSequenceHandlers', () => {
     ]);
   });
 
-  test('surfaces validated OSC 52 write requests and blocks reads and oversized writes', async () => {
+  test('enforces consent for OSC 52 writes at the real xterm parser boundary', async () => {
     const terminal = createTerminal();
-    const requestClipboardWrite = vi.fn();
-    registerTerminalControlSequenceHandlers(terminal, requestClipboardWrite);
-    const boundaryPayload = btoa('a'.repeat(64 * 1024));
+    const consent = new ClipboardWriteConsentSession();
+    const writeClipboard = vi.fn(async (_text: string) => undefined);
+    registerTerminalControlSequenceHandlers(terminal, text =>
+      consent.request(text),
+    );
     const oversizedPayload = btoa('b'.repeat(64 * 1024 + 1));
+
+    // Disabled is the default, and a request received then cannot be revived by
+    // a later opt-in.
+    await writeTerminal(terminal, '\u001b]52;c;ZGlzYWJsZWQ=\u0007');
+    expect(consent.pendingText).toBeNull();
+
+    consent.enable();
+    await writeInChunks(
+      terminal,
+      '\u001b]52;c;cmVqZWN0IG1l\u001b\\',
+      2,
+    );
+    expect(consent.pendingText).toBe('reject me');
+    consent.reject();
+    expect(consent.pendingText).toBeNull();
+    expect(writeClipboard).not.toHaveBeenCalled();
 
     await writeInChunks(
       terminal,
-      `\u001b]52;c;SGVsbG8=\u0007\u001b]52;c;?\u001b\\\u001b]52;c;${boundaryPayload}\u0007\u001b]52;c;${oversizedPayload}\u001b\\`,
+      '\u001b]52;c;b2zDoSDwn4yO\u0007',
+      3,
+    );
+    expect(consent.pendingText).toBe('olá 🌎');
+    await consent.accept(text => {
+      // The proposal is consumed before the browser mutation boundary.
+      expect(consent.pendingText).toBeNull();
+      return writeClipboard(text);
+    });
+    expect(writeClipboard).toHaveBeenCalledOnce();
+    expect(writeClipboard).toHaveBeenCalledWith('olá 🌎');
+
+    await writeInChunks(
+      terminal,
+      `\u001b]52;c;?\u001b\\\u001b]52;c;${oversizedPayload}\u001b\\`,
       701,
     );
-
-    expect(requestClipboardWrite).toHaveBeenCalledTimes(2);
-    expect(requestClipboardWrite).toHaveBeenNthCalledWith(1, 'Hello');
-    expect(requestClipboardWrite).toHaveBeenNthCalledWith(
-      2,
-      'a'.repeat(64 * 1024),
-    );
+    expect(consent.pendingText).toBeNull();
+    expect(writeClipboard).toHaveBeenCalledOnce();
   });
 });

@@ -430,7 +430,12 @@ so splitting a sequence across WebSocket messages or `terminal.write` calls
 cannot make the core link service retain its URI (#146). Visible `http://` and
 `https://` text remains clickable through `WebLinksAddon`. The separate OSC 52
 handler remains write-only and continues to discard clipboard writes above
-64 KiB.
+64 KiB. Clipboard writes start disabled for every terminal session. After the
+user enables them in the terminal toolbar, every valid write displays its
+decoded text and requires a separate accept or reject decision before the
+browser clipboard can be changed. That opt-in is cleared when the WebSocket
+closes, SSH disconnects, the backend terminates the session, or a new terminal
+adapter starts.
 
 When the socket closes, the SSH channel and client are torn down and a
 `session_ended` audit event (with byte counts) is written. This is

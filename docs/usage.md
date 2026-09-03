@@ -118,12 +118,15 @@ Once connected, the terminal is a full xterm.js surface with a few extras:
   URIs in browser memory.
 - **Emoji and wide characters** — emoji and CJK glyphs are measured at their real
   width, so they no longer push the grid out of alignment.
-- **Copy to your clipboard (OSC 52)** — when a program inside the session copies
-  text via OSC 52 (for example a `tmux` or `nvim` yank), it lands in your local
-  clipboard. This is **write-only**: the remote host can copy *into* your
-  clipboard but can never *read* it back. Writes larger than 64 KiB are ignored.
-  It needs a secure context, so it works on `localhost` and over HTTPS, but not
-  over plain HTTP on a remote deploy.
+- **Copy to your clipboard (OSC 52)** — remote clipboard writes start disabled.
+  Reveal the top toolbar and explicitly enable them for the current terminal
+  session. Each `tmux`, `nvim`, or other OSC 52 write then shows its decoded text
+  for review and needs a separate **Copy to clipboard** or **Reject** decision.
+  Opt-in ends when the WebSocket closes, SSH disconnects, or the backend ends
+  the session. This remains **write-only**: the remote host can propose text for
+  your clipboard but can never read it back. Writes larger than 64 KiB are
+  ignored. Accepted writes need a secure context, so they work on `localhost`
+  and over HTTPS, but not over plain HTTP on a remote deploy.
 - **Scrollback** — the terminal keeps the last 2000 lines.
 - **Key bar** — a row of buttons below the terminal (`Esc`, `Tab`, `Ctrl`, arrow
   keys, `Ctrl-C`) for combos that are awkward on touch or remote keyboards. Use

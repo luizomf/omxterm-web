@@ -10,6 +10,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ClipboardWriteConsentSession } from './clipboard-write-consent';
 import { hardenTerminalInputForMobile } from './harden-terminal-input-for-mobile';
 import { keepTerminalFocused, TerminalKeyBar } from './TerminalKeyBar';
 import { registerTerminalControlSequenceHandlers } from './terminal-control-sequences';
@@ -71,11 +72,10 @@ export function TerminalEmulator({
     string | null
   >(null);
   const [clipboardError, setClipboardError] = useState<string | null>(null);
-  // OSC handlers are installed once for the terminal session. Refs let that
-  // long-lived parser callback enforce the latest consent state without
+  // OSC handlers are installed once for the terminal session. This object lets
+  // that long-lived parser callback enforce the latest consent state without
   // rebuilding xterm whenever a prompt opens or closes.
-  const clipboardWritesEnabledRef = useRef(false);
-  const pendingClipboardWriteRef = useRef<string | null>(null);
+  const clipboardConsentRef = useRef(new ClipboardWriteConsentSession());
   // terminal.onData is wired once per adapter (see the effect below), so it
   // needs a ref rather than the `ctrlArmed` state value to see the latest
   // armed state without re-subscribing on every toggle.
@@ -93,13 +93,12 @@ export function TerminalEmulator({
   } | null>(null);
 
   const clearPendingClipboardWrite = useCallback(() => {
-    pendingClipboardWriteRef.current = null;
+    clipboardConsentRef.current.reject();
     setPendingClipboardWrite(null);
   }, []);
 
   const disableClipboardWrites = useCallback(() => {
-    clipboardWritesEnabledRef.current = false;
-    pendingClipboardWriteRef.current = null;
+    clipboardConsentRef.current.disable();
     setClipboardWritesEnabled(false);
     setPendingClipboardWrite(null);
   }, []);
@@ -108,33 +107,30 @@ export function TerminalEmulator({
     // Disabled requests are discarded at arrival and can never become pending
     // after a later opt-in. A second request cannot replace the text currently
     // being reviewed either; every displayed decision remains unambiguous.
-    if (
-      !clipboardWritesEnabledRef.current ||
-      pendingClipboardWriteRef.current !== null
-    ) {
-      return;
-    }
-    pendingClipboardWriteRef.current = text;
+    if (!clipboardConsentRef.current.request(text)) return;
     setClipboardError(null);
     setPendingClipboardWrite(text);
   }, []);
 
   const toggleClipboardWrites = () => {
-    const enabled = !clipboardWritesEnabledRef.current;
+    const enabled = !clipboardConsentRef.current.enabled;
     if (enabled && status !== 'connected') return;
-    clipboardWritesEnabledRef.current = enabled;
+    if (enabled) {
+      clipboardConsentRef.current.enable();
+    } else {
+      clipboardConsentRef.current.disable();
+    }
     setClipboardWritesEnabled(enabled);
     setClipboardError(null);
     if (!enabled) clearPendingClipboardWrite();
   };
 
   const acceptClipboardWrite = () => {
-    const text = pendingClipboardWriteRef.current;
     // Consent is one-shot: clear the request before crossing the browser
     // clipboard boundary, including when the asynchronous mutation fails.
-    clearPendingClipboardWrite();
-    if (text === null || !clipboardWritesEnabledRef.current) return;
-    void writeHostClipboard(text).catch(() => {
+    const accepted = clipboardConsentRef.current.accept(writeHostClipboard);
+    setPendingClipboardWrite(null);
+    void accepted.catch(() => {
       setClipboardError('The browser could not write to your clipboard.');
     });
   };
